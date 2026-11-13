@@ -64,6 +64,13 @@ html.auth-lock body { overflow: hidden; }
 .ag-form input { font: inherit; font-size: 16px; font-weight: 400; padding: 10px 12px; border: 1px solid var(--ag-line); border-radius: 9px; background: #fff; color: var(--ag-ink); width: 100%; }
 .ag-form input::placeholder { color: #8a97a8; font-weight: 400; }
 .ag-form input:focus { outline: 2px solid var(--ag-brand); outline-offset: 1px; border-color: var(--ag-brand); }
+.ag-pw { position: relative; display: block; }
+.ag-form .ag-pw input { padding-right: 46px; }
+.ag-pw input::-ms-reveal, .ag-pw input::-ms-clear { display: none; }
+.ag-eye { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); width: 38px; height: 38px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--ag-sub); cursor: pointer; }
+.ag-eye:hover { color: var(--ag-ink); background: rgba(0, 0, 0, .05); }
+.ag-eye:focus-visible { outline: 2px solid var(--ag-brand); outline-offset: 0; }
+.ag-eye[aria-pressed="true"] { color: var(--ag-brand); }
 .ag-btn { font: inherit; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 8px 16px;
   border-radius: 10px; border: 1px solid var(--ag-line); background: #fff; color: var(--ag-ink); cursor: pointer; width: 100%; }
 .ag-btn:hover { border-color: var(--ag-brand); }

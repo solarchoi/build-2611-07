@@ -384,6 +384,25 @@
   }
 
   // ───────── 로그인 · 회원가입 ─────────
+  // 비밀번호 칸 + 눈 단추: 누르면 보이고, 다시 누르면 가린다(처음은 가림)
+  var EYE = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+  var EYE_OFF = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.8 10.8 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7c1.8 0 3.4-.5 4.8-1.3"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+  function pwField(name, login) {
+    return '<span class="ag-pw"><input name="' + name + '" type="password" ' +
+      (login ? 'autocomplete="current-password" required' : 'autocomplete="new-password" required minlength="8"') + '>' +
+      '<button type="button" class="ag-eye" aria-label="비밀번호 보기" aria-pressed="false">' + EYE + '</button></span>';
+  }
+  function bindPwEyes() {
+    gate.querySelectorAll('.ag-eye').forEach(function (b) {
+      b.onclick = function () {
+        var inp = b.parentNode.querySelector('input'), show = inp.type === 'password';
+        inp.type = show ? 'text' : 'password';
+        b.setAttribute('aria-pressed', String(show));
+        b.setAttribute('aria-label', show ? '비밀번호 가리기' : '비밀번호 보기');
+        b.innerHTML = show ? EYE_OFF : EYE;
+      };
+    });
+  }
   function viewLogin(tab, note, open) {
     var signup = tab === 'signup';
     var card = ('<div class="ag-card">' +
@@ -395,13 +414,13 @@
         '<label>소속(회사 · 부서)<input name="org" autocomplete="organization" maxlength="120" placeholder="예) 품질팀"></label>' +
         '<label>연락처<input name="phone" type="tel" autocomplete="tel" maxlength="40" placeholder="010-0000-0000"></label>' +
         '<label>이메일 <small>회사 메일 또는 개인 메일</small><input name="email" type="email" autocomplete="email" required maxlength="200"></label>' +
-        '<label>비밀번호 <small>8자 이상</small><input name="pw" type="password" autocomplete="new-password" required minlength="8"></label>' +
-        '<label>비밀번호 확인<input name="pw2" type="password" autocomplete="new-password" required minlength="8"></label>' +
+        '<label>비밀번호 <small>8자 이상</small>' + pwField('pw') + '</label>' +
+        '<label>비밀번호 확인' + pwField('pw2') + '</label>' +
         '<button class="ag-btn ag-primary" type="submit">가입하고 사용 신청</button></form>'
         :
         '<form class="ag-form" id="agLogin" novalidate>' +
         '<label>이메일<input name="email" type="email" autocomplete="email" required></label>' +
-        '<label>비밀번호<input name="pw" type="password" autocomplete="current-password" required></label>' +
+        '<label>비밀번호' + pwField('pw', true) + '</label>' +
         '<button class="ag-btn ag-primary" type="submit">로그인</button></form>' +
         (C.kakao ? '<div class="ag-or"><span>또는</span></div><button type="button" class="ag-btn ag-kakao" id="agKakao">카카오로 로그인</button>' : '') +
         '<p class="ag-hint">처음이면 「회원가입」에서 가입하세요. 비밀번호를 잊었으면 관리자에게 알려 주세요.</p>') +
@@ -416,10 +435,11 @@
     } else show(card);
     if (note) msg(note.text, note.kind);
     gate.querySelectorAll('[data-tab]').forEach(function (b) { b.onclick = function () { viewLogin(b.getAttribute('data-tab'), null, true); }; });
+    bindPwEyes();
     var f = $('#agLogin');
     if (f) f.onsubmit = function (ev) {
       ev.preventDefault();
-      var b = f.querySelector('button'), em = f.email.value.trim(), pw = f.pw.value;
+      var b = f.querySelector('button[type=submit]'), em = f.email.value.trim(), pw = f.pw.value;
       if (!em || !pw) return msg('이메일과 비밀번호를 넣어 주세요.', 'err');
       busy(b, true); msg('로그인 중…');
       sb.auth.signInWithPassword({ email: em, password: pw }).then(function (r) {
@@ -436,7 +456,7 @@
     var g = $('#agSignup');
     if (g) g.onsubmit = function (ev) {
       ev.preventDefault();
-      var b = g.querySelector('button'), d = { name: g.name.value.trim(), org: g.org.value.trim(), phone: g.phone.value.trim() };
+      var b = g.querySelector('button[type=submit]'), d = { name: g.name.value.trim(), org: g.org.value.trim(), phone: g.phone.value.trim() };
       var em = g.email.value.trim(), pw = g.pw.value;
       if (!d.name) return msg('이름을 넣어 주세요.', 'err');
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) return msg('이메일 모양이 맞지 않습니다.', 'err');
