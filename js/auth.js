@@ -384,6 +384,8 @@
   }
 
   // ───────── 로그인 · 회원가입 ─────────
+  // 로그인 단추로 로그인하면 이 주소(사이트 첫 화면)로 간다. 페이지를 열 때마다 보내지는 않는다.
+  var AFTER_LOGIN = new URL('index.html?auth=1', location.href).href;
   // 비밀번호 칸 + 눈 단추: 누르면 보이고, 다시 누르면 가린다(처음은 가림)
   var EYE = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
   var EYE_OFF = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.8 10.8 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7c1.8 0 3.4-.5 4.8-1.3"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
@@ -443,13 +445,15 @@
       if (!em || !pw) return msg('이메일과 비밀번호를 넣어 주세요.', 'err');
       busy(b, true); msg('로그인 중…');
       sb.auth.signInWithPassword({ email: em, password: pw }).then(function (r) {
-        busy(b, false); if (r.error) return msg(errText(r.error), 'err'); route();
+        busy(b, false); if (r.error) return msg(errText(r.error), 'err');
+        if (location.href.split('#')[0] === AFTER_LOGIN) return route();
+        msg('로그인했습니다. 첫 화면으로 이동합니다…', 'ok'); location.href = AFTER_LOGIN;
       });
     };
     var k = $('#agKakao');
     if (k) k.onclick = function () {
       busy(k, true);
-      sb.auth.signInWithOAuth({ provider: 'kakao', options: { redirectTo: location.origin + location.pathname } }).then(function (r) {
+      sb.auth.signInWithOAuth({ provider: 'kakao', options: { redirectTo: AFTER_LOGIN } }).then(function (r) {
         if (r.error) { busy(k, false); msg(errText(r.error), 'err'); }
       });
     };
