@@ -384,8 +384,30 @@
   }
 
   // ───────── 로그인 · 회원가입 ─────────
-  // 로그인 단추로 로그인하면 이 주소(사이트 첫 화면)로 간다. 페이지를 열 때마다 보내지는 않는다.
-  var AFTER_LOGIN = new URL('index.html?auth=1', location.href).href;
+  // 첫 페이지 = 사이트 첫 주소(…/build-2611-07/) · 내 PC 는 index.html?auth=1. 로그인해도 여기서는 첫 페이지(소개)를 보인다.
+  // 메뉴의 「물품설명서」(index.html)는 도구가 그대로 열린다.
+  var isFront = /\/$/.test(location.pathname) || (force && /\/index\.html$/.test(location.pathname));
+  // 로그인 단추로 로그인하면 첫 페이지로 간다. 페이지를 열 때마다 보내지는 않는다.
+  var AFTER_LOGIN = new URL(isLocal ? 'index.html?auth=1' : './', location.href).href;
+  // 로그인한 사람에게 보이는 첫 페이지: 같은 화면, 단추만 「대시보드 열기」 · 「로그아웃」
+  function viewHomeIn() {
+    stopFx(); root.classList.add('auth-lock'); gate.hidden = false;
+    gate.classList.add('ag-home'); gate.innerHTML = homeHtml(); gate.scrollTop = 0; bindHome();
+    gate.setAttribute('data-in', '');   // 로그아웃하면 viewLogin 이 새로 그린다
+    var name =(member && member.name) || (me && me.email) || '';
+    gate.querySelectorAll('[data-login]').forEach(function (b) {
+      var out = b.classList.contains('hp-ghost') && b.closest('.hp-acts');
+      b.removeAttribute('data-login');
+      if (out) { b.textContent = '로그아웃'; b.onclick = signOut; return; }
+      b.innerHTML = esc('대시보드 열기') + (b.classList.contains('hp-lg') ? ' ' + icon('arrow', 'hp-ic-s') : '');
+      b.setAttribute('aria-label', '대시보드 열기');
+      b.onclick = function () { location.href = 'dashboard.html'; };
+    });
+    var acts = gate.querySelector('.hp-acts');
+    if (acts && name) acts.insertAdjacentHTML('afterbegin', '<span class="hp-who">' + esc(name) + ' 님</span>');
+    var band = gate.querySelector('.hp-band h2'); if (band) band.textContent = '로그인했습니다. 바로 시작하세요';
+    var bandP = gate.querySelector('.hp-band p'); if (bandP) bandP.textContent = '대시보드에서 엑셀을 올리면 바로 집계합니다.';
+  }
   // 비밀번호 칸 + 눈 단추: 누르면 보이고, 다시 누르면 가린다(처음은 가림)
   var EYE = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
   var EYE_OFF = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.8 10.8 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7c1.8 0 3.4-.5 4.8-1.3"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
@@ -428,8 +450,8 @@
         '<p class="ag-hint">처음이면 「회원가입」에서 가입하세요. 비밀번호를 잊었으면 관리자에게 알려 주세요.</p>') +
       '<p class="ag-msg" role="status" aria-live="polite"></p></div>');
     if (homeOn()) {
-      if (!gate.querySelector('.hp')) {
-        stopFx(); root.classList.add('auth-lock'); gate.hidden = false;
+      if (!gate.querySelector('.hp') || gate.hasAttribute('data-in')) {
+        gate.removeAttribute('data-in'); stopFx(); root.classList.add('auth-lock'); gate.hidden = false;
         gate.classList.add('ag-home'); gate.innerHTML = homeHtml(); gate.scrollTop = 0; bindHome();
       }
       gate.querySelector('#agModalBody').innerHTML = card;
@@ -552,7 +574,7 @@
         if (!live()) return;
         if (q.error) return viewError(q.error);
         member = q.data;
-        if (member && member.status === 'active') return unlock();
+        if (member && member.status === 'active') return (isFront && homeOn()) ? viewHomeIn() : unlock();
         removeChip(); stopIdle();
         if (member && member.status === 'disabled') return viewStopped();
         return sb.rpc(RPC.hasAdmin).then(function (h) {
