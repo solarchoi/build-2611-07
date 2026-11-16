@@ -607,7 +607,62 @@ var v14 = passed + failed;
   eq(nn.records.map(function (r) { return r.hq; }), ['엔진본부', 'B1101', '건설기계본부(가상)'], 'v1.4.5 번호 모양일 때만 바꾼다(소문자 허용 · 4자리 넘으면 아님 · 본부 이름은 그대로)');
   eq(C.normalize([{ d: '2025-01-01', h: 'B110' }], 'import', { date: 'd', hq: 'h' }).records[0].hq, 'B110', 'v1.4.5 번호표는 환급에만 — 수입 본부는 그대로');
 })();
-console.log('v1.4.5 ' + (passed + failed - v14) + '개 검사');
+var v145 = passed + failed;
+
+// v1.4.6 관세환급 건수 — 「건수」 열이 없으면 행 수로 센다
+(function () {
+  // 73행 가짜 예제(건수 열 없음) + 합계 줄
+  var f = C.sampleRefundApply(73), m = C.mapColumns(f.aoa[0], 'refund');
+  eq([f.aoa.length, f.aoa[f.aoa.length - 1][0], f.name], [75, '합계', '예제_관세환급신청현황_73행(가상).xlsx'], 'v1.4.6 73행 예제 = 머리글 + 73줄 + 합계 줄');
+  ok(JSON.stringify(f.aoa).indexOf('(가상)') > 0, 'v1.4.6 73행 예제에 「가상」 표기');
+  eq([m.map.count, m.missing], [undefined, []], 'v1.4.6 73행 예제에는 건수 열이 없다');
+  var n = C.normalize(C.aoaToRows(f.aoa), 'refund', m.map);
+  eq([n.records.length, n.skipped.length, n.period], [73, 1, { from: '2025-01', to: '2025-11' }], 'v1.4.6 73줄 읽고 합계 줄 건너뜀 · 2025년 안');
+  var rg = C.defaultRange(n.period), rs = C.refundStats(n.records, rg, m.map);
+  eq([rs.count, rs.countBasis, rs.countLabel], [73, 'rows', '행 수로 센 값'], 'v1.4.6 건수 = 행 수 73');
+  eq(C.fmtNum(rs.count) + '건', '73건', 'v1.4.6 카드 글자 「73건」');
+  eq(rs.pivot.reduce(function (t, p) { return t + p.count; }, 0), 73, 'v1.4.6 본부별 건수 합 = 73(미등록 포함)');
+  ok(rs.pivot.every(function (p) { return p.count === n.records.filter(function (r) { return r.hq === p.hq; }).length; }), 'v1.4.6 본부별 건수 = 그 본부 줄 수');
+  eq(C.refundStats(n.records, rg).countBasis, 'rows', 'v1.4.6 map 없이도 행 수로(count 값이 하나도 없음)');
+  eq(C.sum(n.records, 'amount'), f.total, 'v1.4.6 환급액 합계 = 엑셀 합계 줄(금액 계산은 그대로)');
+  // 기간을 줄이면 그 기간 줄 수만
+  var rs2 = C.refundStats(n.records, { from: '2025-01', to: '2025-02' }, m.map);
+  eq(rs2.count, n.records.filter(function (r) { return r.month <= '2025-02'; }).length, 'v1.4.6 기간 안 줄 수만 센다');
+  eq(C.refundStats(n.records, { from: '2026-01', to: '2026-02' }, m.map).count, 0, 'v1.4.6 기간 안에 줄이 없으면 0건(실제로 센 값)');
+  // 환급액이 빈 줄도 신청 1건
+  var nb = C.normalize([{ m: '2025-01', h: 'A', a: 100 }, { m: '2025-01', h: 'A', a: '' }, { m: '2025-02', h: 'B', a: 50 }], 'refund', { date: 'm', hq: 'h', amount: 'a' });
+  var rb = C.refundStats(nb.records, { from: '2025-01', to: '2025-02' }, { date: 'm', hq: 'h', amount: 'a' });
+  eq([rb.count, rb.amount, rb.pivot.map(function (p) { return [p.hq, p.count, p.total]; })], [3, 150, [['A', 2, 100], ['B', 1, 50]]], 'v1.4.6 환급액이 빈 줄도 건수에 넣는다(금액은 더하지 않음)');
+  // 30행 예제(v1.4.5)는 그대로이고 30건
+  var f30 = C.sampleRefundApply(), n30 = C.normalize(C.aoaToRows(f30.aoa), 'refund', C.mapColumns(f30.aoa[0], 'refund').map);
+  eq([f30.name, f30.aoa.length, C.refundStats(n30.records, C.defaultRange(n30.period)).count], ['예제_관세환급신청현황.xlsx', 32, 30], 'v1.4.6 30행 예제는 이름·줄 수 그대로 · 30건');
+  eq(C.sampleRefundApply(30).aoa, f30.aoa, 'v1.4.6 sampleRefundApply(30) = 기본값과 같은 내용');
+  // 건수 열이 있으면 지금처럼 그 합(빈칸은 더하지 않음)
+  var CM = { date: 'm', hq: 'h', amount: 'a', count: 'n' };
+  var nr = C.normalize([{ m: '2025-01', h: 'A', a: '1,000', n: 2 }, { m: '2025-01', h: 'B', a: 500, n: 1 }, { m: '2025-03', h: 'A', a: 300, n: '' }, { m: '2024-12', h: 'A', a: 9 }], 'refund', CM);
+  var rc = C.refundStats(nr.records, { from: '2025-01', to: '2025-03' }, CM);
+  eq([rc.count, rc.countBasis, rc.countLabel, rc.pivot.map(function (p) { return p.count; })], [3, 'column', '건수 열의 합', [2, 1]], 'v1.4.6 건수 열이 있으면 그 합(map)');
+  var rs0 = C.refundStats(nr.records, { from: '2025-01', to: '2025-03' });
+  eq([rs0.count, rs0.countBasis], [3, 'column'], 'v1.4.6 건수 열이 있으면 그 합(map 없이)');
+  // 건수 열은 있는데 기간 안 값이 모두 빈칸 → 지어내지 않는다(null → 「—」)
+  eq(C.refundStats([{ month: '2025-01', hq: 'A', amount: 1, count: null }], { from: '2025-01', to: '2025-01' }, CM).count, null, 'v1.4.6 건수 열이 비면 행 수로 바꾸지 않는다(null)');
+  // 엑셀 — 환급_본부월 시트 끝에 건수 칸, 머리글에 기준
+  var bk = C.exportBook({ range: rg, data: { refund: { file: f.name, records: n.records, map: m.map, skipped: n.skipped, period: n.period } } });
+  var sh = bk.filter(function (s) { return s.name === '환급_본부월'; })[0].aoa, last = sh[sh.length - 1];
+  eq([sh[0][sh[0].length - 1], last[0], last[last.length - 1]], ['건수(행 수로 센 값)', '합계', 73], 'v1.4.6 엑셀 건수 칸 = 73(행 수로 센 값)');
+  ok(sh.slice(1, -1).every(function (r) { return r.length === sh[0].length; }), 'v1.4.6 엑셀 본부 줄마다 건수 칸');
+  ok(JSON.stringify(bk[0].aoa).indexOf('관세환급 건수') > 0, 'v1.4.6 안내 시트에 건수 계산식');
+  var bk2 = C.exportBook({ range: { from: '2025-01', to: '2025-03' }, data: { refund: { file: 'x', records: nr.records, map: CM, skipped: [] } } });
+  var sh2 = bk2.filter(function (s) { return s.name === '환급_본부월'; })[0].aoa;
+  eq([sh2[0][sh2[0].length - 1], sh2[sh2.length - 1][sh2[0].length - 1]], ['건수(건수 열의 합)', 3], 'v1.4.6 엑셀 — 건수 열이 있으면 그 합');
+  // samples/시험용/ 의 73행 파일 = 예제 정의(tools/make-samples.mjs 로 만든다)
+  var XL = require('../lib/xlsx.full.min.js'), pth = require('path').join(__dirname, '..', 'samples', '시험용', f.name);
+  var wb = XL.read(require('fs').readFileSync(pth), { type: 'buffer' });
+  var rows = XL.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
+  eq(rows, f.aoa, 'v1.4.6 samples/시험용/ 73행 파일 = 예제 정의');
+})();
+console.log('v1.4.6 ' + (passed + failed - v145) + '개 검사');
+console.log('v1.4.5 ' + (v145 - v14) + '개 검사');
 console.log('v1.4 ' + (v14 - v13) + '개 검사');
 console.log('v1.3 ' + (v13 - v12) + '개 검사');
 console.log('v1.0 ' + v10 + ' · v1.1 ' + (v11 - v10) + ' · v1.2 ' + (v12 - v11) + '개 검사');

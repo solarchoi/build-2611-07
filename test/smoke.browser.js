@@ -119,7 +119,8 @@ srv.listen(0, async function () {
     ok(await pg.$$eval('#ch-fta svg.chart', function (t) { return t.length; }) === 3 && await pg.$('table.fta-import') && await pg.$('table.fta-export'), 'FTA 그래프 3개·표 2개');
     await pg.click('.tab[data-tab="refund"]');
     ok(await kv('ref-amount') === ex.refund, '관세환급 합계 카드 = 엔진 계산', ex.refund);
-    ok(await pg.$$eval('table.refund-pivot thead th', function (t) { return t.length; }) === 12, '본부 × 월 표(본부 + 10개월 + 합계)');
+    ok(await pg.$eval('table.refund-pivot thead th', function (t) { return t.length; }) === 13, '본부 × 월 표(본부 + 10개월 + 합계 + 건수)');
+    ok(/건수 열의 합/.test(await pg.textContent('table.refund-pivot thead')) && /건수 열의 합/.test(await pg.textContent('.kpi[data-k="ref-amount"]')), 'v1.4.6 예제(건수 열 있음) — 건수 열의 합으로 표시');
     await pg.click('.tab[data-tab="errors"]');
     ok(await kv('err-rate') === ex.err, '오류 비율 카드 = 엔진 계산', ex.err);
     ok(await pg.$$eval('#ch-errors svg.chart polyline', function (t) { return t.length; }) >= 2, '오류 비율 선(수입·수출)');
@@ -162,6 +163,15 @@ srv.listen(0, async function () {
     await pg.selectOption('select[data-rekind="ruling"]', 'refund');
     await pg.waitForSelector('#d-sets tr[data-kind="refund"]', { timeout: 5000 });
     ok(/필수 열 모두 찾음/.test(await pg.textContent('#d-sets tr[data-kind="refund"]')), 'v1.4.5 다시 관세환급으로 — 열 짝짓기를 새로 한다');
+    // v1.4.6 건수 열이 없는 73행 파일(samples/시험용/) → 카드 「73건 · 행 수로 센 값」, 본부별 표 건수 합계 73
+    await pg.setInputFiles('#d-file', path.join(ROOT, 'samples', '시험용', require('../js/customs.js').sampleRefundApply(73).name));
+    await pg.waitForFunction(function () { var r = document.querySelector('#d-sets tr[data-kind="refund"]'); return r && /73행/.test(r.textContent); }, null, { timeout: 5000 });
+    await pg.click('.tab[data-tab="refund"]');
+    var rc = await pg.textContent('.kpi[data-k="ref-amount"] small');
+    ok(/^73건 · 행 수로 센 값$/.test(rc.trim()), 'v1.4.6 건수 열 없는 73행 → 카드 73건 · 행 수로 센 값', rc);
+    var pv = await pg.$eval('table.refund-pivot tr.sum td', function (t) { return t.map(function (x) { return x.textContent; }); });
+    ok(pv[pv.length - 1] === '73' && /행 수로 센 값/.test(await pg.textContent('table.refund-pivot thead')), 'v1.4.6 본부별 표 건수 합계 73(행 수로 센 값)', pv.join('|'));
+    await pg.click('.tab[data-tab="trade"]');
     // 다시 열면 이 브라우저에 기억한 데이터로
     await pg.goto(base + 'dashboard.html');
     await pg.waitForSelector('#kpi-trade .kpi[data-k="imp-goods"]', { timeout: 5000 });

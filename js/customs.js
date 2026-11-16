@@ -427,18 +427,27 @@
     };
   }
   // 환급: 본부 × 월 표(행 합계·열 합계), 월 평균은 데이터가 있는 달 수로 나눈다
-  function refundStats(recs, range) {
-    var cur = inRange(recs, range), months = monthsBetween(range.from, range.to);
+  // (v1.4.6) 건수: 「건수」 열이 있으면 그 열의 합(countBasis 'column'), 없으면 읽은 행 수(countBasis 'rows' — 신청 1건이 한 줄).
+  // 행 수에는 환급액이 빈 줄도 넣는다(신청은 있었다). 합계·소계 줄 · 날짜 없는 줄은 normalize 가 이미 뺐다.
+  // map(열 짝짓기)을 주면 map.count 로, 안 주면 count 값이 하나라도 있는지로 판단한다.
+  function refundCountBasis(recs, map) {
+    if (map) return map.count ? 'column' : 'rows';
+    return (recs || []).some(function (r) { return r.count != null; }) ? 'column' : 'rows';
+  }
+  var REFUND_COUNT_LABEL = { column: '건수 열의 합', rows: '행 수로 센 값' };
+  function refundStats(recs, range, map) {
+    var cur = inRange(recs, range), months = monthsBetween(range.from, range.to), basis = refundCountBasis(recs, map);
     var monthly = byMonth(cur, months, ['amount', 'count']);
     var filled = monthly.filter(function (m) { return m.amount != null; });
     var hqs = group(cur, 'hq', ['amount', 'count']);
     var pivot = hqs.map(function (g) {
       var rows = cur.filter(function (r) { return r.hq === g.key; });
-      return { hq: g.key, total: g.sums.amount, count: g.sums.count, months: byMonth(rows, months, ['amount']).map(function (m) { return m.amount; }) };
+      return { hq: g.key, total: g.sums.amount, count: basis === 'rows' ? g.n : g.sums.count, months: byMonth(rows, months, ['amount']).map(function (m) { return m.amount; }) };
     });
     var total = sum(cur, 'amount');
     return {
-      range: range, months: months, n: cur.length, amount: total, count: sum(cur, 'count'),
+      range: range, months: months, n: cur.length, amount: total, count: basis === 'rows' ? cur.length : sum(cur, 'count'),
+      countBasis: basis, countLabel: REFUND_COUNT_LABEL[basis],
       monthAvg: filled.length ? total / filled.length : null, monthsWithData: filled.length,
       last: filled.length ? filled[filled.length - 1] : null, monthly: monthly, pivot: pivot
     };
@@ -533,7 +542,8 @@
       info.push([DATASETS[k].label, x.file || '', x.uploadedAt || '', x.period ? monthLabel(x.period.from) + ' ~ ' + monthLabel(x.period.to) : '', x.records.length, (x.skipped || []).length]);
     });
     info.push([], ['계산식', '관세부담율 = 관세 ÷ 물자대 · FTA 활용률 = 물자대_FTA ÷ 물자대 · 오류 비율 = 오류건수 ÷ 신고건수 · 증감률 = (올해 − 전년 동기) ÷ 전년 동기'],
-      ['', '나누는 값이 0 이거나 비면 비워 둡니다. 빈 금액은 0 으로 더하지 않습니다.']);
+      ['', '나누는 값이 0 이거나 비면 비워 둡니다. 빈 금액은 0 으로 더하지 않습니다.'],
+      ['', '관세환급 건수 = 「건수」 열이 있으면 그 열의 합, 없으면 읽은 행 수(신청 1건 = 1줄, 합계 줄 제외, 환급액이 빈 줄 포함)']);
     out.push({ name: '안내', aoa: info });
     function f(rec, k) { return rec && rec[k] != null && isFinite(rec[k]) ? rec[k] : ''; }
     function pct(v) { return v == null ? '' : Math.round(v * 10000) / 100; }
@@ -556,9 +566,9 @@
       });
     });
     if (d.refund) {
-      var r = refundStats(filt('refund'), range);
-      out.push({ name: '환급_본부월', aoa: [['본부'].concat(r.months.map(monthLabel), ['합계'])].concat(r.pivot.map(function (p) { return [p.hq].concat(p.months.map(function (v) { return v == null ? '' : v; }), [f(p, 'total')]); }),
-        [['합계'].concat(r.monthly.map(function (m) { return m.amount == null ? '' : m.amount; }), [f(r, 'amount')])]) });
+      var r = refundStats(filt('refund'), range, d.refund.map), cntHead = '건수(' + r.countLabel + ')';
+      out.push({ name: '환급_본부월', aoa: [['본부'].concat(r.months.map(monthLabel), ['합계', cntHead])].concat(r.pivot.map(function (p) { return [p.hq].concat(p.months.map(function (v) { return v == null ? '' : v; }), [f(p, 'total'), f(p, 'count')]); }),
+        [['합계'].concat(r.monthly.map(function (m) { return m.amount == null ? '' : m.amount; }), [f(r, 'amount'), f(r, 'count')])]) });
     }
     if (d.errors) {
       var er = errorStats(filt('errors'), range, 'kind');
@@ -712,13 +722,15 @@
   }
   // 관세환급 신청 현황(환급프로그램에서 내려받는 모양) — 가짜 30줄 + 합계 줄. 머리글은 실제 파일과 같은 19열.
   // 본부 열 대신 「제품그룹」 번호가 있고, 번호표에 없는 새 번호(B999) 1줄을 일부러 넣었다. 예제 5종(sampleFiles)에는 넣지 않는다.
-  function sampleRefundApply() {
-    var R = rng(20261116), r100 = function (v) { return Math.round(v / 100) * 100; };
+  // (v1.4.6) n 줄로 만들 수 있다(기본 30 = v1.4.5 와 똑같은 내용). 60줄이 넘으면 한 달에 7줄씩 2025년 안에 둔다.
+  function sampleRefundApply(n) {
+    n = n || 30;
+    var R = rng(20261116), r100 = function (v) { return Math.round(v / 100) * 100; }, perMonth = n <= 60 ? 5 : Math.ceil(n / 11);
     var head = ['제출번호', '접수번호', '접수일자', '세번부호', '결정일자', '품 명', '수출물량', '단위', '수출금액', '환급액', '금액대비(%)', '환급단가', '수출월', '신청업체', '제품그룹', '제조업체', '접수세관', '접수년도', '수출형태'];
     var groups = ['B110', 'B111', 'B112', 'B130', 'B161', 'B163'], items = [['BUCKET(가상)', '8431.41-0000'], ['ENGINE ASSY(가상)', '8408.20-9000'], ['PIN(가상)', '8431.49-9090'], ['HOSE(가상)', '4009.42-0000']];
     var aoa = [head], total = 0;
-    for (var i = 0; i < 30; i++) {
-      var m = 1 + Math.floor(i / 5), d = 1 + Math.floor(R() * 20), it = items[Math.floor(R() * items.length)];
+    for (var i = 0; i < n; i++) {
+      var m = 1 + Math.floor(i / perMonth), d = 1 + Math.floor(R() * 20), it = items[Math.floor(R() * items.length)];
       var qty = 10 + Math.floor(R() * 90), amt = r100((50 + R() * 450) * 1e6), ref = r100(amt * (0.005 + R() * 0.02));
       var grp = i === 17 ? 'B999' : groups[Math.floor(R() * groups.length)];
       total += ref;
@@ -727,7 +739,7 @@
         '가상중공업(가상)', grp, ['가상정밀(가상)', '가상기공(가상)'][i % 2], '가상세관', 2025, i % 3 ? '직수출' : '로컬수출']);
     }
     aoa.push(['합계', '', '', '', '', '', '', '', '', total, '', '', '', '', '', '', '', '', '']);
-    return { name: '예제_관세환급신청현황.xlsx', kind: 'refund', aoa: aoa, total: total };
+    return { name: n === 30 ? '예제_관세환급신청현황.xlsx' : '예제_관세환급신청현황_' + n + '행(가상).xlsx', kind: 'refund', aoa: aoa, total: total };
   }
   // 표(첫 줄 머리글) → sheet_to_json 과 같은 객체 배열
   function aoaToRows(aoa) {
@@ -741,7 +753,7 @@
     parseNum: parseNum, parseDate: parseDate, hs4: hs4, normalize: normalize,
     periodOf: periodOf, unionPeriod: unionPeriod, shiftMonth: shiftMonth, monthsBetween: monthsBetween, defaultRange: defaultRange, prevRange: prevRange,
     applyFilter: applyFilter, valuesOf: valuesOf, sum: sum, ratio: ratio, change: change, group: group, byMonth: byMonth, topN: topN,
-    importStats: importStats, exportStats: exportStats, ftaStats: ftaStats, refundStats: refundStats, errorStats: errorStats,
+    importStats: importStats, exportStats: exportStats, ftaStats: ftaStats, refundStats: refundStats, refundCountBasis: refundCountBasis, errorStats: errorStats,
     parseRate: parseRate, rulingStats: rulingStats, RULING_BY: RULING_BY,
     fmtNum: fmtNum, fmtPct: fmtPct, fmtSigned: fmtSigned, fmtSignedPct: fmtSignedPct, fmtShort: fmtShort, monthLabel: monthLabel,
     exportBook: exportBook,

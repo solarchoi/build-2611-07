@@ -297,15 +297,15 @@
   function renderRefund() {
     var f = filtered('refund'), k = '', ch = '', tb = '';
     if (!f) { $('kpi-refund').innerHTML = empty('refund'); $('ch-refund').innerHTML = ''; $('tb-refund').innerHTML = ''; return; }
-    var s = C.refundStats(f.recs, state.range);
-    k += kpi('관세환급 합계', money(s.amount), s.count != null ? C.fmtNum(s.count) + '건' : '', '합계', 'ref-amount') +
+    var s = C.refundStats(f.recs, state.range, f.set.res && f.set.res.map), cntHead = '건수(' + s.countLabel + ')';
+    k += kpi('관세환급 합계', money(s.amount), s.count != null ? esc(C.fmtNum(s.count) + '건 · ' + s.countLabel) : '', '합계', 'ref-amount') +
       kpi('월 평균', money(s.monthAvg), '데이터 있는 ' + s.monthsWithData + '개월', '계산: 합계 ÷ 데이터 있는 달 수', 'ref-avg') +
       kpi('최근 달 환급액', s.last ? money(s.last.amount) : '—', s.last ? C.monthLabel(s.last.month) : '', '', 'ref-last');
     ch += monthChart('월별 관세환급액', s.months, [{ name: '환급액', color: COL[1], values: s.monthly.map(function (m) { return m.amount; }), fmt: money }], 'bar');
     ch += hbar('본부별 관세환급액', s.pivot.map(function (p) { return { label: p.hq, value: p.total }; }), money, COL[1]);
     tb += '<h3 class="tb-h">본부별 월별 관세환급 실적</h3>' + ignoredNote(f.ignored) +
-      table(['본부'].concat(s.months.map(C.monthLabel), ['합계']), s.pivot.map(function (p) { return { cells: [esc(p.hq)].concat(p.months.map(n0), [n0(p.total)]) }; }),
-        ['합계'].concat(s.monthly.map(function (m) { return n0(m.amount); }), [n0(s.amount)]), 'refund-pivot');
+      table(['본부'].concat(s.months.map(C.monthLabel), ['합계', esc(cntHead)]), s.pivot.map(function (p) { return { cells: [esc(p.hq)].concat(p.months.map(n0), [n0(p.total), n0(p.count)]) }; }),
+        ['합계'].concat(s.monthly.map(function (m) { return n0(m.amount); }), [n0(s.amount), n0(s.count)]), 'refund-pivot');
     $('kpi-refund').innerHTML = k; $('ch-refund').innerHTML = ch; $('tb-refund').innerHTML = tb;
   }
   function renderErrors() {

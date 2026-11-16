@@ -23,3 +23,14 @@ for (const f of C.sampleFiles()) {
   writeFileSync(join(dir, f.name), XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', compression: true }));
   console.log('썼습니다:', f.name, (aoa.length - 1) + '줄');
 }
+// (v1.4.6) 시험용 — 건수 열이 없는 관세환급 신청 현황 73줄 + 합계 줄. 예제 5종과 부딪히지 않게 하위 폴더에 둔다
+// (브라우저 시험은 samples/ 바로 아래 파일만 한꺼번에 올린다).
+{
+  const f = C.sampleRefundApply(73), sub = join(dir, '시험용');
+  mkdirSync(sub, { recursive: true });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(f.aoa), '데이터');
+  wb.Props = { Title: '시험용 예제(가짜 데이터)', CreatedDate: new Date(Date.UTC(2026, 10, 16)) };
+  writeFileSync(join(sub, f.name), XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', compression: true }));
+  console.log('썼습니다: 시험용/' + f.name, (f.aoa.length - 1) + '줄(합계 줄 포함)');
+}
