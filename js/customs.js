@@ -291,6 +291,77 @@
     return { records: recs, skipped: skipped, issues: issues, blanks: blanks, period: periodOf(recs), unknownCodes: unk };
   }
 
+  /* ---------- (v1.5.0) 같은 종류 여러 파일 합치기 ---------- */
+  // 파일 = { name(올린 파일 이름), file(보이는 이름 — 시트 이름 포함), uploadedAt, headers, aoa(머리글 포함), offset, override, reason }
+  // 같은 파일인지는 name 으로 본다(시트 이름은 보지 않는다). name 이 없는 예전 자료는 file 을 쓴다.
+  function fileKey(f) { return clean(f && (f.name || f.file)); }
+  // 이름이 같은 파일이 있으면 그 자리만 바꾸고(replaced), 없으면 뒤에 더한다(added). 머리글이 같으면 사람이 고른 열 짝짓기를 이어받는다.
+  function upsertFile(files, item) {
+    var list = (files || []).slice(), key = fileKey(item), i = -1;
+    list.forEach(function (f, j) { if (fileKey(f) === key) i = j; });
+    if (i < 0) { list.push(item); return { files: list, action: 'added', index: list.length - 1 }; }
+    var old = list[i];
+    if (!item.override || !Object.keys(item.override).length) item.override = (old.headers || []).join('|') === (item.headers || []).join('|') ? (old.override || {}) : {};
+    list[i] = item;
+    return { files: list, action: 'replaced', index: i };
+  }
+  // 파일마다 열 짝짓기 · 읽기를 따로 하고, 짝지은 항목(날짜 · 본부 · 금액 …)으로 만든 레코드를 이어 붙인다.
+  // ok = 모든 파일이 필수 열을 다 찾음. 하나라도 못 찾으면 그 종류는 집계하지 않는다(일부만 더한 값이 전체처럼 보이지 않게).
+  // map = 모든 파일에 있는 항목만(선택 항목이 일부 파일에만 있으면 partial 에 그 파일 이름 — FTA 는 값을 짓지 않고, 환급 건수는 파일마다 센다).
+  function mergeFiles(kind, files) {
+    var per = (files || []).map(function (f) {
+      var res = mapColumns(f.headers || [], kind, f.override);
+      var norm = res.missing.length ? null : normalize(aoaToRows(f.aoa || []), kind, res.map, f.offset);
+      return { file: f.file || f.name || '', name: fileKey(f), uploadedAt: f.uploadedAt || '', res: res, norm: norm, ok: !res.missing.length, period: norm ? norm.period : null };
+    });
+    var ok = per.length > 0 && per.every(function (p) { return p.ok; });
+    var records = [], skipped = [], issues = [], unknown = {}, map = {}, partial = {};
+    fieldsOf(kind).forEach(function (fd) {
+      var have = per.filter(function (p) { return p.res.map[fd.key]; });
+      if (per.length && have.length === per.length) map[fd.key] = have[0].res.map[fd.key];
+      else if (have.length) partial[fd.key] = per.filter(function (p) { return !p.res.map[fd.key]; }).map(function (p) { return p.file; });
+    });
+    per.forEach(function (p) {
+      if (!p.norm) return;
+      var noCount = kind === 'refund' && !p.res.map.count;
+      p.norm.records.forEach(function (r) { r.file = p.file; if (noCount) r.countRow = true; records.push(r); });
+      p.norm.skipped.forEach(function (s) { skipped.push({ file: p.file, row: s.row, reason: s.reason }); });
+      p.norm.issues.forEach(function (t) { issues.push(per.length > 1 ? p.file + ' — ' + t : t); });
+      (p.norm.unknownCodes || []).forEach(function (c) { unknown[c] = 1; });
+    });
+    // map.partial — 집계 함수(refundStats)가 볼 수 있게 붙이되, 열 이름 목록으로 돌 때 섞이지 않게 숨긴다
+    Object.defineProperty(map, 'partial', { value: partial, enumerable: false });
+    var overlaps = periodOverlaps(per);
+    overlaps.forEach(function (o) { issues.push('기간이 겹칩니다. 중복 집계일 수 있습니다 — ' + o.a + ' · ' + o.b + ' (' + monthLabel(o.from) + ' ~ ' + monthLabel(o.to) + ')'); });
+    return {
+      kind: kind, files: per, ok: ok, records: records, skipped: skipped, issues: issues, unknownCodes: Object.keys(unknown).sort(),
+      period: periodOf(records), map: map, partial: partial, overlaps: overlaps
+    };
+  }
+  // 데이터 기간(월)이 겹치는 파일 쌍 — [{ a, b, from, to }]. 이름이 같은 파일은 upsertFile 이 이미 하나로 만든다.
+  function periodOverlaps(files) {
+    var out = [], fs = (files || []).filter(function (f) { return f.period; });
+    for (var i = 0; i < fs.length; i++) for (var j = i + 1; j < fs.length; j++) {
+      var a = fs[i].period, b = fs[j].period, from = a.from > b.from ? a.from : b.from, to = a.to < b.to ? a.to : b.to;
+      if (from <= to) out.push({ a: fs[i].file, b: fs[j].file, from: from, to: to });
+    }
+    return out;
+  }
+  // 이 브라우저에 기억한 자료 → { sets: { kind: { files: [...] } } }. 예전 형식(v1: 종류마다 파일 하나)은 파일 1개짜리 목록으로.
+  function migrateSaved(j) {
+    var out = { sets: {} };
+    if (!j || typeof j !== 'object' || !j.sets || typeof j.sets !== 'object') return out;
+    Object.keys(j.sets).forEach(function (k) {
+      if (!DATASETS[k]) return;
+      var s = j.sets[k], list = s && Array.isArray(s.files) ? s.files : s && s.aoa ? [s] : [];
+      list = list.filter(function (f) { return f && Array.isArray(f.aoa) && Array.isArray(f.headers); }).map(function (f) {
+        return { name: f.name || f.file || '', file: f.file || f.name || '', uploadedAt: f.uploadedAt || '', headers: f.headers, aoa: f.aoa, offset: f.offset || 0, override: f.override || {}, reason: f.reason };
+      });
+      if (list.length) out.sets[k] = { files: list };
+    });
+    return out;
+  }
+
   /* ---------- 기간 ---------- */
   function periodOf(recs) {
     var ms = recs.map(function (r) { return r.month; }).filter(Boolean).sort();
@@ -411,18 +482,19 @@
     var available = !map || !!map.ftaGoods, cur = inRange(recs, range);
     // 물자대_FTA 열이 있으면 빈칸은 「FTA 미적용」이라 0 으로 본다. 열이 없으면 값을 지어내지 않는다(null).
     var hasSaving = !map || !!map.saving;
-    function z(v, on) { return v == null && on ? 0 : v; }
-    var goods = sum(cur, base), fg = z(sum(cur, 'ftaGoods'), available && cur.length), sv = z(sum(cur, 'saving'), hasSaving && cur.length);
+    // (v1.5.0) 열이 없다고 본 값(여러 파일 중 일부에만 열이 있을 때 포함)은 계산하지 않는다(null)
+    function z(v, on, col) { return col === false ? null : v == null && on ? 0 : v; }
+    var goods = sum(cur, base), fg = z(sum(cur, 'ftaGoods'), available && cur.length, available), sv = z(sum(cur, 'saving'), hasSaving && cur.length, hasSaving);
     return {
       kind: kind, available: available, hasSaving: hasSaving, range: range, n: cur.length,
       goods: goods, ftaGoods: fg, util: ratio(fg, goods), saving: sv,
       groups: group(cur, by || 'hq', [base, 'ftaGoods', 'saving']).map(function (g) {
-        var gf = z(g.sums.ftaGoods, available);
-        return { key: g.key, n: g.n, goods: g.sums[base], ftaGoods: gf, util: ratio(gf, g.sums[base]), saving: z(g.sums.saving, hasSaving) };
+        var gf = z(g.sums.ftaGoods, available, available);
+        return { key: g.key, n: g.n, goods: g.sums[base], ftaGoods: gf, util: ratio(gf, g.sums[base]), saving: z(g.sums.saving, hasSaving, hasSaving) };
       }),
       monthly: byMonth(cur, monthsBetween(range.from, range.to), [base, 'ftaGoods', 'saving']).map(function (m) {
-        var mf = z(m.ftaGoods, available && m.n);
-        return { month: m.month, goods: m[base], ftaGoods: mf, util: ratio(mf, m[base]), saving: z(m.saving, hasSaving && m.n) };
+        var mf = z(m.ftaGoods, available && m.n, available);
+        return { month: m.month, goods: m[base], ftaGoods: mf, util: ratio(mf, m[base]), saving: z(m.saving, hasSaving && m.n, hasSaving) };
       })
     };
   }
@@ -430,11 +502,18 @@
   // (v1.4.6) 건수: 「건수」 열이 있으면 그 열의 합(countBasis 'column'), 없으면 읽은 행 수(countBasis 'rows' — 신청 1건이 한 줄).
   // 행 수에는 환급액이 빈 줄도 넣는다(신청은 있었다). 합계·소계 줄 · 날짜 없는 줄은 normalize 가 이미 뺐다.
   // map(열 짝짓기)을 주면 map.count 로, 안 주면 count 값이 하나라도 있는지로 판단한다.
+  // (v1.5.0) 여러 파일 중 일부에만 건수 열이 있으면 'mixed' — 열이 있는 파일은 그 합, 없는 파일(r.countRow)은 행 수.
   function refundCountBasis(recs, map) {
-    if (map) return map.count ? 'column' : 'rows';
-    return (recs || []).some(function (r) { return r.count != null; }) ? 'column' : 'rows';
+    if (map) return map.count ? 'column' : map.partial && map.partial.count ? 'mixed' : 'rows';
+    var rowsPart = (recs || []).some(function (r) { return r.countRow; }), colPart = (recs || []).some(function (r) { return !r.countRow && r.count != null; });
+    return rowsPart && colPart ? 'mixed' : colPart ? 'column' : 'rows';
   }
-  var REFUND_COUNT_LABEL = { column: '건수 열의 합', rows: '행 수로 센 값' };
+  var REFUND_COUNT_LABEL = { column: '건수 열의 합', rows: '행 수로 센 값', mixed: '건수 열의 합 + 행 수' };
+  function refundCount(rows, basis) {
+    if (basis === 'rows') return rows.length;
+    if (basis === 'column') return sum(rows, 'count');
+    return rows.filter(function (r) { return r.countRow; }).length + (sum(rows.filter(function (r) { return !r.countRow; }), 'count') || 0);
+  }
   function refundStats(recs, range, map) {
     var cur = inRange(recs, range), months = monthsBetween(range.from, range.to), basis = refundCountBasis(recs, map);
     var monthly = byMonth(cur, months, ['amount', 'count']);
@@ -442,11 +521,11 @@
     var hqs = group(cur, 'hq', ['amount', 'count']);
     var pivot = hqs.map(function (g) {
       var rows = cur.filter(function (r) { return r.hq === g.key; });
-      return { hq: g.key, total: g.sums.amount, count: basis === 'rows' ? g.n : g.sums.count, months: byMonth(rows, months, ['amount']).map(function (m) { return m.amount; }) };
+      return { hq: g.key, total: g.sums.amount, count: refundCount(rows, basis), months: byMonth(rows, months, ['amount']).map(function (m) { return m.amount; }) };
     });
     var total = sum(cur, 'amount');
     return {
-      range: range, months: months, n: cur.length, amount: total, count: basis === 'rows' ? cur.length : sum(cur, 'count'),
+      range: range, months: months, n: cur.length, amount: total, count: refundCount(cur, basis),
       countBasis: basis, countLabel: REFUND_COUNT_LABEL[basis],
       monthAvg: filled.length ? total / filled.length : null, monthsWithData: filled.length,
       last: filled.length ? filled[filled.length - 1] : null, monthly: monthly, pivot: pivot
@@ -539,7 +618,14 @@
       ['데이터', '파일', '올린 날짜', '데이터 기간', '읽은 줄', '건너뛴 줄']];
     KINDS.forEach(function (k) {
       var x = d[k]; if (!x) return;
-      info.push([DATASETS[k].label, x.file || '', x.uploadedAt || '', x.period ? monthLabel(x.period.from) + ' ~ ' + monthLabel(x.period.to) : '', x.records.length, (x.skipped || []).length]);
+      function pl(p) { return p ? monthLabel(p.from) + ' ~ ' + monthLabel(p.to) : ''; }
+      // (v1.5.0) 여러 파일이면 파일마다 한 줄 + 종류 합계 줄
+      if (x.files && x.files.length) {
+        x.files.forEach(function (fl) { info.push([DATASETS[k].label, fl.file || '', fl.uploadedAt || '', pl(fl.period), fl.n, fl.skipped]); });
+        if (x.files.length > 1) info.push([DATASETS[k].label + ' 합계', '파일 ' + x.files.length + '개', '', pl(x.period), x.records.length, (x.skipped || []).length]);
+        return;
+      }
+      info.push([DATASETS[k].label, x.file || '', x.uploadedAt || '', pl(x.period), x.records.length, (x.skipped || []).length]);
     });
     info.push([], ['계산식', '관세부담율 = 관세 ÷ 물자대 · FTA 활용률 = 물자대_FTA ÷ 물자대 · 오류 비율 = 오류건수 ÷ 신고건수 · 증감률 = (올해 − 전년 동기) ÷ 전년 동기'],
       ['', '나누는 값이 0 이거나 비면 비워 둡니다. 빈 금액은 0 으로 더하지 않습니다.'],
@@ -741,6 +827,28 @@
     aoa.push(['합계', '', '', '', '', '', '', '', '', total, '', '', '', '', '', '', '', '', '']);
     return { name: n === 30 ? '예제_관세환급신청현황.xlsx' : '예제_관세환급신청현황_' + n + '행(가상).xlsx', kind: 'refund', aoa: aoa, total: total };
   }
+  // (v1.5.0) 관세환급 신청 현황 두 달치 — 2025.01 은 21열(「환급구분」을 세 번째에, 「비고」를 맨 끝에 더함) 12줄, 2025.02 는 19열 10줄. 둘 다 합계 줄.
+  // 머리글이 다른 파일을 따로 · 함께 올려도 합쳐지는지 보는 시험용. 가짜 데이터이고 예제 5종에는 넣지 않는다.
+  function sampleRefundMonths() {
+    var R = rng(20261117), r100 = function (v) { return Math.round(v / 100) * 100; };
+    var head19 = ['제출번호', '접수번호', '접수일자', '세번부호', '결정일자', '품 명', '수출물량', '단위', '수출금액', '환급액', '금액대비(%)', '환급단가', '수출월', '신청업체', '제품그룹', '제조업체', '접수세관', '접수년도', '수출형태'];
+    var groups = ['B110', 'B111', 'B112', 'B130', 'B161', 'B163'], items = [['BUCKET(가상)', '8431.41-0000'], ['ENGINE ASSY(가상)', '8408.20-9000'], ['PIN(가상)', '8431.49-9090']];
+    function make(m, n, wide) {
+      var head = wide ? head19.slice(0, 2).concat(['환급구분'], head19.slice(2), ['비고']) : head19.slice(), aoa = [head], total = 0;
+      for (var i = 0; i < n; i++) {
+        var d = 1 + Math.floor(R() * 20), it = items[Math.floor(R() * items.length)], qty = 10 + Math.floor(R() * 90);
+        var amt = r100((50 + R() * 450) * 1e6), ref = r100(amt * (0.005 + R() * 0.02)), grp = groups[Math.floor(R() * groups.length)];
+        total += ref;
+        var row = ['S2025-' + pad2(m) + pad2(i + 1), '0201-25-' + (200000 + m * 1000 + i), '2025-' + pad2(m) + '-' + pad2(d), it[1], '2025-' + pad2(m) + '-' + pad2(d + 7), it[0], qty, 'EA', amt,
+          ref, Math.round(ref / amt * 10000) / 100, Math.round(ref / qty), '2025-' + pad2(m), '가상중공업(가상)', grp, '가상정밀(가상)', '가상세관', 2025, i % 3 ? '직수출' : '로컬수출'];
+        if (wide) { row.splice(2, 0, i % 2 ? '개별환급' : '간이정액'); row.push(i === 0 ? '시험용(가상)' : ''); }
+        aoa.push(row);
+      }
+      var tot = head.map(function (h) { return h === '환급액' ? total : ''; }); tot[0] = '합계'; aoa.push(tot);
+      return { name: '예제_관세환급신청현황_2025-' + pad2(m) + '(가상).xlsx', kind: 'refund', aoa: aoa, total: total, rows: n, cols: head.length };
+    }
+    return [make(1, 12, true), make(2, 10, false)];
+  }
   // 표(첫 줄 머리글) → sheet_to_json 과 같은 객체 배열
   function aoaToRows(aoa) {
     var head = aoa[0].map(function (h, i) { return clean(h) || ('열' + (i + 1)); });
@@ -748,9 +856,10 @@
   }
 
   var api = {
-    DATASETS: DATASETS, KINDS: KINDS, REFUND_HQ_CODES: REFUND_HQ_CODES, sampleRefundApply: sampleRefundApply, BY: BY, LIB_CATEGORIES: LIB_CATEGORIES, LIB_FIELDS: LIB_FIELDS,
+    DATASETS: DATASETS, KINDS: KINDS, REFUND_HQ_CODES: REFUND_HQ_CODES, sampleRefundApply: sampleRefundApply, sampleRefundMonths: sampleRefundMonths, BY: BY, LIB_CATEGORIES: LIB_CATEGORIES, LIB_FIELDS: LIB_FIELDS,
     normKey: normKey, nameScore: nameScore, mapColumns: mapColumns, findHeaderRow: findHeaderRow, detectKind: detectKind, hasField: hasField,
     parseNum: parseNum, parseDate: parseDate, hs4: hs4, normalize: normalize,
+    fileKey: fileKey, upsertFile: upsertFile, mergeFiles: mergeFiles, periodOverlaps: periodOverlaps, migrateSaved: migrateSaved,
     periodOf: periodOf, unionPeriod: unionPeriod, shiftMonth: shiftMonth, monthsBetween: monthsBetween, defaultRange: defaultRange, prevRange: prevRange,
     applyFilter: applyFilter, valuesOf: valuesOf, sum: sum, ratio: ratio, change: change, group: group, byMonth: byMonth, topN: topN,
     importStats: importStats, exportStats: exportStats, ftaStats: ftaStats, refundStats: refundStats, refundCountBasis: refundCountBasis, errorStats: errorStats,

@@ -134,48 +134,93 @@ srv.listen(0, async function () {
     ok(['안내', '수입_본부', '수출_국가', '수입_HS4단위', 'FTA_수입_본부', 'FTA_수출_국가', '환급_본부월', '오류_월'].every(function (n) { return wbx.SheetNames.indexOf(n) >= 0; }), '엑셀 탭별 집계 시트', wbx.SheetNames.join(','));
     // 열 이름이 다른 파일 — 못 찾은 열을 사람이 고른다
     function xbuf(aoa) { var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'S'); return Buffer.from(XLSX.write(wb, { type: 'array', bookType: 'xlsx' })); }
+    // v1.5.0 같은 종류를 다시 올리면 더한다 — 열 이름이 다른 파일은 그 파일만 못 찾은 열을 고른다
+    function impTot() { return pg.$eval('table.trade-imp tr.sum td', function (t) { return Number(t[2].textContent.replace(/,/g, '')); }); }
+    await pg.click('.tab[data-tab="trade"]'); var g0 = await impTot();
     await pg.setInputFiles('#d-file', { name: '수입실적_오늘.xlsx', mimeType: 'application/octet-stream', buffer: xbuf([['일자', '조직', '나라', '업체', 'HS', '금액', '관세'], ['2025-10-01', '가', '중국', '갑', '8431.49', 1000, 80], ['2025-10-02', '나', '일본', '을', '8482.10', 3000, 90]]) });
-    await pg.waitForSelector('#d-sets tr[data-kind="import"].flag', { timeout: 5000 });
-    ok(/못 찾은 열 2/.test(await pg.textContent('#d-sets tr[data-kind="import"]')), '못 찾은 열 2개 표시');
-    ok(/이전 파일을 새 파일로 바꿈/.test(await pg.textContent('#d-msg')), '같은 종류를 다시 올리면 갱신');
+    await pg.waitForSelector('#d-sets tr[data-kind="import"][data-file="1"].flag', { timeout: 5000 });
+    ok(/못 찾은 열 2/.test(await pg.textContent('#d-sets tr[data-kind="import"][data-file="1"]')) && !(await pg.$('#d-sets tr[data-kind="import"][data-file="0"].flag')), '못 찾은 열 2개 — 그 파일에만 표시');
+    var dm = await pg.textContent('#d-msg');
+    ok(/수입실적_오늘\.xlsx 파일을 더했습니다\(이 종류 파일 2개\)/.test(dm), 'v1.5.0 같은 종류를 다시 올리면 더한다', dm.slice(0, 120));
+    ok(/파일 2개/.test(await pg.textContent('#d-sets tr[data-kind-sum="import"]')), 'v1.5.0 종류별 합계 줄');
     await pg.click('.tab[data-tab="fta"]');
-    ok(/자료 없음/.test(await pg.textContent('#kpi-fta')), '열을 고르기 전에는 수입 집계를 하지 않는다');
-    await pg.selectOption('select[data-map="import"][data-f="hq"]', '조직');
-    await pg.selectOption('select[data-map="import"][data-f="country"]', '나라');
-    ok(/필수 열 모두 찾음/.test(await pg.textContent('#d-sets tr[data-kind="import"]')), '열을 고르면 채워진다');
+    ok(/자료 없음/.test(await pg.textContent('#kpi-fta')), '열을 고르기 전에는 수입 집계를 하지 않는다(일부 파일만 더하지 않음)');
+    await pg.selectOption('select[data-map="import"][data-i="1"][data-f="hq"]', '조직');
+    await pg.selectOption('select[data-map="import"][data-i="1"][data-f="country"]', '나라');
+    ok(/필수 열 모두 찾음/.test(await pg.textContent('#d-sets tr[data-kind="import"][data-file="1"]')), '열을 고르면 채워진다');
+    ok(/기간 겹침/.test(await pg.textContent('#d-sets tr[data-kind="import"][data-file="1"]')) && /기간이 겹칩니다/.test(await pg.textContent('#d-sets tr[data-kind-sum="import"]')), 'v1.5.0 이름이 다르고 기간이 겹치면 경고(예제 2024.01~2025.10 · 오늘 2025.10)');
     await pg.click('.tab[data-tab="trade"]');
-    ok(await kv('imp-goods') === '4,000원' && await kv('imp-burden') === '4.25%', '고른 열로 다시 계산(4,000원 · 170/4,000)');
+    var g1 = await impTot();
+    ok(g1 === g0 + 4000, 'v1.5.0 두 파일을 더해 계산(예제 물자대 + 4,000)', g0 + ' → ' + g1);
+    await pg.click('[data-drop-file="import"][data-i="0"]');
+    ok(/예제_수입통관실적_ERP\.xlsx 파일을 뺐습니다/.test(await pg.textContent('#d-msg')), 'v1.5.0 이 파일 빼기');
+    ok(await kv('imp-goods') === '4,000원' && await kv('imp-burden') === '4.25%', '고른 열로 다시 계산(4,000원 · 170/4,000) — 뺀 파일분만 빠짐');
     await pg.setInputFiles('#d-file', { name: '무엇.xlsx', mimeType: 'application/octet-stream', buffer: xbuf([['가', '나', '다'], [1, 2, 3]]) });
     await pg.waitForSelector('select[data-pending="0"]', { timeout: 5000 });
     ok(true, '모르는 파일은 종류를 고르게 한다');
     await pg.click('[data-drop-pending="0"]');
     ok(!(await pg.$('select[data-pending]')), '모르는 파일 빼기');
-    // v1.4.5 환급 신청 현황(결정문 열도 다 맞는 머리글) — 관세환급으로 알아보고, 종류를 사람이 바꿀 수 있다
-    var RA = require('../js/customs.js').sampleRefundApply();
+    // v1.4.5 환급 신청 현황(결정문 열도 다 맞는 머리글) — 관세환급으로 알아보고, 종류를 사람이 바꿀 수 있다(파일마다)
+    var CU = require('../js/customs.js'), RA = CU.sampleRefundApply();
     await pg.setInputFiles('#d-file', { name: '신청현황.xlsx', mimeType: 'application/octet-stream', buffer: xbuf(RA.aoa) });
-    await pg.waitForFunction(function () { var r = document.querySelector('#d-sets tr[data-kind="refund"]'); return r && /신청현황/.test(r.textContent); }, null, { timeout: 5000 });
-    var raRow = await pg.textContent('#d-sets tr[data-kind="refund"]');
+    await pg.waitForFunction(function () { var r = document.querySelector('#d-sets tr[data-kind="refund"][data-file="1"]'); return r && /신청현황/.test(r.textContent); }, null, { timeout: 5000 });
+    var raRow = await pg.textContent('#d-sets tr[data-kind="refund"][data-file="1"]');
     ok(/근거: 「환급액」 열/.test(raRow) && /새 제품그룹 번호 B999/.test(raRow) && /필수 열 모두 찾음/.test(raRow), 'v1.4.5 환급 신청 현황 → 관세환급 실적', raRow.slice(0, 160));
-    pg.once('dialog', function (dg) { dg.accept(); });
-    await pg.selectOption('select[data-rekind="refund"]', 'ruling');
-    await pg.waitForFunction(function () { var r = document.querySelector('#d-sets tr[data-kind="ruling"]'); return r && /신청현황/.test(r.textContent); }, null, { timeout: 5000 });
-    ok(!(await pg.$('#d-sets tr[data-kind="refund"]')) && /직접 고름/.test(await pg.textContent('#d-sets tr[data-kind="ruling"]')), 'v1.4.5 종류 바꾸기(이미 있던 결정문 파일은 확인 뒤 바꿈)');
-    await pg.selectOption('select[data-rekind="ruling"]', 'refund');
-    await pg.waitForSelector('#d-sets tr[data-kind="refund"]', { timeout: 5000 });
-    ok(/필수 열 모두 찾음/.test(await pg.textContent('#d-sets tr[data-kind="refund"]')), 'v1.4.5 다시 관세환급으로 — 열 짝짓기를 새로 한다');
-    // v1.4.6 건수 열이 없는 73행 파일(samples/시험용/) → 카드 「73건 · 행 수로 센 값」, 본부별 표 건수 합계 73
-    await pg.setInputFiles('#d-file', path.join(ROOT, 'samples', '시험용', require('../js/customs.js').sampleRefundApply(73).name));
-    await pg.waitForFunction(function () { var r = document.querySelector('#d-sets tr[data-kind="refund"]'); return r && /73행/.test(r.textContent); }, null, { timeout: 5000 });
+    await pg.selectOption('select[data-rekind="refund"][data-i="1"]', 'ruling');
+    await pg.waitForFunction(function () { var r = document.querySelector('#d-sets tr[data-kind="ruling"][data-file="1"]'); return r && /신청현황/.test(r.textContent); }, null, { timeout: 5000 });
+    ok((await pg.$$('#d-sets tr[data-kind="refund"]')).length === 1 && /직접 고름/.test(await pg.textContent('#d-sets tr[data-kind="ruling"][data-file="1"]')), 'v1.4.5 종류 바꾸기 — 그 파일만 옮겨 결정문에 더함');
+    await pg.selectOption('select[data-rekind="ruling"][data-i="1"]', 'refund');
+    await pg.waitForSelector('#d-sets tr[data-kind="refund"][data-file="1"]', { timeout: 5000 });
+    ok(/필수 열 모두 찾음/.test(await pg.textContent('#d-sets tr[data-kind="refund"][data-file="1"]')) && (await pg.$$('#d-sets tr[data-kind="ruling"]')).length === 1, 'v1.4.5 다시 관세환급으로 — 열 짝짓기를 새로 한다');
+    // v1.4.6 건수 열이 없는 73행 파일(samples/시험용/) — 다른 환급 파일을 빼면 카드 「73건 · 행 수로 센 값」
+    await pg.setInputFiles('#d-file', path.join(ROOT, 'samples', '시험용', CU.sampleRefundApply(73).name));
+    await pg.waitForFunction(function () { var r = document.querySelector('#d-sets tr[data-kind="refund"][data-file="2"]'); return r && /73행/.test(r.textContent); }, null, { timeout: 5000 });
+    await pg.click('[data-drop-file="refund"][data-i="0"]'); await pg.click('[data-drop-file="refund"][data-i="0"]');
     await pg.click('.tab[data-tab="refund"]');
     var rc = await pg.textContent('.kpi[data-k="ref-amount"] small');
     ok(/^73건 · 행 수로 센 값$/.test(rc.trim()), 'v1.4.6 건수 열 없는 73행 → 카드 73건 · 행 수로 센 값', rc);
-    var pv = await pg.$eval('table.refund-pivot tr.sum td', function (t) { return t.map(function (x) { return x.textContent; }); });
+    var pv = await pg.$$eval('table.refund-pivot tr.sum td', function (t) { return t.map(function (x) { return x.textContent; }); });
     ok(pv[pv.length - 1] === '73' && /행 수로 센 값/.test(await pg.textContent('table.refund-pivot thead')), 'v1.4.6 본부별 표 건수 합계 73(행 수로 센 값)', pv.join('|'));
+    // v1.5.0 가짜 환급 두 달치(21열 · 19열) — 따로 · 함께 · 다시 올리기 · 빼기
+    await pg.click('[data-drop-file="refund"][data-i="0"]');
+    ok(!(await pg.$('#d-sets tr[data-kind="refund"]')), 'v1.5.0 마지막 파일을 빼면 그 종류가 없어진다');
+    var MM = CU.sampleRefundMonths(), PA = path.join(ROOT, 'samples', '시험용', MM[0].name), PB = path.join(ROOT, 'samples', '시험용', MM[1].name);
+    async function refSum() {
+      await pg.click('.tab[data-tab="refund"]');
+      var t = await pg.$$eval('table.refund-pivot tr.sum td', function (x) { return x.map(function (c) { return c.textContent; }); });
+      return [t[t.length - 2], t[t.length - 1]];
+    }
+    var want2 = [CU.fmtNum(MM[0].total + MM[1].total), '22'];
+    await pg.setInputFiles('#d-file', PA);
+    await pg.waitForSelector('#d-sets tr[data-kind="refund"][data-file="0"]', { timeout: 5000 });
+    ok(/파일을 더했습니다\(이 종류 파일 1개\)/.test(await pg.textContent('#d-msg')), 'v1.5.0 첫 파일');
+    await pg.setInputFiles('#d-file', PB);
+    await pg.waitForSelector('#d-sets tr[data-kind="refund"][data-file="1"]', { timeout: 5000 });
+    ok(/2025-02\(가상\)\.xlsx 파일을 더했습니다\(이 종류 파일 2개\)/.test(await pg.textContent('#d-msg')), 'v1.5.0 따로 올린 둘째 파일을 더한다');
+    var sep = await refSum();
+    ok(JSON.stringify(sep) === JSON.stringify(want2), 'v1.5.0 따로 올려도 합계 = 두 파일 합 · 22건', sep.join(' '));
+    var mcols = await pg.$$eval('table.refund-pivot thead th', function (t) { return t.map(function (x) { return x.textContent; }); });
+    var m1 = mcols.indexOf('2025.01'), m2 = mcols.indexOf('2025.02'), srow = await pg.$$eval('table.refund-pivot tr.sum td', function (t) { return t.map(function (x) { return x.textContent; }); });
+    ok(m1 > 0 && srow[m1] === CU.fmtNum(MM[0].total) && srow[m2] === CU.fmtNum(MM[1].total), 'v1.5.0 두 달이 모두 보인다', srow[m1] + ' ' + srow[m2]);
+    await pg.setInputFiles('#d-file', PA);
+    await pg.waitForFunction(function () { return /새 것으로 바꿨습니다/.test(document.querySelector('#d-msg').textContent); }, null, { timeout: 5000 });
+    ok((await pg.$$('#d-sets tr[data-kind="refund"]')).length === 2 && JSON.stringify(await refSum()) === JSON.stringify(want2), 'v1.5.0 같은 파일을 다시 올려도 합계가 변하지 않는다');
+    await pg.click('[data-drop-file="refund"][data-i="0"]');
+    ok(JSON.stringify(await refSum()) === JSON.stringify([CU.fmtNum(MM[1].total), '10']), 'v1.5.0 이 파일 빼기 — 그 파일분만 빠진다');
+    await pg.click('[data-drop-file="refund"][data-i="0"]');
+    await pg.setInputFiles('#d-file', [PA, PB]);
+    await pg.waitForSelector('#d-sets tr[data-kind="refund"][data-file="1"]', { timeout: 5000 });
+    ok(JSON.stringify(await refSum()) === JSON.stringify(want2), 'v1.5.0 함께 올려도 결과가 같다');
     await pg.click('.tab[data-tab="trade"]');
     // 다시 열면 이 브라우저에 기억한 데이터로
     await pg.goto(base + 'dashboard.html');
     await pg.waitForSelector('#kpi-trade .kpi[data-k="imp-goods"]', { timeout: 5000 });
-    ok(/기억한 데이터/.test(await pg.textContent('#d-msg')) && await kv('imp-goods') === '4,000원', '다시 열면 기억한 데이터와 고른 열을 불러온다');
+    ok(/기억한 데이터/.test(await pg.textContent('#d-msg')) && await kv('imp-goods') === '4,000원' && (await pg.$$('#d-sets tr[data-kind="refund"]')).length === 2, '다시 열면 기억한 데이터(파일 여러 개)와 고른 열을 불러온다');
+    // 예전 형식(v1 — 종류마다 파일 하나)으로 기억한 자료도 읽힌다
+    await pg.evaluate(function (aoa) { localStorage.setItem('b2611-07.dash', JSON.stringify({ v: 1, sets: { refund: { file: '예전형식(가상).xlsx', uploadedAt: '2026-11-01 09:00', headers: aoa[0], aoa: aoa, offset: 0, override: {}, reason: '열 이름' } } })); }, CU.sampleFiles()[2].aoa);
+    await pg.goto(base + 'dashboard.html');
+    await pg.waitForSelector('#d-sets tr[data-kind="refund"]', { timeout: 5000 });
+    ok(/예전형식/.test(await pg.textContent('#d-sets tr[data-kind="refund"]')) && /기억한 데이터/.test(await pg.textContent('#d-msg')), 'v1.5.0 예전 형식으로 기억한 자료도 오류 없이 읽힌다');
     await pg.click('#btn-dash-clear');
     ok(await pg.isHidden('#d-view'), '저장된 데이터 지우기');
     // 실제 samples/ 엑셀 4종 올리기 — 수입 파일은 맨 위 제목 2줄을 건너뛰고 머리글을 찾는다

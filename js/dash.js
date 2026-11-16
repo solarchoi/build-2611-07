@@ -7,25 +7,55 @@
   // 사람이 고른 종류 — { '머리글|머리글…': kind }. 같은 모양의 파일을 다음에 올리면 이 종류로 넣는다.
   function kindPrefs() { try { return JSON.parse(localStorage.getItem(LS.kinds) || '{}') || {}; } catch (e) { return {}; } }
   function setKindPref(headers, kind) { try { var p = kindPrefs(); p[headers.join('|')] = kind; localStorage.setItem(LS.kinds, JSON.stringify(p)); } catch (e) { /* 기억 못 해도 이번 화면에는 반영된다 */ } }
-  // 올린 파일을 다른 종류로 옮긴다. 열 짝짓기는 새 종류 기준으로 처음부터 다시 한다.
-  function changeKind(from, to) {
-    var s = state.sets[from];
-    if (!s || !C.DATASETS[to] || from === to) return false;
-    if (state.sets[to] && !window.confirm('「' + C.DATASETS[to].label + '」에는 이미 ' + state.sets[to].file + ' 이(가) 있습니다. 이 파일로 바꿀까요?')) return false;
-    delete state.sets[from]; delete state.open[from];
-    s.override = {}; s.reason = '직접 고름';
-    state.sets[to] = s; state.open[to] = true;
-    setKindPref(s.headers, to);
-    rebuild(true);
-    msg(esc(s.file) + ' → ' + esc(C.DATASETS[to].label) + '(으)로 바꿨습니다. 같은 모양의 파일은 다음에도 이 종류로 넣습니다.', 'ok');
-    return true;
-  }
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
-  // sets[kind] = { file, uploadedAt, headers, aoa(머리글 포함), offset, override } — 계산 결과는 build() 가 붙인다
+  // (v1.5.0) sets[kind] = { files: [{ name, file, uploadedAt, headers, aoa(머리글 포함), offset, override, reason }], m: 합친 결과(build 가 붙임) }
+  // 같은 종류 파일은 모두 더한다. 이름이 같은 파일은 그 파일만 바꾼다. 합치는 규칙은 customs.js(upsertFile · mergeFiles).
   var state = { sets: {}, pending: [], filter: {}, range: null, tab: 'trade', unit: localStorage.getItem(LS.unit) || '원', open: {} };
+  function openKey(k, f) { return k + '|' + C.fileKey(f); }
+  function label(k) { return C.DATASETS[k].label; }
 
   function now() { var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; }; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); }
   function msg(html, cls) { $('d-msg').innerHTML = html ? '<div class="' + (cls || 'note') + '">' + html + '</div>' : ''; }
+
+  // 파일 하나를 그 종류에 넣는다 → 안내 문구
+  function putFile(k, item) {
+    var s = state.sets[k] || (state.sets[k] = { files: [] });
+    var r = C.upsertFile(s.files, item);
+    s.files = r.files;
+    var why = item.reason ? ' · 근거: ' + esc(item.reason) : '';
+    return r.action === 'replaced'
+      ? esc(item.file) + ' 파일을 새 것으로 바꿨습니다 — ' + esc(label(k)) + why
+      : esc(item.file) + ' 파일을 더했습니다(이 종류 파일 ' + s.files.length + '개) — ' + esc(label(k)) + why;
+  }
+  // 이번에 넣은 파일이 낀 기간 겹침 → 경고 문구
+  function overlapNotes(k, names) {
+    var s = state.sets[k]; if (!s || !s.m) return [];
+    return s.m.overlaps.filter(function (o) { return names[o.a] || names[o.b]; }).map(function (o) {
+      return '<b>기간이 겹칩니다. 중복 집계일 수 있습니다</b> — ' + esc(label(k)) + ': ' + esc(o.a) + ' · ' + esc(o.b) + ' (' + C.monthLabel(o.from) + ' ~ ' + C.monthLabel(o.to) + ')';
+    });
+  }
+  // 올린 파일 하나를 다른 종류로 옮긴다. 열 짝짓기는 새 종류 기준으로 처음부터 다시 한다.
+  function changeKind(from, i, to) {
+    var s = state.sets[from], f = s && s.files[i];
+    if (!f || !C.DATASETS[to] || from === to) return false;
+    var same = state.sets[to] && state.sets[to].files.filter(function (x) { return C.fileKey(x) === C.fileKey(f); })[0];
+    if (same && !window.confirm('「' + label(to) + '」에 이름이 같은 파일 ' + same.file + ' 이(가) 있습니다. 이 파일로 바꿀까요?')) return false;
+    s.files.splice(i, 1); if (!s.files.length) delete state.sets[from];
+    f.override = {}; f.reason = '직접 고름';
+    var text = putFile(to, f), names = {}; names[f.file] = 1;
+    state.open[openKey(to, f)] = true;
+    setKindPref(f.headers, to);
+    var note = rebuild(true), ov = overlapNotes(to, names);
+    msg(esc(f.file) + ' → ' + esc(label(to)) + '(으)로 옮겼습니다. ' + text + '. 같은 모양의 파일은 다음에도 이 종류로 넣습니다.' + (ov.length ? '<br>' + ov.join('<br>') : '') + note, ov.length || note ? 'warn' : 'ok');
+    return true;
+  }
+  function dropFile(k, i) {
+    var s = state.sets[k], f = s && s.files[i]; if (!f) return;
+    s.files.splice(i, 1); if (!s.files.length) delete state.sets[k];
+    delete state.open[openKey(k, f)];
+    var note = rebuild(false);
+    msg(esc(f.file) + ' 파일을 뺐습니다 — ' + esc(label(k)) + (state.sets[k] ? '(이 종류 파일 ' + state.sets[k].files.length + '개)' : '(이 종류 파일 없음)') + note, note ? 'warn' : 'ok');
+  }
 
   /* ---------- 읽기 ---------- */
   function sheetsOf(wb) {
@@ -35,30 +65,26 @@
       return { name: n, aoa: aoa.slice(hr), offset: hr };
     }).filter(function (s) { return s.aoa.length > 1; });
   }
-  // 파일 묶음 → 종류별로 넣는다. 같은 묶음에서 같은 종류·같은 열 이름이면 이어 붙이고, 그 밖에는 새 파일로 바꾼다(갱신).
+  // 파일 묶음 → 종류별로 넣는다. 따로 올리든 함께 올리든 같은 종류는 모두 더한다(머리글이 달라도). 이름이 같은 파일은 그 파일만 바꾼다.
   function addFiles(list) {
-    var batch = {}, notes = [];
+    var notes = [], warn = false, names = {};
     list.forEach(function (f) {
       var sheets = sheetsOf(f.wb);
-      if (!sheets.length) { notes.push(esc(f.name) + ' — 읽을 표가 없습니다.'); return; }
+      if (!sheets.length) { notes.push(esc(f.name) + ' — 읽을 표가 없습니다.'); warn = true; return; }
       var best = null;
       sheets.forEach(function (s) { var d = C.detectKind(s.aoa[0].map(String), f.name + ' ' + s.name); if (!best || d.ratio > best.d.ratio) best = { s: s, d: d }; });
-      var item = { file: f.name + (sheets.length > 1 ? ' · ' + best.s.name : ''), uploadedAt: now(), headers: best.s.aoa[0].map(function (h, i) { return String(h).trim() || ('열' + (i + 1)); }), aoa: best.s.aoa, offset: best.s.offset, override: {} };
+      var item = { name: f.name, file: f.name + (sheets.length > 1 ? ' · ' + best.s.name : ''), uploadedAt: now(), headers: best.s.aoa[0].map(function (h, i) { return String(h).trim() || ('열' + (i + 1)); }), aoa: best.s.aoa, offset: best.s.offset, override: {} };
       // 사람이 전에 같은 머리글의 파일 종류를 바꿔 준 적이 있으면 그 종류가 앞선다
       var pref = kindPrefs()[item.headers.join('|')];
       if (pref && C.DATASETS[pref]) best.d = { kind: pref, reason: '전에 직접 고른 종류' };
-      if (!best.d.kind) { state.pending.push(item); notes.push(esc(f.name) + ' — 어떤 자료인지 알아보지 못했습니다. 아래에서 종류를 골라 주세요.'); return; }
-      var k = best.d.kind, prev = batch[k];
+      if (!best.d.kind) { state.pending.push(item); notes.push(esc(f.name) + ' — 어떤 자료인지 알아보지 못했습니다. 아래에서 종류를 골라 주세요.'); warn = true; return; }
       item.reason = best.d.reason;
-      if (prev && prev.headers.join('|') === item.headers.join('|')) { prev.aoa = prev.aoa.concat(item.aoa.slice(1)); prev.file += ' + ' + item.file; prev.parts = (prev.parts || 1) + 1; }
-      else { batch[k] = item; notes.push(esc(f.name) + ' → ' + esc(C.DATASETS[k].label) + (best.d.reason ? ' (근거: ' + esc(best.d.reason) + ')' : '') + (state.sets[k] ? ' (이전 파일을 새 파일로 바꿈)' : '')); }
+      notes.push(putFile(best.d.kind, item));
+      names[best.d.kind] = names[best.d.kind] || {}; names[best.d.kind][item.file] = 1;
     });
-    Object.keys(batch).forEach(function (k) {
-      var keep = state.sets[k] && state.sets[k].headers.join('|') === batch[k].headers.join('|') ? state.sets[k].override : {};
-      batch[k].override = keep; state.sets[k] = batch[k];
-    });
-    rebuild(true);
-    msg(notes.join('<br>'), state.pending.length ? 'warn' : 'ok');
+    var note = rebuild(true);
+    Object.keys(names).forEach(function (k) { overlapNotes(k, names[k]).forEach(function (t) { notes.push(t); warn = true; }); });
+    msg(notes.join('<br>') + note, warn || state.pending.length || note ? 'warn' : 'ok');
   }
   function readFiles(files) {
     var list = [], left = files.length;
@@ -83,84 +109,100 @@
   }
 
   /* ---------- 계산 묶기(엔진 호출) ---------- */
-  function build(k) {
-    var s = state.sets[k];
-    s.res = C.mapColumns(s.headers, k, s.override);
-    s.rows = C.aoaToRows(s.aoa);
-    s.norm = s.res.missing.length ? null : C.normalize(s.rows, k, s.res.map, s.offset);
-  }
-  function ready(k) { return state.sets[k] && state.sets[k].norm ? state.sets[k] : null; }
+  function build(k) { var s = state.sets[k]; s.m = C.mergeFiles(k, s.files); }
+  function ready(k) { return state.sets[k] && state.sets[k].m && state.sets[k].m.ok ? state.sets[k] : null; }
+  // 다시 계산하고 그린다. 기억하지 못했으면 그 알림 문구(HTML)를 돌려준다 — 부른 쪽이 안내 문구 뒤에 붙인다.
   function rebuild(resetRange) {
     Object.keys(state.sets).forEach(build);
-    var period = C.unionPeriod(C.KINDS.map(function (k) { return ready(k) ? ready(k).norm.period : null; }));
+    var period = C.unionPeriod(C.KINDS.map(function (k) { return ready(k) ? ready(k).m.period : null; }));
     state.period = period;
     if (period && (resetRange || !state.range || state.range.from < period.from || state.range.to > period.to)) state.range = C.defaultRange(period);
     if (!period) state.range = null;
-    save();
+    var note = save();
     renderSets(); renderFilter(); renderTab();
+    return note;
   }
   function save() {
-    if (!$('d-remember').checked) return;
+    if (!$('d-remember').checked) return '';
     var keep = {};
-    Object.keys(state.sets).forEach(function (k) { var s = state.sets[k]; keep[k] = { file: s.file, uploadedAt: s.uploadedAt, headers: s.headers, aoa: s.aoa, offset: s.offset, override: s.override, reason: s.reason }; });
-    try { localStorage.setItem(LS.data, JSON.stringify({ v: 1, sets: keep })); }
-    catch (e) { msg('데이터가 커서 이 브라우저에 기억하지 못했습니다. 다음에 열 때 다시 올려 주세요.', 'warn'); }
+    Object.keys(state.sets).forEach(function (k) {
+      keep[k] = { files: state.sets[k].files.map(function (f) { return { name: f.name, file: f.file, uploadedAt: f.uploadedAt, headers: f.headers, aoa: f.aoa, offset: f.offset, override: f.override, reason: f.reason }; }) };
+    });
+    try { localStorage.setItem(LS.data, JSON.stringify({ v: 2, sets: keep })); return ''; }
+    catch (e) {
+      // 남겨 두면 다음에 열 때 지금과 다른 옛 자료가 보인다 → 지운다
+      try { localStorage.removeItem(LS.data); } catch (e2) { /* 지우지 못해도 화면은 계속 */ }
+      return '<br><b>데이터가 커서 이 브라우저에 기억하지 못했습니다.</b> 이전에 기억한 데이터도 지웠습니다. 다음에 열 때 다시 올려 주세요.';
+    }
   }
   function restore() {
     try {
-      var j = JSON.parse(localStorage.getItem(LS.data) || 'null');
-      if (!j || !j.sets) return false;
-      Object.keys(j.sets).forEach(function (k) { if (C.DATASETS[k]) state.sets[k] = j.sets[k]; });
+      var j = C.migrateSaved(JSON.parse(localStorage.getItem(LS.data) || 'null'));
+      Object.keys(j.sets).forEach(function (k) { state.sets[k] = j.sets[k]; });
       return Object.keys(state.sets).length > 0;
-    } catch (e) { return false; }
+    } catch (e) { state.sets = {}; return false; }
   }
 
   /* ---------- 올린 데이터 표 · 열 짝짓기 ---------- */
   var REASON = function (sc) { return sc === 'user' ? '직접 고름' : sc === 'user-none' ? '없음으로 고름' : sc === 1 ? '같은 이름' : sc >= 0.95 ? '같은 뜻 낱말' : sc ? '이름 일부 포함' : ''; };
-  function example(s, h) { for (var i = 0; i < s.rows.length && i < 50; i++) { var v = s.rows[i][h]; if (String(v).trim()) return String(v); } return ''; }
+  function example(f, h) { var c = f.headers.indexOf(h); for (var i = 1; c >= 0 && i < f.aoa.length && i <= 50; i++) { var v = f.aoa[i][c]; if (v != null && String(v).trim()) return String(v); } return ''; }
+  function plabel(p) { return p ? C.monthLabel(p.from) + ' ~ ' + C.monthLabel(p.to) : '—'; }
   function renderSets() {
     var ks = C.KINDS.filter(function (k) { return state.sets[k]; });
     var h = '';
     if (state.pending.length) {
       h += '<div class="warn"><b>종류를 골라 주세요</b><ul>' + state.pending.map(function (p, i) {
         return '<li>' + esc(p.file) + ' — 열: ' + esc(p.headers.slice(0, 8).join(', ')) + ' <select data-pending="' + i + '"><option value="">종류 고르기</option>' +
-          C.KINDS.map(function (k) { return '<option value="' + k + '">' + esc(C.DATASETS[k].label) + '</option>'; }).join('') + '</select> <button class="x" data-drop-pending="' + i + '">빼기</button></li>';
+          C.KINDS.map(function (k) { return '<option value="' + k + '">' + esc(label(k)) + '</option>'; }).join('') + '</select> <button class="x" data-drop-pending="' + i + '">빼기</button></li>';
       }).join('') + '</ul></div>';
     }
     if (ks.length) {
-      h += '<div class="tablewrap" style="margin-top:12px"><table class="sets"><thead><tr><th>자료</th><th>파일</th><th>올린 날짜</th><th>데이터 기간</th><th>읽은 줄</th><th>건너뛴 줄</th><th>열 짝짓기</th></tr></thead><tbody>';
+      h += '<div class="tablewrap" style="margin-top:12px"><table class="sets"><thead><tr><th>자료</th><th>파일</th><th>올린 날짜</th><th>데이터 기간</th><th>읽은 줄</th><th>건너뛴 줄</th><th>열 확인</th></tr></thead><tbody>';
       ks.forEach(function (k) {
-        var s = state.sets[k], n = s.norm, miss = s.res.missing;
-        h += '<tr data-kind="' + k + '"' + (miss.length ? ' class="flag"' : '') + '><td><b>' + esc(C.DATASETS[k].label) + '</b><br><small class="sub">' + esc(C.DATASETS[k].source) + ' · ' + esc(C.DATASETS[k].cycle) + (s.reason ? ' · 근거: ' + esc(s.reason) : '') + '</small>' +
-          '<br><label class="sub"><small>종류 바꾸기</small> <select data-rekind="' + k + '" aria-label="' + esc(s.file) + ' 종류 바꾸기">' +
-          C.KINDS.map(function (o) { return '<option value="' + o + '"' + (o === k ? ' selected' : '') + '>' + esc(C.DATASETS[o].label) + '</option>'; }).join('') + '</select></label></td>' +
-          '<td class="wrapcell">' + esc(s.file) + '</td><td>' + esc(s.uploadedAt) + '</td>' +
-          '<td>' + (n && n.period ? C.monthLabel(n.period.from) + ' ~ ' + C.monthLabel(n.period.to) : '—') + '</td>' +
-          '<td class="num">' + (n ? C.fmtNum(n.records.length) : '—') + '</td><td class="num">' + (n ? C.fmtNum(n.skipped.length) : '—') + '</td>' +
-          '<td>' + (miss.length ? '<span class="tag bad-t">못 찾은 열 ' + miss.length + '</span>' : '<span class="tag ok-t">필수 열 모두 찾음</span>') +
-          (n && n.unknownCodes && n.unknownCodes.length ? ' <span class="tag bad-t" title="본부 번호표에 없는 번호 — 열 확인을 눌러 보세요">새 제품그룹 번호 ' + esc(n.unknownCodes.join('·')) + '</span>' : '') +
-          ' <button class="x" data-toggle="' + k + '">' + (state.open[k] || miss.length ? '접기' : '열 확인') + '</button></td></tr>';
-        if (state.open[k] || miss.length) h += '<tr class="maprow"><td colspan="7">' + mapTable(k) + '</td></tr>';
+        var s = state.sets[k], m = s.m;
+        s.files.forEach(function (f, i) {
+          var p = m.files[i], n = p.norm, miss = p.res.missing, open = state.open[openKey(k, f)] || miss.length;
+          var ov = m.overlaps.filter(function (o) { return o.a === p.file || o.b === p.file; });
+          h += '<tr data-kind="' + k + '" data-file="' + i + '"' + (miss.length ? ' class="flag"' : '') + '><td><b>' + esc(label(k)) + '</b><br><small class="sub">' + esc(C.DATASETS[k].source) + ' · ' + esc(C.DATASETS[k].cycle) + (f.reason ? ' · 근거: ' + esc(f.reason) : '') + '</small>' +
+            '<br><label class="sub"><small>종류 바꾸기</small> <select data-rekind="' + k + '" data-i="' + i + '" aria-label="' + esc(f.file) + ' 종류 바꾸기">' +
+            C.KINDS.map(function (o) { return '<option value="' + o + '"' + (o === k ? ' selected' : '') + '>' + esc(label(o)) + '</option>'; }).join('') + '</select></label></td>' +
+            '<td class="wrapcell">' + esc(f.file) + '</td><td>' + esc(f.uploadedAt) + '</td><td>' + plabel(n && n.period) + '</td>' +
+            '<td class="num">' + (n ? C.fmtNum(n.records.length) : '—') + '</td><td class="num">' + (n ? C.fmtNum(n.skipped.length) : '—') + '</td>' +
+            '<td>' + (miss.length ? '<span class="tag bad-t">못 찾은 열 ' + miss.length + '</span>' : '<span class="tag ok-t">필수 열 모두 찾음</span>') +
+            (ov.length ? ' <span class="tag bad-t" title="' + esc(ov.map(function (o) { return (o.a === p.file ? o.b : o.a) + ' (' + C.monthLabel(o.from) + ' ~ ' + C.monthLabel(o.to) + ')'; }).join(', ')) + '">기간 겹침 — 중복 집계일 수 있음</span>' : '') +
+            (n && n.unknownCodes && n.unknownCodes.length ? ' <span class="tag bad-t" title="본부 번호표에 없는 번호 — 열 확인을 눌러 보세요">새 제품그룹 번호 ' + esc(n.unknownCodes.join('·')) + '</span>' : '') +
+            ' <button class="x" data-toggle="' + k + '" data-i="' + i + '">' + (open ? '접기' : '열 확인') + '</button>' +
+            ' <button class="x" data-drop-file="' + k + '" data-i="' + i + '" aria-label="' + esc(f.file) + ' 빼기">이 파일 빼기</button></td></tr>';
+          if (open) h += '<tr class="maprow"><td colspan="7">' + mapTable(k, i) + '</td></tr>';
+        });
+        // 종류별 합계 줄
+        var bad = m.files.filter(function (p) { return !p.ok; }).length, part = [];
+        Object.keys(m.partial).forEach(function (key) { var fd = C.DATASETS[k].fields.filter(function (x) { return x.key === key; })[0]; part.push((fd ? fd.label : key) + ' 열 없는 파일: ' + m.partial[key].join(', ')); });
+        h += '<tr class="sum" data-kind-sum="' + k + '"><td><b>' + esc(label(k)) + ' 합계</b></td><td>파일 ' + s.files.length + '개</td><td></td><td>' + plabel(m.period) + '</td>' +
+          '<td class="num">' + C.fmtNum(m.records.length) + '</td><td class="num">' + C.fmtNum(m.skipped.length) + '</td><td>' +
+          (bad ? '<span class="tag bad-t">못 찾은 열이 있는 파일 ' + bad + '개 — 열을 고르거나 그 파일을 빼면 계산합니다</span>' : '<span class="tag ok-t">모두 더해 계산</span>') +
+          (m.overlaps.length ? ' <span class="tag bad-t">기간이 겹칩니다. 중복 집계일 수 있습니다</span>' : '') +
+          (part.length ? '<br><small class="sub">' + esc(part.join(' / ')) + '</small>' : '') + '</td></tr>';
       });
-      h += '</tbody></table></div><p class="sub" style="margin-top:8px">같은 종류의 엑셀을 다시 올리면 새 파일로 바꿉니다(갱신). 한 번에 여러 파일을 올리면 열 이름이 같은 것끼리 이어 붙입니다.</p>';
+      h += '</tbody></table></div><p class="sub" style="margin-top:8px">같은 종류의 엑셀은 따로 올리든 함께 올리든 모두 더해 계산합니다(머리글이 달라도 파일마다 열을 짝지어 합칩니다). 이름이 같은 파일을 다시 올리면 더하지 않고 그 파일만 바꿉니다. 데이터 기간이 겹치는 파일은 중복 집계일 수 있어 알려 드립니다. 필요 없는 파일은 「이 파일 빼기」로 뺍니다.</p>';
     }
     $('d-sets').innerHTML = h;
     $('d-view').hidden = !state.range;
   }
-  function mapTable(k) {
-    var s = state.sets[k], res = s.res;
-    var h = (res.missing.length ? '<div class="warn">이 열을 찾지 못했습니다: <b>' + esc(res.missing.join(', ')) + '</b>. 아래에서 엑셀의 어느 열인지 골라 주세요.</div>' : '') +
+  function mapTable(k, i) {
+    var f = state.sets[k].files[i], p = state.sets[k].m.files[i], res = p.res, n = p.norm;
+    var h = (res.missing.length ? '<div class="warn">이 열을 찾지 못했습니다: <b>' + esc(res.missing.join(', ')) + '</b>. 아래에서 엑셀의 어느 열인지 골라 주세요. 고르기 전에는 이 종류를 집계하지 않습니다.</div>' : '') +
       '<table class="map"><thead><tr><th>필요한 항목</th><th>엑셀 열</th><th>근거</th><th>예시 값</th></tr></thead><tbody>';
-    C.DATASETS[k].fields.forEach(function (f) {
-      var cur = res.map[f.key] || '';
-      h += '<tr' + (f.req && !cur ? ' class="flag"' : '') + '><td>' + esc(f.label) + (f.req ? ' <small class="req">필수</small>' : ' <small class="sub">선택</small>') + '</td>' +
-        '<td><select data-map="' + k + '" data-f="' + f.key + '"><option value="">(없음)</option>' + s.headers.map(function (hd) { return '<option' + (hd === cur ? ' selected' : '') + '>' + esc(hd) + '</option>'; }).join('') + '</select></td>' +
-        '<td>' + esc(REASON(res.score[f.key])) + '</td><td class="wrapcell">' + esc(cur ? example(s, cur) : '') + '</td></tr>';
+    C.DATASETS[k].fields.forEach(function (fd) {
+      var cur = res.map[fd.key] || '';
+      h += '<tr' + (fd.req && !cur ? ' class="flag"' : '') + '><td>' + esc(fd.label) + (fd.req ? ' <small class="req">필수</small>' : ' <small class="sub">선택</small>') + '</td>' +
+        '<td><select data-map="' + k + '" data-i="' + i + '" data-f="' + fd.key + '"><option value="">(없음)</option>' + f.headers.map(function (hd) { return '<option' + (hd === cur ? ' selected' : '') + '>' + esc(hd) + '</option>'; }).join('') + '</select></td>' +
+        '<td>' + esc(REASON(res.score[fd.key])) + '</td><td class="wrapcell">' + esc(cur ? example(f, cur) : '') + '</td></tr>';
     });
     h += '</tbody></table>';
     if (res.unused.length) h += '<p class="sub">쓰지 않은 열: ' + esc(res.unused.join(', ')) + '</p>';
-    if (s.norm && s.norm.issues.length) h += '<div class="note"><b>읽으며 확인한 것</b><ul>' + s.norm.issues.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' +
-      (s.norm.skipped.length ? '<p class="sub" style="margin:6px 0 0">건너뛴 줄: ' + s.norm.skipped.slice(0, 8).map(function (x) { return x.row + '행(' + esc(x.reason) + ')'; }).join(', ') + (s.norm.skipped.length > 8 ? ' 외' : '') + '</p>' : '') + '</div>';
+    if (n && n.issues.length) h += '<div class="note"><b>읽으며 확인한 것</b><ul>' + n.issues.map(function (t) { return '<li>' + esc(t) + '</li>'; }).join('') + '</ul>' +
+      (n.skipped.length ? '<p class="sub" style="margin:6px 0 0">건너뛴 줄: ' + n.skipped.slice(0, 8).map(function (x) { return x.row + '행(' + esc(x.reason) + ')'; }).join(', ') + (n.skipped.length > 8 ? ' 외' : '') + '</p>' : '') + '</div>';
     return h;
   }
 
@@ -172,7 +214,7 @@
     $('f-from').innerHTML = ms.map(function (m) { return opt(m, state.range.from, C.monthLabel(m)); }).join('');
     $('f-to').innerHTML = ms.map(function (m) { return opt(m, state.range.to, C.monthLabel(m)); }).join('');
     var hqs = {}, cos = {};
-    C.KINDS.forEach(function (k) { var s = ready(k); if (!s) return; C.valuesOf(s.norm.records, 'hq').forEach(function (v) { hqs[v] = 1; }); if (C.hasField(k, 'country')) C.valuesOf(s.norm.records, 'country').forEach(function (v) { cos[v] = 1; }); });
+    C.KINDS.forEach(function (k) { var s = ready(k); if (!s) return; C.valuesOf(s.m.records, 'hq').forEach(function (v) { hqs[v] = 1; }); if (C.hasField(k, 'country')) C.valuesOf(s.m.records, 'country').forEach(function (v) { cos[v] = 1; }); });
     $('f-hq').innerHTML = opt('', state.filter.hq || '', '전체') + Object.keys(hqs).sort().map(function (v) { return opt(v, state.filter.hq); }).join('');
     $('f-country').innerHTML = opt('', state.filter.country || '', '전체') + Object.keys(cos).sort().map(function (v) { return opt(v, state.filter.country); }).join('');
     $('f-unit').value = state.unit;
@@ -182,7 +224,7 @@
   }
   function filtered(k) {
     var s = ready(k); if (!s) return null;
-    var f = C.applyFilter(s.norm.records, k, { hq: state.filter.hq, country: state.filter.country });
+    var f = C.applyFilter(s.m.records, k, { hq: state.filter.hq, country: state.filter.country });
     return { recs: f.records, ignored: f.ignored, set: s };
   }
 
@@ -281,10 +323,10 @@
     ['import', 'export'].forEach(function (kind, i) {
       var f = filtered(kind), nm = kind === 'import' ? '수입' : '수출';
       if (!f) { k += empty(kind); return; }
-      var s = C.ftaStats(f.recs, kind, state.range, by, f.set.res.map);
-      if (!s.available) { k += kpi(nm + ' FTA 활용률', '열 없음', '물자대_FTA 열을 골라 주세요', '', kind + '-util'); return; }
+      var s = C.ftaStats(f.recs, kind, state.range, by, f.set.m.map), part = f.set.m.partial;
+      if (!s.available) { k += kpi(nm + ' FTA 활용률', '열 없음', part.ftaGoods ? '일부 파일(' + esc(part.ftaGoods.join(', ')) + ')에 물자대_FTA 열이 없어 계산하지 않습니다' : '물자대_FTA 열을 골라 주세요', '', kind + '-util'); return; }
       k += kpi(nm + ' FTA 활용률', C.fmtPct(s.util), money(s.ftaGoods) + ' / ' + esc(money(s.goods)), '계산: 물자대_FTA ÷ 물자대', kind + '-util') +
-        kpi(nm + ' FTA 절감액', s.hasSaving ? money(s.saving) : '열 없음', '', s.hasSaving ? '합계' : '', kind + '-saving');
+        kpi(nm + ' FTA 절감액', s.hasSaving ? money(s.saving) : '열 없음', !s.hasSaving && part.saving ? '일부 파일(' + esc(part.saving.join(', ')) + ')에 절감액 열이 없어 계산하지 않습니다' : '', s.hasSaving ? '합계' : '', kind + '-saving');
       ch += hbar(nm + ' ' + BYL + '별 FTA 활용률', s.groups.slice(0, 10).map(function (g) { return { label: g.key, value: g.util }; }), function (v) { return C.fmtPct(v); }, COL[i ? 2 : 0]);
       monthly.push({ name: nm + ' 절감액', color: COL[i ? 2 : 0], values: s.monthly.map(function (m) { return m.saving; }), fmt: money });
       tb += '<h3 class="tb-h">' + nm + ' FTA — ' + esc(BYL) + '별 물자대 · 물자대_FTA · 절감액</h3>' + ignoredNote(f.ignored) +
@@ -297,7 +339,7 @@
   function renderRefund() {
     var f = filtered('refund'), k = '', ch = '', tb = '';
     if (!f) { $('kpi-refund').innerHTML = empty('refund'); $('ch-refund').innerHTML = ''; $('tb-refund').innerHTML = ''; return; }
-    var s = C.refundStats(f.recs, state.range, f.set.res && f.set.res.map), cntHead = '건수(' + s.countLabel + ')';
+    var s = C.refundStats(f.recs, state.range, f.set.m.map), cntHead = '건수(' + s.countLabel + ')';
     k += kpi('관세환급 합계', money(s.amount), s.count != null ? esc(C.fmtNum(s.count) + '건 · ' + s.countLabel) : '', '합계', 'ref-amount') +
       kpi('월 평균', money(s.monthAvg), '데이터 있는 ' + s.monthsWithData + '개월', '계산: 합계 ÷ 데이터 있는 달 수', 'ref-avg') +
       kpi('최근 달 환급액', s.last ? money(s.last.amount) : '—', s.last ? C.monthLabel(s.last.month) : '', '', 'ref-last');
@@ -358,7 +400,12 @@
   /* ---------- 엑셀 ---------- */
   function exportXlsx() {
     var data = {};
-    C.KINDS.forEach(function (k) { var s = ready(k); if (s) data[k] = { file: s.file, uploadedAt: s.uploadedAt, period: s.norm.period, records: s.norm.records, map: s.res.map, skipped: s.norm.skipped }; });
+    C.KINDS.forEach(function (k) {
+      var s = ready(k); if (!s) return;
+      var m = s.m;
+      data[k] = { file: m.files.map(function (p) { return p.file; }).join(' + '), period: m.period, records: m.records, map: m.map, skipped: m.skipped,
+        files: m.files.map(function (p) { return { file: p.file, uploadedAt: p.uploadedAt, period: p.period, n: p.norm.records.length, skipped: p.norm.skipped.length }; }) };
+    });
     var book = C.exportBook({ range: state.range, filter: state.filter, unit: state.unit, data: data });
     var wb = XLSX.utils.book_new();
     book.forEach(function (sh) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sh.aoa), sh.name); });
@@ -372,17 +419,23 @@
   drop.addEventListener('drop', function (e) { readFiles(e.dataTransfer.files); });
   $('d-file').addEventListener('change', function () { readFiles(this.files); this.value = ''; });
   $('btn-dash-sample').addEventListener('click', loadSample);
-  $('btn-dash-clear').addEventListener('click', function () { localStorage.removeItem(LS.data); localStorage.removeItem(LS.kinds); state.sets = {}; state.pending = []; state.range = null; renderSets(); msg('이 브라우저에 기억한 데이터를 지웠습니다.', 'ok'); });
+  $('btn-dash-clear').addEventListener('click', function () { localStorage.removeItem(LS.data); localStorage.removeItem(LS.kinds); state.sets = {}; state.pending = []; state.open = {}; state.range = null; renderSets(); msg('이 브라우저에 기억한 데이터를 지웠습니다.', 'ok'); });
   $('d-remember').addEventListener('change', function () { if (this.checked) save(); else localStorage.removeItem(LS.data); });
   $('d-sets').addEventListener('change', function (e) {
     var t = e.target;
-    if (t.dataset.map) { var s = state.sets[t.dataset.map]; s.override[t.dataset.f] = t.value; state.open[t.dataset.map] = true; rebuild(false); }
-    else if (t.dataset.pending != null && t.value) { var p = state.pending.splice(+t.dataset.pending, 1)[0]; p.reason = '직접 고름'; state.sets[t.value] = p; state.open[t.value] = true; setKindPref(p.headers, t.value); rebuild(true); }
-    else if (t.dataset.rekind) { if (!changeKind(t.dataset.rekind, t.value)) t.value = t.dataset.rekind; }
+    if (t.dataset.map) { var f = state.sets[t.dataset.map].files[+t.dataset.i]; f.override[t.dataset.f] = t.value; state.open[openKey(t.dataset.map, f)] = true; var nt = rebuild(false); if (nt) msg(nt.replace(/^<br>/, ''), 'warn'); }
+    else if (t.dataset.pending != null && t.value) {
+      var p = state.pending.splice(+t.dataset.pending, 1)[0]; p.reason = '직접 고름';
+      var text = putFile(t.value, p), nm = {}; nm[p.file] = 1; state.open[openKey(t.value, p)] = true; setKindPref(p.headers, t.value);
+      var note = rebuild(true), ov = overlapNotes(t.value, nm);
+      msg(text + (ov.length ? '<br>' + ov.join('<br>') : '') + note, ov.length || note ? 'warn' : 'ok');
+    }
+    else if (t.dataset.rekind) { if (!changeKind(t.dataset.rekind, +t.dataset.i, t.value)) t.value = t.dataset.rekind; }
   });
   $('d-sets').addEventListener('click', function (e) {
     var t = e.target;
-    if (t.dataset.toggle) { state.open[t.dataset.toggle] = !state.open[t.dataset.toggle]; renderSets(); }
+    if (t.dataset.toggle) { var ok = openKey(t.dataset.toggle, state.sets[t.dataset.toggle].files[+t.dataset.i]); state.open[ok] = !state.open[ok]; renderSets(); }
+    else if (t.dataset.dropFile) dropFile(t.dataset.dropFile, +t.dataset.i);
     else if (t.dataset.dropPending != null) { state.pending.splice(+t.dataset.dropPending, 1); renderSets(); }
   });
   $('f-from').addEventListener('change', function () { state.range.from = this.value; if (state.range.to < this.value) state.range.to = this.value; renderFilter(); renderTab(); });
@@ -396,5 +449,5 @@
   ['by-trade', 'top-trade', 'by-fta', 'by-ruling'].forEach(function (id) { $(id).addEventListener('change', renderTab); });
 
   if (location.hash === '#example') loadSample();
-  else if (restore()) { rebuild(true); msg('이 브라우저에 기억한 데이터를 불러왔습니다. 오늘 엑셀을 올리면 새 데이터로 바뀝니다.', 'note'); }
+  else if (restore()) { var rn = rebuild(true); msg('이 브라우저에 기억한 데이터를 불러왔습니다. 오늘 엑셀을 올리면 같은 종류 파일에 더합니다(이름이 같은 파일은 바꿉니다).' + rn, rn ? 'warn' : 'note'); }
 })();

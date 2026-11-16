@@ -661,7 +661,109 @@ var v145 = passed + failed;
   var rows = XL.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
   eq(rows, f.aoa, 'v1.4.6 samples/시험용/ 73행 파일 = 예제 정의');
 })();
-console.log('v1.4.6 ' + (passed + failed - v145) + '개 검사');
+var v146 = passed + failed;
+
+// v1.5.0 같은 종류 여러 파일 — 따로 · 함께 올려도 모두 더한다, 이름이 같으면 바꾼다, 기간 겹침 경고
+(function () {
+  function item(f, name) { return { name: name || f.name, file: name || f.name, uploadedAt: '2026-11-16 10:00', headers: f.aoa[0].map(String), aoa: f.aoa, offset: 0, override: {} }; }
+  function up(files, it) { return C.upsertFile(files, it); }
+  var M2 = C.sampleRefundMonths(), A = M2[0], B = M2[1];
+  eq([A.cols, B.cols, A.rows, B.rows], [21, 19, 12, 10], 'v1.5.0 가짜 환급 두 달치 — 21열 12줄 · 19열 10줄');
+  ok(A.aoa[0].join('|') !== B.aoa[0].join('|') && A.aoa[0][2] === '환급구분', 'v1.5.0 두 파일 머리글이 다르다(열 순서도)');
+  ok(JSON.stringify(M2).indexOf('(가상)') > 0 && /\(가상\)\.xlsx$/.test(A.name), 'v1.5.0 「가상」 표기');
+  eq([A, B].map(function (f) { return C.detectKind(f.aoa[0], f.name).kind; }), ['refund', 'refund'], 'v1.5.0 두 파일 다 관세환급');
+  // 따로 올리기(앞 파일에 뒤 파일을 더함)
+  var r1 = up([], item(A)), r2 = up(r1.files, item(B));
+  eq([r1.action, r2.action, r2.files.length], ['added', 'added', 2], 'v1.5.0 따로 올리면 더한다(파일 2개)');
+  var mS = C.mergeFiles('refund', r2.files), rg = C.defaultRange(mS.period), sS = C.refundStats(mS.records, rg, mS.map);
+  eq([mS.ok, mS.period, mS.records.length, mS.skipped.length], [true, { from: '2025-01', to: '2025-02' }, 22, 2], 'v1.5.0 두 달 · 22줄 · 합계 줄 2개 건너뜀');
+  eq(sS.amount, A.total + B.total, 'v1.5.0 합계 = 두 파일 합(각 엑셀 합계 줄의 합)');
+  eq(sS.monthly.map(function (m) { return m.amount; }), [A.total, B.total], 'v1.5.0 두 달이 모두 보인다(1월 = 21열 파일, 2월 = 19열 파일)');
+  eq([sS.count, sS.countBasis], [22, 'rows'], 'v1.5.0 건수 열 없는 두 파일 = 행 수 22');
+  eq(mS.files.map(function (p) { return p.res.map.amount; }), ['환급액', '환급액'], 'v1.5.0 파일마다 열 짝짓기를 따로');
+  ok(mS.records.every(function (r) { return r.file === A.name || r.file === B.name; }), 'v1.5.0 레코드마다 어느 파일에서 왔는지');
+  eq(mS.overlaps, [], 'v1.5.0 1월 · 2월은 겹치지 않는다');
+  // 함께 올리기 · 순서 바꾸기 — 결과가 같다
+  var mT = C.mergeFiles('refund', [item(A), item(B)]), mR = C.mergeFiles('refund', up(up([], item(B)).files, item(A)).files);
+  function sig(m) { var s = C.refundStats(m.records, rg, m.map); return [s.amount, s.count, s.monthly.map(function (x) { return x.amount; }), s.pivot.map(function (p) { return p.hq + ':' + p.total; }).sort()]; }
+  eq(sig(mT), sig(mS), 'v1.5.0 함께 올려도 결과가 같다');
+  eq(sig(mR), sig(mS), 'v1.5.0 올리는 순서를 바꿔도 같다');
+  // 같은 파일을 다시 올리면 바꾼다(합계 그대로)
+  var r3 = up(r2.files, item(A));
+  eq([r3.action, r3.index, r3.files.length], ['replaced', 0, 2], 'v1.5.0 이름이 같은 파일은 그 자리만 바꾼다');
+  eq(sig(C.mergeFiles('refund', r3.files)), sig(mS), 'v1.5.0 같은 파일을 다시 올려도 합계가 변하지 않는다');
+  eq(C.fileKey({ name: ' a.xlsx ', file: 'a.xlsx · 시트2' }), 'a.xlsx', 'v1.5.0 같은 파일인지는 시트 이름을 뺀 파일 이름으로');
+  // 이 파일 빼기 — 그 파일분만 빠진다
+  var left = r2.files.filter(function (f) { return f.name !== A.name; }), mD = C.mergeFiles('refund', left), sD = C.refundStats(mD.records, rg, mD.map);
+  eq([sD.amount, sD.count, sD.monthly.map(function (x) { return x.amount; })], [B.total, 10, [null, B.total]], 'v1.5.0 파일을 빼면 그 파일분만 빠진다');
+  eq(C.mergeFiles('refund', []).ok, false, 'v1.5.0 파일이 없으면 집계하지 않는다');
+  // 이름은 다르고 기간이 겹치면 올리되 경고
+  var r4 = up(r2.files, item(A, '환급_1월_사본(가상).xlsx')), mO = C.mergeFiles('refund', r4.files);
+  eq([r4.action, mO.overlaps.length, mO.overlaps[0].from, mO.overlaps[0].to], ['added', 1, '2025-01', '2025-01'], 'v1.5.0 이름이 다르면 더하고 겹친 기간을 찾는다');
+  ok(mO.issues.some(function (t) { return /기간이 겹칩니다\. 중복 집계일 수 있습니다/.test(t); }), 'v1.5.0 「기간이 겹칩니다. 중복 집계일 수 있습니다」');
+  eq(C.refundStats(mO.records, rg, mO.map).amount, A.total * 2 + B.total, 'v1.5.0 (경고만 하고) 겹친 파일도 더한다');
+  eq(C.periodOverlaps([{ file: 'a', period: { from: '2025-01', to: '2025-03' } }, { file: 'b', period: { from: '2025-03', to: '2025-05' } }, { file: 'c', period: { from: '2025-06', to: '2025-06' } }]),
+    [{ a: 'a', b: 'b', from: '2025-03', to: '2025-03' }], 'v1.5.0 겹침 = 같은 달이 하나라도 있으면');
+  // 같은 이름 · 같은 머리글이면 사람이 고른 열 짝짓기를 이어받는다(머리글이 다르면 새로)
+  var o1 = item(A); o1.override = { hq: '제조업체' };
+  eq(up([o1], item(A)).files[0].override, { hq: '제조업체' }, 'v1.5.0 다시 올려도 고른 열 그대로');
+  var o2 = item(B, A.name); eq(up([o1], o2).files[0].override, {}, 'v1.5.0 머리글이 바뀌었으면 열을 새로 짝짓는다');
+  // 열을 못 찾은 파일이 섞이면 그 종류는 집계하지 않는다
+  var badF = { name: '이상한(가상).xlsx', file: '이상한(가상).xlsx', headers: ['가', '나', '환급액'], aoa: [['가', '나', '환급액'], [1, 2, 3]], offset: 0, override: {} };
+  var mB = C.mergeFiles('refund', [item(A), badF]);
+  eq([mB.ok, mB.files.map(function (p) { return p.ok; })], [false, [true, false]], 'v1.5.0 못 찾은 열이 있는 파일이 섞이면 집계 보류');
+  badF.override = { date: '가', hq: '나' };
+  ok(C.mergeFiles('refund', [item(A), badF]).files[1].res.map.date === '가', 'v1.5.0 파일마다 고른 열(override)을 따로 쓴다');
+  // 환급 건수 열이 일부 파일에만 — 파일마다(열의 합 / 행 수) 더한다
+  var withCnt = { name: 'c(가상).xlsx', file: 'c(가상).xlsx', headers: ['환급년월', '본부', '환급금액', '환급건수'], aoa: [['환급년월', '본부', '환급금액', '환급건수'], ['2025-03', 'A', 100, 5], ['2025-03', 'B', 50, 2]], offset: 0, override: {} };
+  var mX = C.mergeFiles('refund', [item(B), withCnt]), sX = C.refundStats(mX.records, { from: '2025-01', to: '2025-03' }, mX.map);
+  eq([mX.map.count, mX.partial.count, sX.countBasis, sX.countLabel, sX.count], [undefined, [B.name], 'mixed', '건수 열의 합 + 행 수', 10 + 7], 'v1.5.0 건수 열이 일부에만 — 행 수 10 + 열의 합 7');
+  eq(sX.pivot.filter(function (p) { return p.hq === 'A'; })[0].count, 5, 'v1.5.0 본부별 건수도 파일 기준대로');
+  eq(Object.keys(mX.map).indexOf('partial'), -1, 'v1.5.0 map.partial 은 열 목록에 섞이지 않는다');
+  eq(C.refundStats(mX.records, { from: '2025-01', to: '2025-03' }).countBasis, 'mixed', 'v1.5.0 map 없이도 섞임을 안다');
+  // FTA 열이 일부 파일에만 — 값을 짓지 않는다
+  var imp = C.sampleFiles()[0], ih = imp.aoa[0], fi = ih.indexOf(C.mapColumns(ih.map(String), 'import').map.ftaGoods);
+  ok(fi >= 0, 'v1.5.0 (준비) 수입 예제에 물자대_FTA 열', ih.join(','));
+  var impNo = imp.aoa.map(function (r) { return r.filter(function (_, c) { return c !== fi; }); });
+  var mF = C.mergeFiles('import', [item(imp), { name: '수입_FTA없음(가상).xlsx', file: '수입_FTA없음(가상).xlsx', headers: impNo[0].map(String), aoa: impNo, offset: 0, override: {} }]);
+  var fF = C.ftaStats(mF.records, 'import', C.defaultRange(mF.period), 'hq', mF.map);
+  eq([mF.ok, mF.map.ftaGoods, mF.partial.ftaGoods, fF.available, fF.util], [true, undefined, ['수입_FTA없음(가상).xlsx'], false, null], 'v1.5.0 물자대_FTA 열이 일부에만 — 활용률 계산 안 함');
+  // 5종 모두 같은 규칙 — 예제를 반으로 나누고 뒤 파일은 열 순서를 뒤집어도, 합치면 원래와 같다
+  C.sampleFiles().forEach(function (f) {
+    var head = f.aoa[0], body = f.aoa.slice(1), half = Math.floor(body.length / 2), rev = head.map(function (_, i) { return head.length - 1 - i; });
+    var p1 = [head].concat(body.slice(0, half)), p2 = [rev.map(function (i) { return head[i]; })].concat(body.slice(half).map(function (r) { return rev.map(function (i) { return r[i]; }); }));
+    var one = C.normalize(C.aoaToRows(f.aoa), f.kind, C.mapColumns(head.map(String), f.kind).map);
+    var mm = C.mergeFiles(f.kind, [item({ aoa: p1 }, f.kind + '_앞(가상).xlsx'), item({ aoa: p2 }, f.kind + '_뒤(가상).xlsx')]);
+    var key = { import: 'goods', export: 'amount', refund: 'amount', errors: 'decl', ruling: 'goods' }[f.kind];
+    eq([mm.ok, mm.records.length, C.sum(mm.records, key), mm.period], [true, one.records.length, C.sum(one.records, key), one.period], 'v1.5.0 ' + f.kind + ' — 나눠 올려 합쳐도 원래와 같다');
+  });
+  // 파일 하나면 지금까지와 같다
+  var single = C.mergeFiles('refund', [item(C.sampleFiles()[2])]), sf = C.sampleFiles()[2], cm = C.mapColumns(sf.aoa[0].map(String), 'refund');
+  function srt(o) { var r = {}; Object.keys(o).sort().forEach(function (k) { r[k] = o[k]; }); return r; }
+  eq([srt(single.map), single.records.length], [srt(cm.map), C.normalize(C.aoaToRows(sf.aoa), 'refund', cm.map).records.length], 'v1.5.0 파일 하나면 map · 레코드가 그대로');
+  // 예전 형식으로 기억한 자료
+  var v1 = { v: 1, sets: { refund: { file: '예전.xlsx', uploadedAt: '2026-11-01 09:00', headers: ['환급년월', '본부', '환급금액'], aoa: [['환급년월', '본부', '환급금액'], ['2025-01', 'A', 1]], offset: 0, override: { hq: '본부' }, reason: '열 이름' }, 모름: { aoa: [] } } };
+  var mg = C.migrateSaved(v1);
+  eq([Object.keys(mg.sets), mg.sets.refund.files.length, mg.sets.refund.files[0].name, mg.sets.refund.files[0].override], [['refund'], 1, '예전.xlsx', { hq: '본부' }], 'v1.5.0 예전 형식(v1) → 파일 1개짜리 목록');
+  eq(C.mergeFiles('refund', mg.sets.refund.files).records.length, 1, 'v1.5.0 예전 형식도 계산된다');
+  eq(C.migrateSaved({ v: 2, sets: { refund: { files: [item(A), item(B), { bad: 1 }] } } }).sets.refund.files.length, 2, 'v1.5.0 새 형식(v2) — 망가진 항목은 뺀다');
+  eq([C.migrateSaved(null).sets, C.migrateSaved('x').sets, C.migrateSaved({ sets: { refund: null } }).sets], [{}, {}, {}], 'v1.5.0 망가진 저장 자료도 오류 없이(빈 목록)');
+  // 엑셀 안내 시트 — 파일마다 한 줄 + 종류 합계 줄
+  var bk = C.exportBook({ range: rg, data: { refund: { file: A.name + ' + ' + B.name, period: mS.period, records: mS.records, map: mS.map, skipped: mS.skipped,
+    files: mS.files.map(function (p) { return { file: p.file, uploadedAt: p.uploadedAt, period: p.period, n: p.norm.records.length, skipped: p.norm.skipped.length }; }) } } });
+  var info = bk[0].aoa.filter(function (r) { return /^관세환급/.test(r[0] || ''); });
+  eq(info.map(function (r) { return [r[1], r[4], r[5]]; }), [[A.name, 12, 1], [B.name, 10, 1], ['파일 2개', 22, 2]], 'v1.5.0 엑셀 안내 — 파일마다 한 줄 + 합계 줄');
+  var sh = bk.filter(function (s) { return s.name === '환급_본부월'; })[0].aoa, last = sh[sh.length - 1];
+  eq([last[last.length - 2], last[last.length - 1]], [A.total + B.total, 22], 'v1.5.0 엑셀 환급 시트 = 두 파일 합');
+  // samples/시험용/ 두 달치 파일 = 예제 정의
+  var XL = require('../lib/xlsx.full.min.js');
+  M2.forEach(function (f) {
+    var wb = XL.read(require('fs').readFileSync(require('path').join(__dirname, '..', 'samples', '시험용', f.name)), { type: 'buffer' });
+    eq(XL.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' }), f.aoa, 'v1.5.0 samples/시험용/ ' + f.name + ' = 예제 정의');
+  });
+})();
+console.log('v1.5.0 ' + (passed + failed - v146) + '개 검사');
+console.log('v1.4.6 ' + (v146 - v145) + '개 검사');
 console.log('v1.4.5 ' + (v145 - v14) + '개 검사');
 console.log('v1.4 ' + (v14 - v13) + '개 검사');
 console.log('v1.3 ' + (v13 - v12) + '개 검사');

@@ -34,3 +34,11 @@ for (const f of C.sampleFiles()) {
   writeFileSync(join(sub, f.name), XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', compression: true }));
   console.log('썼습니다: 시험용/' + f.name, (f.aoa.length - 1) + '줄(합계 줄 포함)');
 }
+// (v1.5.0) 시험용 — 관세환급 신청 현황 두 달치(2025.01 21열 · 2025.02 19열). 따로 · 함께 올려 합쳐지는지 본다.
+for (const f of C.sampleRefundMonths()) {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(f.aoa), '데이터');
+  wb.Props = { Title: '시험용 예제(가짜 데이터)', CreatedDate: new Date(Date.UTC(2026, 10, 16)) };
+  writeFileSync(join(dir, '시험용', f.name), XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', compression: true }));
+  console.log('썼습니다: 시험용/' + f.name, f.cols + '열 ' + f.rows + '줄 + 합계 줄');
+}
