@@ -18,6 +18,7 @@
   - 엑셀 「안내」 시트: 파일마다 한 줄 + 종류 합계 줄
 - 화면 안내 문구 · 사용법(guide.html) · 기획서(docs/기획서.md · plan.html) · README 를 새 동작으로 고침
 - (2026-11-17) 워드 기획서 v1.5.0 — `docs/기획서/build-2611-07_최창섭_수출입통관통합관리DashBoard_기획서_v1.5.0.docx`(v1.4.5 · v1.4.6 · v1.5.0 내용을 함께 적음). `docs/plan.json` · `docs/기획서.md` · `plan.html`(판 목록 · 개발일지) 도 v1.5.0 으로. 검증 · 구성 절의 「GitHub Actions 에서 푸시마다」를 사실대로(이 저장소에는 자동 시험 설정 없음) 고침
+- (2026-11-17) 평가보고서 v1.5.0 — `docs/평가보고서/build-2611-07_평가보고서_v1.5.0_2026-11-17.md` · `.docx`, `report.html`(직전 2026-11-13 판은 그대로 두고 내려받기 링크 남김). 실제 사이트 두 주소를 다시 점검: 공식 주소(build-2611-07.jobability.co.kr)는 jungaistar/build-2611-07 배포본이라 아직 v1.4.4 — v1.5.0 은 solarchoi.github.io/build-2611-07 에서만 열림
 - 시험용 가짜 예제 `samples/시험용/예제_관세환급신청현황_2025-01(가상).xlsx`(21열 12줄) · `…_2025-02(가상).xlsx`(19열 10줄)
 - 시험: v1.5.0 47개 추가(`node test/logic.test.js` 통과 520 · 실패 0). 기존 예제 5종 판단 · 파일 그대로. `test/smoke.browser.js` 는 대체 동작을 전제로 한 검사를 새 동작으로 고치고 확인 조건 검사를 더함(이 PC에 playwright 없음 — Edge headless 로 25개 확인)
 - 개발일지: `Dev_md/2026-11-16_v1.5.0_파일합치기.md`
