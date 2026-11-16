@@ -19,9 +19,14 @@
   var HS = { key: 'hs', label: 'HS 코드', type: 'hs', req: true, aliases: ['hs', 'hscode', 'hs코드', 'hs부호', '세번', '세번부호', '품목번호', 'hsk', '품목분류'] };
   var FTA_GOODS = { key: 'ftaGoods', label: '물자대_FTA', type: 'num', aliases: ['물자대fta', 'fta물자대', 'fta적용물자대', 'fta금액', 'fta적용금액', '협정적용금액', 'fta적용액'] };
   var SAVING = { key: 'saving', label: '절감액', type: 'num', aliases: ['fta절감액', '관세절감액', '감면액', 'fta감면액', '절감관세'] };
+  // 관세환급 제품그룹 번호 → 본부. 새 번호는 추측하지 않는다(「미등록(번호)」으로 두고 알린다).
+  // 번호를 늘릴 때는 기획자에게 먼저 확인한 뒤 이 표만 고친다.
+  var REFUND_HQ_CODES = { B110: '건기본부', B111: '건기본부', B112: '건기본부', B130: '엔진본부', B161: '부품센터', B163: '부품센터' };
+  var CODE_RE = /^([A-Za-z]\d{3})(?!\d)/;
+  // 종류마다 decisive = 그 종류에만 있는 「결정적 열」 이름. 열 이름이 이것과 똑같을 때만(일부 포함은 아님) 인정한다.
   var DATASETS = {
     import: {
-      label: '수입 통관 실적', source: 'ERP 엑셀', cycle: '매일', hint: /수입|import/i,
+      label: '수입 통관 실적', source: 'ERP 엑셀', cycle: '매일', hint: /수입|import/i, decisive: ['관세액', '관세', '납부관세'],
       fields: [
         { key: 'date', label: '신고일자', type: 'date', req: true, aliases: ['수리일자', '신고일', '수입신고일', '수입신고일자', '통관일자', '수리일', '일자', 'date'] },
         HQ,
@@ -34,7 +39,7 @@
       ]
     },
     export: {
-      label: '수출 통관 실적', source: 'ERP 엑셀', cycle: '매일', hint: /수출|export/i,
+      label: '수출 통관 실적', source: 'ERP 엑셀', cycle: '매일', hint: /수출|export/i, decisive: ['수출신고일', '수출신고일자', '목적국'],
       fields: [
         { key: 'date', label: '신고일자', type: 'date', req: true, aliases: ['수출신고일', '수출신고일자', '수리일자', '선적일자', '신고일', '일자', 'date'] },
         HQ,
@@ -46,16 +51,17 @@
       ]
     },
     refund: {
-      label: '관세환급 실적', source: '환급프로그램 엑셀', cycle: '매월', hint: /환급|refund|drawback/i,
+      label: '관세환급 실적', source: '환급프로그램 엑셀', cycle: '매월', hint: /환급|refund|drawback/i, decisive: ['환급액', '환급금액', '관세환급액', '환급세액', '환급금'],
       fields: [
         { key: 'date', label: '환급월', type: 'date', req: true, aliases: ['환급일자', '지급일자', '환급결정일', '결정일자', '환급년월', '년월', '월', '기간', '일자'] },
-        HQ,
+        // 환급 신청 현황 엑셀에는 본부 대신 「제품그룹」 번호가 있다 → REFUND_HQ_CODES 로 본부 이름을 붙인다.
+        { key: 'hq', label: '본부', type: 'text', req: true, aliases: HQ.aliases.concat(['제품그룹']), codes: REFUND_HQ_CODES },
         { key: 'amount', label: '환급액', type: 'num', req: true, aliases: ['환급금액', '환급금', '관세환급액', '환급세액', '결정금액'] },
         { key: 'count', label: '건수', type: 'num', aliases: ['환급건수', '신청건수', '결정건수'] }
       ]
     },
     errors: {
-      label: '수출입 오류점수', source: '관세청 엑셀', cycle: '매월', hint: /오류|error|성실/i,
+      label: '수출입 오류점수', source: '관세청 엑셀', cycle: '매월', hint: /오류|error|성실/i, decisive: ['오류점수', '오류건수'],
       fields: [
         { key: 'date', label: '기간', type: 'date', req: true, aliases: ['년월', '월', '대상월', '신고월', '평가월', '일자'] },
         { key: 'kind', label: '구분', type: 'text', aliases: ['수출입구분', '신고구분', '수출입', '업무구분'] },
@@ -70,6 +76,7 @@
   // 종전세율·연간 수입액 열이 함께 있을 때만 절감 추정을 계산한다. 관세율은 올린 파일의 값을 그대로 보인다(물품설명서 초안에는 여전히 싣지 않는다).
   DATASETS.ruling = {
     label: '품목분류 결정문 현황', source: '결정문 현황 엑셀', cycle: '수시', hint: /결정문|품목분류|사전심사|사전회신|ruling/i,
+    decisive: ['결정세번', '결정문번호', '품목분류사전심사결정문번호', '사전심사결정문번호'],
     fields: [
       { key: 'seq', label: '연번', type: 'text', aliases: ['번호', 'no', '순번'] },
       { key: 'product', label: '완제품', type: 'text', req: true, aliases: ['완제품명', '적용기종', '기종', '장비', '제품', '제품명', 'product'] },
@@ -146,15 +153,23 @@
     });
     return best;
   }
-  // 어떤 종류의 파일인가 — 필수 열을 찾은 비율이 가장 높은 종류. 같으면 찾은 열이 많은 쪽, 그다음 파일 이름.
+  // 어떤 종류의 파일인가. 필수 열을 절반 이상 찾은 종류만 후보로 삼고, 그 안에서
+  //   ① 결정적 열(decisive)이 있는 종류 → ② 파일·시트 이름의 낱말(환급·수입·수출…) → ③ 필수 열 비율 → ④ 찾은 열 수 순으로 고른다.
+  // 파일 이름 낱말이 후보 여럿에 걸리면(예: 「수출입」) 이름으로는 가르지 않는다.
   function detectKind(headers, fileName) {
+    var keys = (headers || []).map(normKey);
     var ranked = KINDS.map(function (k) {
       var m = mapColumns(headers, k), req = fieldsOf(k).filter(function (f) { return f.req; }).length;
-      var found = Object.keys(m.map).length;
-      return { kind: k, ratio: (req - m.missing.length) / req, found: found, name: DATASETS[k].hint.test(fileName || '') ? 1 : 0 };
-    }).sort(function (a, b) { return b.ratio - a.ratio || b.found - a.found || b.name - a.name; });
-    var top = ranked[0];
-    return { kind: top.ratio >= 0.5 ? top.kind : null, ratio: top.ratio, ranked: ranked };
+      var dec = (DATASETS[k].decisive || []).filter(function (d) { return keys.indexOf(normKey(d)) >= 0; });
+      var ratio = (req - m.missing.length) / req;
+      return { kind: k, ratio: ratio, ok: ratio >= 0.5 ? 1 : 0, found: Object.keys(m.map).length, decisive: dec.length ? 1 : 0, decisiveCol: dec[0] || '', hit: DATASETS[k].hint.test(fileName || '') };
+    });
+    var hits = ranked.filter(function (r) { return r.ok && r.hit; });
+    ranked.forEach(function (r) { r.name = hits.length === 1 && hits[0] === r ? 1 : 0; });
+    ranked.sort(function (a, b) { return b.ok - a.ok || b.decisive - a.decisive || b.name - a.name || b.ratio - a.ratio || b.found - a.found; });
+    var top = ranked[0], kind = top.ok ? top.kind : null;
+    var reason = !kind ? '' : top.decisive ? '「' + top.decisiveCol + '」 열' : top.name ? '파일 이름' : '열 이름';
+    return { kind: kind, ratio: top.ratio, reason: reason, ranked: ranked };
   }
 
   /* ---------- 값 읽기 ---------- */
@@ -220,7 +235,7 @@
   // row 번호는 엑셀 줄 번호(머리글 1줄 + 1부터)다.
   // offset = 머리글 위에 있던 줄 수(제목 줄 등) — 엑셀 줄 번호를 맞추려고 쓴다.
   function normalize(rows, kind, map, offset) {
-    var fields = fieldsOf(kind), recs = [], skipped = [], blanks = {}, bad = {}, badRows = {};
+    var fields = fieldsOf(kind), recs = [], skipped = [], blanks = {}, bad = {}, badRows = {}, unknownCodes = {};
     (rows || []).forEach(function (r, i) {
       var row = i + 2 + (offset || 0), vals = fields.map(function (f) { return map[f.key] ? r[map[f.key]] : undefined; });
       if (vals.every(function (x) { return clean(x) === ''; })) return;                       // 완전히 빈 줄
@@ -249,6 +264,14 @@
         } else if (f.type === 'hs') {
           rec.hs = clean(raw); rec.hs4 = hs4(raw) || '(HS 미상)';
           if (rec.hs4 === '(HS 미상)') bad['HS 4단위'] = (bad['HS 4단위'] || 0) + 1;
+        } else if (f.codes) {
+          var cv = clean(raw), cm = cv.match(CODE_RE);
+          if (cm) {
+            var code = cm[1].toUpperCase();
+            rec.hqCode = code;
+            if (f.codes[code]) rec[f.key] = f.codes[code];
+            else { rec[f.key] = '미등록(' + code + ')'; (unknownCodes[code] = unknownCodes[code] || []).push(row); }
+          } else rec[f.key] = cv || '(미기재)';
         } else rec[f.key] = clean(raw) || '(미기재)';
       });
       if (ok) recs.push(rec);
@@ -259,8 +282,13 @@
     });
     // 필수 금액 칸의 빈칸만 알린다. FTA·절감액 같은 선택 칸은 비어 있는 것이 보통이다(FTA 미적용).
     fields.forEach(function (f) { if (f.req && blanks[f.label]) issues.push(f.label + ' 빈칸 ' + blanks[f.label] + '칸 — 0 으로 채우지 않고 비워 둔 채 더합니다.'); });
+    var unk = Object.keys(unknownCodes).sort();
+    unk.forEach(function (c) {
+      var rs = unknownCodes[c];
+      issues.push('본부 번호표에 없는 새 번호 ' + c + ' ' + rs.length + '줄(엑셀 ' + rs.slice(0, 5).join('·') + '행' + (rs.length > 5 ? ' 외' : '') + ') — 본부를 추측하지 않고 「미등록(' + c + ')」으로 둡니다. 금액은 합계에 넣습니다. 담당자에게 어느 본부인지 확인해 주세요.');
+    });
     if (skipped.length) issues.push('건너뛴 줄 ' + skipped.length + '개(합계 줄·날짜 없음)');
-    return { records: recs, skipped: skipped, issues: issues, blanks: blanks, period: periodOf(recs) };
+    return { records: recs, skipped: skipped, issues: issues, blanks: blanks, period: periodOf(recs), unknownCodes: unk };
   }
 
   /* ---------- 기간 ---------- */
@@ -682,6 +710,25 @@
       { name: '예제_품목분류결정문현황.xlsx', kind: 'ruling', aoa: rul }
     ];
   }
+  // 관세환급 신청 현황(환급프로그램에서 내려받는 모양) — 가짜 30줄 + 합계 줄. 머리글은 실제 파일과 같은 19열.
+  // 본부 열 대신 「제품그룹」 번호가 있고, 번호표에 없는 새 번호(B999) 1줄을 일부러 넣었다. 예제 5종(sampleFiles)에는 넣지 않는다.
+  function sampleRefundApply() {
+    var R = rng(20261116), r100 = function (v) { return Math.round(v / 100) * 100; };
+    var head = ['제출번호', '접수번호', '접수일자', '세번부호', '결정일자', '품 명', '수출물량', '단위', '수출금액', '환급액', '금액대비(%)', '환급단가', '수출월', '신청업체', '제품그룹', '제조업체', '접수세관', '접수년도', '수출형태'];
+    var groups = ['B110', 'B111', 'B112', 'B130', 'B161', 'B163'], items = [['BUCKET(가상)', '8431.41-0000'], ['ENGINE ASSY(가상)', '8408.20-9000'], ['PIN(가상)', '8431.49-9090'], ['HOSE(가상)', '4009.42-0000']];
+    var aoa = [head], total = 0;
+    for (var i = 0; i < 30; i++) {
+      var m = 1 + Math.floor(i / 5), d = 1 + Math.floor(R() * 20), it = items[Math.floor(R() * items.length)];
+      var qty = 10 + Math.floor(R() * 90), amt = r100((50 + R() * 450) * 1e6), ref = r100(amt * (0.005 + R() * 0.02));
+      var grp = i === 17 ? 'B999' : groups[Math.floor(R() * groups.length)];
+      total += ref;
+      aoa.push(['S2025-' + pad2(m) + pad2(i + 1), '0201-25-' + (100000 + i * 37), '2025-' + pad2(m) + '-' + pad2(d), it[1], '2025-' + pad2(m) + '-' + pad2(d + 7), it[0], qty, 'EA', amt,
+        i % 4 === 0 ? ref.toLocaleString('en-US') : ref, Math.round(ref / amt * 10000) / 100, Math.round(ref / qty), m === 1 ? '2024-12' : '2025-' + pad2(m - 1),
+        '가상중공업(가상)', grp, ['가상정밀(가상)', '가상기공(가상)'][i % 2], '가상세관', 2025, i % 3 ? '직수출' : '로컬수출']);
+    }
+    aoa.push(['합계', '', '', '', '', '', '', '', '', total, '', '', '', '', '', '', '', '', '']);
+    return { name: '예제_관세환급신청현황.xlsx', kind: 'refund', aoa: aoa, total: total };
+  }
   // 표(첫 줄 머리글) → sheet_to_json 과 같은 객체 배열
   function aoaToRows(aoa) {
     var head = aoa[0].map(function (h, i) { return clean(h) || ('열' + (i + 1)); });
@@ -689,7 +736,7 @@
   }
 
   var api = {
-    DATASETS: DATASETS, KINDS: KINDS, BY: BY, LIB_CATEGORIES: LIB_CATEGORIES, LIB_FIELDS: LIB_FIELDS,
+    DATASETS: DATASETS, KINDS: KINDS, REFUND_HQ_CODES: REFUND_HQ_CODES, sampleRefundApply: sampleRefundApply, BY: BY, LIB_CATEGORIES: LIB_CATEGORIES, LIB_FIELDS: LIB_FIELDS,
     normKey: normKey, nameScore: nameScore, mapColumns: mapColumns, findHeaderRow: findHeaderRow, detectKind: detectKind, hasField: hasField,
     parseNum: parseNum, parseDate: parseDate, hs4: hs4, normalize: normalize,
     periodOf: periodOf, unionPeriod: unionPeriod, shiftMonth: shiftMonth, monthsBetween: monthsBetween, defaultRange: defaultRange, prevRange: prevRange,

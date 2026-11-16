@@ -562,7 +562,53 @@ var v13 = passed + failed;
   ok(/맑은 고딕/.test(f['word/styles.xml']) && /word\/document\.xml/.test(f['[Content_Types].xml']) && !/\d+(\.\d+)?\s*%/.test(f['word/document.xml'].replace(/<[^>]+>/g, '')), 'v1.4 글꼴 맑은 고딕 · 관세율 수치 없음');
   ok(Doc.docxDocument([]).indexOf('<w:sectPr>') > 0, 'v1.4 부품이 없어도 열리는 문서');
 })();
-console.log('v1.4 ' + (passed + failed - v13) + '개 검사');
+var v14 = passed + failed;
+
+// v1.4.5 관세환급 신청 현황 — 결정적 열 · 파일 이름 · 제품그룹 번호 → 본부
+(function () {
+  var f = C.sampleRefundApply(), head = f.aoa[0];
+  eq(head, ['제출번호', '접수번호', '접수일자', '세번부호', '결정일자', '품 명', '수출물량', '단위', '수출금액', '환급액', '금액대비(%)', '환급단가', '수출월', '신청업체', '제품그룹', '제조업체', '접수세관', '접수년도', '수출형태'], 'v1.4.5 가짜 예제 머리글 = 실제 환급 신청 현황 19열');
+  ok(JSON.stringify(f.aoa).indexOf('(가상)') > 0, 'v1.4.5 가짜 예제에 「가상」 표기');
+  // 종류 알아보기 — 결정문 열(세번부호·결정일자·품 명·제품그룹)도 다 맞지만 「환급액」이 결정적 열
+  var d = C.detectKind(head, '');
+  eq([d.kind, d.reason], ['refund', '「환급액」 열'], 'v1.4.5 환급액 열이 있으면 관세환급(이름 없음)');
+  eq(C.detectKind(head, '관세환급 신청현황.xlsx 데이터').kind, 'refund', 'v1.4.5 환급 파일 이름');
+  eq(C.detectKind(head, '품목분류.xlsx').kind, 'refund', 'v1.4.5 결정적 열이 파일 이름보다 앞선다');
+  eq(d.ranked.filter(function (r) { return r.kind === 'ruling'; })[0].ratio, 1, 'v1.4.5 (원인 재현) 결정문 필수 열 비율은 여전히 1 — 결정적 열이 가른다');
+  // 파일 이름이 열 비율보다 앞선다. 낱말이 두 후보에 다 걸리면 이름으로 가르지 않는다.
+  var amb = ['일자', '본부', '국가', '업체', 'HS', '금액'];
+  eq(C.detectKind(amb, '수입실적.xlsx').kind, 'import', 'v1.4.5 파일 이름(수입)이 필수 열 비율보다 앞선다');
+  eq([C.detectKind(amb, '수입실적.xlsx').reason, C.detectKind(amb, '수출실적.xlsx').reason], ['파일 이름', '파일 이름'], 'v1.4.5 근거 = 파일 이름');
+  eq(C.detectKind(amb, '수입·수출 실적.xlsx').kind, 'export', 'v1.4.5 이름이 두 후보에 걸리면 열 비율로');
+  eq(C.detectKind(['가', '나', '환급액'], '환급.xlsx').kind, null, 'v1.4.5 필수 열이 절반도 안 되면 결정적 열·이름이 있어도 정하지 않는다');
+  // 예제 5종은 그대로(대시보드처럼 시트 이름을 붙여도)
+  var files = C.sampleFiles();
+  eq(files.map(function (x) { return C.detectKind(x.aoa[0], x.name + ' 데이터').kind; }), ['import', 'export', 'refund', 'errors', 'ruling'], 'v1.4.5 예제 5종 판단 그대로');
+  eq(files.map(function (x) { return C.detectKind(x.aoa[0]).kind; }), ['import', 'export', 'refund', 'errors', 'ruling'], 'v1.4.5 예제 5종 — 이름 없이도 그대로');
+  // 열 짝짓기 — 환급월 = 결정일자, 본부 = 제품그룹
+  var m = C.mapColumns(head, 'refund');
+  eq([m.map.date, m.map.hq, m.map.amount, m.missing], ['결정일자', '제품그룹', '환급액', []], 'v1.4.5 환급월=결정일자 · 본부=제품그룹 · 환급액');
+  // 읽기 — 합계 줄은 빼고, 환급액 합계 = 엑셀 합계
+  var n = C.normalize(C.aoaToRows(f.aoa), 'refund', m.map);
+  var hand = f.aoa.slice(1).filter(function (r) { return r[0] !== '합계'; }).reduce(function (t, r) { return t + Number(String(r[9]).replace(/,/g, '')); }, 0);
+  eq([n.records.length, n.skipped.length, n.skipped[0].reason], [30, 1, '합계·소계 줄'], 'v1.4.5 30줄 읽고 합계 줄 1개 건너뜀');
+  eq(C.sum(n.records, 'amount'), hand, 'v1.4.5 환급액 합계 = 엑셀 각 줄을 더한 값');
+  eq(hand, f.aoa[f.aoa.length - 1][9], 'v1.4.5 = 엑셀 합계 줄 값');
+  var rs = C.refundStats(n.records, C.defaultRange(n.period));
+  eq(rs.amount, hand, 'v1.4.5 환급 집계 합계도 같다(기간 ' + n.period.from + '~' + n.period.to + ')');
+  eq(rs.pivot.reduce(function (t, p) { return t + p.total; }, 0), hand, 'v1.4.5 본부별 합 = 전체(미등록 포함)');
+  // 제품그룹 번호 → 본부
+  eq(C.REFUND_HQ_CODES, { B110: '건기본부', B111: '건기본부', B112: '건기본부', B130: '엔진본부', B161: '부품센터', B163: '부품센터' }, 'v1.4.5 본부 번호표');
+  ok(n.records.every(function (r) { return r.hqCode === 'B999' ? r.hq === '미등록(B999)' : r.hq === C.REFUND_HQ_CODES[r.hqCode]; }), 'v1.4.5 줄마다 번호표대로 본부');
+  eq(C.valuesOf(n.records, 'hq'), ['건기본부', '미등록(B999)', '부품센터', '엔진본부'], 'v1.4.5 본부 목록');
+  eq(n.unknownCodes, ['B999'], 'v1.4.5 새 번호는 추측하지 않고 알린다');
+  ok(n.issues.some(function (s) { return /B999 1줄\(엑셀 19행\)/.test(s) && /미등록\(B999\)/.test(s); }), 'v1.4.5 새 번호 알림에 줄 번호', n.issues.join(' / '));
+  var nn = C.normalize([{ m: '2025-01', h: 'b130', a: 1 }, { m: '2025-01', h: 'B1101', a: 1 }, { m: '2025-01', h: '건설기계본부(가상)', a: 1 }], 'refund', { date: 'm', hq: 'h', amount: 'a' });
+  eq(nn.records.map(function (r) { return r.hq; }), ['엔진본부', 'B1101', '건설기계본부(가상)'], 'v1.4.5 번호 모양일 때만 바꾼다(소문자 허용 · 4자리 넘으면 아님 · 본부 이름은 그대로)');
+  eq(C.normalize([{ d: '2025-01-01', h: 'B110' }], 'import', { date: 'd', hq: 'h' }).records[0].hq, 'B110', 'v1.4.5 번호표는 환급에만 — 수입 본부는 그대로');
+})();
+console.log('v1.4.5 ' + (passed + failed - v14) + '개 검사');
+console.log('v1.4 ' + (v14 - v13) + '개 검사');
 console.log('v1.3 ' + (v13 - v12) + '개 검사');
 console.log('v1.0 ' + v10 + ' · v1.1 ' + (v11 - v10) + ' · v1.2 ' + (v12 - v11) + '개 검사');
 console.log('\n통과 ' + passed + ' · 실패 ' + failed);

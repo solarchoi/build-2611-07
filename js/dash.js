@@ -3,7 +3,23 @@
   'use strict';
   var $ = function (id) { return document.getElementById(id); };
   var C = window.Customs;
-  var LS = { data: 'b2611-07.dash', unit: 'b2611-07.dash.unit' };
+  var LS = { data: 'b2611-07.dash', unit: 'b2611-07.dash.unit', kinds: 'b2611-07.dash.kinds' };
+  // 사람이 고른 종류 — { '머리글|머리글…': kind }. 같은 모양의 파일을 다음에 올리면 이 종류로 넣는다.
+  function kindPrefs() { try { return JSON.parse(localStorage.getItem(LS.kinds) || '{}') || {}; } catch (e) { return {}; } }
+  function setKindPref(headers, kind) { try { var p = kindPrefs(); p[headers.join('|')] = kind; localStorage.setItem(LS.kinds, JSON.stringify(p)); } catch (e) { /* 기억 못 해도 이번 화면에는 반영된다 */ } }
+  // 올린 파일을 다른 종류로 옮긴다. 열 짝짓기는 새 종류 기준으로 처음부터 다시 한다.
+  function changeKind(from, to) {
+    var s = state.sets[from];
+    if (!s || !C.DATASETS[to] || from === to) return false;
+    if (state.sets[to] && !window.confirm('「' + C.DATASETS[to].label + '」에는 이미 ' + state.sets[to].file + ' 이(가) 있습니다. 이 파일로 바꿀까요?')) return false;
+    delete state.sets[from]; delete state.open[from];
+    s.override = {}; s.reason = '직접 고름';
+    state.sets[to] = s; state.open[to] = true;
+    setKindPref(s.headers, to);
+    rebuild(true);
+    msg(esc(s.file) + ' → ' + esc(C.DATASETS[to].label) + '(으)로 바꿨습니다. 같은 모양의 파일은 다음에도 이 종류로 넣습니다.', 'ok');
+    return true;
+  }
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
   // sets[kind] = { file, uploadedAt, headers, aoa(머리글 포함), offset, override } — 계산 결과는 build() 가 붙인다
   var state = { sets: {}, pending: [], filter: {}, range: null, tab: 'trade', unit: localStorage.getItem(LS.unit) || '원', open: {} };
@@ -28,10 +44,14 @@
       var best = null;
       sheets.forEach(function (s) { var d = C.detectKind(s.aoa[0].map(String), f.name + ' ' + s.name); if (!best || d.ratio > best.d.ratio) best = { s: s, d: d }; });
       var item = { file: f.name + (sheets.length > 1 ? ' · ' + best.s.name : ''), uploadedAt: now(), headers: best.s.aoa[0].map(function (h, i) { return String(h).trim() || ('열' + (i + 1)); }), aoa: best.s.aoa, offset: best.s.offset, override: {} };
+      // 사람이 전에 같은 머리글의 파일 종류를 바꿔 준 적이 있으면 그 종류가 앞선다
+      var pref = kindPrefs()[item.headers.join('|')];
+      if (pref && C.DATASETS[pref]) best.d = { kind: pref, reason: '전에 직접 고른 종류' };
       if (!best.d.kind) { state.pending.push(item); notes.push(esc(f.name) + ' — 어떤 자료인지 알아보지 못했습니다. 아래에서 종류를 골라 주세요.'); return; }
       var k = best.d.kind, prev = batch[k];
+      item.reason = best.d.reason;
       if (prev && prev.headers.join('|') === item.headers.join('|')) { prev.aoa = prev.aoa.concat(item.aoa.slice(1)); prev.file += ' + ' + item.file; prev.parts = (prev.parts || 1) + 1; }
-      else { batch[k] = item; notes.push(esc(f.name) + ' → ' + esc(C.DATASETS[k].label) + (state.sets[k] ? ' (이전 파일을 새 파일로 바꿈)' : '')); }
+      else { batch[k] = item; notes.push(esc(f.name) + ' → ' + esc(C.DATASETS[k].label) + (best.d.reason ? ' (근거: ' + esc(best.d.reason) + ')' : '') + (state.sets[k] ? ' (이전 파일을 새 파일로 바꿈)' : '')); }
     });
     Object.keys(batch).forEach(function (k) {
       var keep = state.sets[k] && state.sets[k].headers.join('|') === batch[k].headers.join('|') ? state.sets[k].override : {};
@@ -82,7 +102,7 @@
   function save() {
     if (!$('d-remember').checked) return;
     var keep = {};
-    Object.keys(state.sets).forEach(function (k) { var s = state.sets[k]; keep[k] = { file: s.file, uploadedAt: s.uploadedAt, headers: s.headers, aoa: s.aoa, offset: s.offset, override: s.override }; });
+    Object.keys(state.sets).forEach(function (k) { var s = state.sets[k]; keep[k] = { file: s.file, uploadedAt: s.uploadedAt, headers: s.headers, aoa: s.aoa, offset: s.offset, override: s.override, reason: s.reason }; });
     try { localStorage.setItem(LS.data, JSON.stringify({ v: 1, sets: keep })); }
     catch (e) { msg('데이터가 커서 이 브라우저에 기억하지 못했습니다. 다음에 열 때 다시 올려 주세요.', 'warn'); }
   }
@@ -111,11 +131,14 @@
       h += '<div class="tablewrap" style="margin-top:12px"><table class="sets"><thead><tr><th>자료</th><th>파일</th><th>올린 날짜</th><th>데이터 기간</th><th>읽은 줄</th><th>건너뛴 줄</th><th>열 짝짓기</th></tr></thead><tbody>';
       ks.forEach(function (k) {
         var s = state.sets[k], n = s.norm, miss = s.res.missing;
-        h += '<tr data-kind="' + k + '"' + (miss.length ? ' class="flag"' : '') + '><td><b>' + esc(C.DATASETS[k].label) + '</b><br><small class="sub">' + esc(C.DATASETS[k].source) + ' · ' + esc(C.DATASETS[k].cycle) + '</small></td>' +
+        h += '<tr data-kind="' + k + '"' + (miss.length ? ' class="flag"' : '') + '><td><b>' + esc(C.DATASETS[k].label) + '</b><br><small class="sub">' + esc(C.DATASETS[k].source) + ' · ' + esc(C.DATASETS[k].cycle) + (s.reason ? ' · 근거: ' + esc(s.reason) : '') + '</small>' +
+          '<br><label class="sub"><small>종류 바꾸기</small> <select data-rekind="' + k + '" aria-label="' + esc(s.file) + ' 종류 바꾸기">' +
+          C.KINDS.map(function (o) { return '<option value="' + o + '"' + (o === k ? ' selected' : '') + '>' + esc(C.DATASETS[o].label) + '</option>'; }).join('') + '</select></label></td>' +
           '<td class="wrapcell">' + esc(s.file) + '</td><td>' + esc(s.uploadedAt) + '</td>' +
           '<td>' + (n && n.period ? C.monthLabel(n.period.from) + ' ~ ' + C.monthLabel(n.period.to) : '—') + '</td>' +
           '<td class="num">' + (n ? C.fmtNum(n.records.length) : '—') + '</td><td class="num">' + (n ? C.fmtNum(n.skipped.length) : '—') + '</td>' +
           '<td>' + (miss.length ? '<span class="tag bad-t">못 찾은 열 ' + miss.length + '</span>' : '<span class="tag ok-t">필수 열 모두 찾음</span>') +
+          (n && n.unknownCodes && n.unknownCodes.length ? ' <span class="tag bad-t" title="본부 번호표에 없는 번호 — 열 확인을 눌러 보세요">새 제품그룹 번호 ' + esc(n.unknownCodes.join('·')) + '</span>' : '') +
           ' <button class="x" data-toggle="' + k + '">' + (state.open[k] || miss.length ? '접기' : '열 확인') + '</button></td></tr>';
         if (state.open[k] || miss.length) h += '<tr class="maprow"><td colspan="7">' + mapTable(k) + '</td></tr>';
       });
@@ -349,12 +372,13 @@
   drop.addEventListener('drop', function (e) { readFiles(e.dataTransfer.files); });
   $('d-file').addEventListener('change', function () { readFiles(this.files); this.value = ''; });
   $('btn-dash-sample').addEventListener('click', loadSample);
-  $('btn-dash-clear').addEventListener('click', function () { localStorage.removeItem(LS.data); state.sets = {}; state.pending = []; state.range = null; renderSets(); msg('이 브라우저에 기억한 데이터를 지웠습니다.', 'ok'); });
+  $('btn-dash-clear').addEventListener('click', function () { localStorage.removeItem(LS.data); localStorage.removeItem(LS.kinds); state.sets = {}; state.pending = []; state.range = null; renderSets(); msg('이 브라우저에 기억한 데이터를 지웠습니다.', 'ok'); });
   $('d-remember').addEventListener('change', function () { if (this.checked) save(); else localStorage.removeItem(LS.data); });
   $('d-sets').addEventListener('change', function (e) {
     var t = e.target;
     if (t.dataset.map) { var s = state.sets[t.dataset.map]; s.override[t.dataset.f] = t.value; state.open[t.dataset.map] = true; rebuild(false); }
-    else if (t.dataset.pending != null && t.value) { var p = state.pending.splice(+t.dataset.pending, 1)[0]; state.sets[t.value] = p; state.open[t.value] = true; rebuild(true); }
+    else if (t.dataset.pending != null && t.value) { var p = state.pending.splice(+t.dataset.pending, 1)[0]; p.reason = '직접 고름'; state.sets[t.value] = p; state.open[t.value] = true; setKindPref(p.headers, t.value); rebuild(true); }
+    else if (t.dataset.rekind) { if (!changeKind(t.dataset.rekind, t.value)) t.value = t.dataset.rekind; }
   });
   $('d-sets').addEventListener('click', function (e) {
     var t = e.target;

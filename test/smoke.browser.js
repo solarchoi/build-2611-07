@@ -149,6 +149,19 @@ srv.listen(0, async function () {
     ok(true, '모르는 파일은 종류를 고르게 한다');
     await pg.click('[data-drop-pending="0"]');
     ok(!(await pg.$('select[data-pending]')), '모르는 파일 빼기');
+    // v1.4.5 환급 신청 현황(결정문 열도 다 맞는 머리글) — 관세환급으로 알아보고, 종류를 사람이 바꿀 수 있다
+    var RA = require('../js/customs.js').sampleRefundApply();
+    await pg.setInputFiles('#d-file', { name: '신청현황.xlsx', mimeType: 'application/octet-stream', buffer: xbuf(RA.aoa) });
+    await pg.waitForFunction(function () { var r = document.querySelector('#d-sets tr[data-kind="refund"]'); return r && /신청현황/.test(r.textContent); }, null, { timeout: 5000 });
+    var raRow = await pg.textContent('#d-sets tr[data-kind="refund"]');
+    ok(/근거: 「환급액」 열/.test(raRow) && /새 제품그룹 번호 B999/.test(raRow) && /필수 열 모두 찾음/.test(raRow), 'v1.4.5 환급 신청 현황 → 관세환급 실적', raRow.slice(0, 160));
+    pg.once('dialog', function (dg) { dg.accept(); });
+    await pg.selectOption('select[data-rekind="refund"]', 'ruling');
+    await pg.waitForFunction(function () { var r = document.querySelector('#d-sets tr[data-kind="ruling"]'); return r && /신청현황/.test(r.textContent); }, null, { timeout: 5000 });
+    ok(!(await pg.$('#d-sets tr[data-kind="refund"]')) && /직접 고름/.test(await pg.textContent('#d-sets tr[data-kind="ruling"]')), 'v1.4.5 종류 바꾸기(이미 있던 결정문 파일은 확인 뒤 바꿈)');
+    await pg.selectOption('select[data-rekind="ruling"]', 'refund');
+    await pg.waitForSelector('#d-sets tr[data-kind="refund"]', { timeout: 5000 });
+    ok(/필수 열 모두 찾음/.test(await pg.textContent('#d-sets tr[data-kind="refund"]')), 'v1.4.5 다시 관세환급으로 — 열 짝짓기를 새로 한다');
     // 다시 열면 이 브라우저에 기억한 데이터로
     await pg.goto(base + 'dashboard.html');
     await pg.waitForSelector('#kpi-trade .kpi[data-k="imp-goods"]', { timeout: 5000 });
