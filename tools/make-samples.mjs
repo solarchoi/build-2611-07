@@ -59,3 +59,17 @@ for (const f of [C.sampleRulingCheck(), C.sampleRulingAmounts()]) {
   writeFileSync(join(dir, '시험용', f.name), XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', compression: true }));
   console.log('썼습니다: 시험용/' + f.name, f.aoa[0].length + '열 ' + (f.aoa.length - 1) + '줄');
 }
+// (v1.8.0) 시험용 — 월별 RAW 시트 파일(종합 · RAW1~3 · 3월 소계 · Memo)과 Payment method 열이 있는 수입 실적.
+{
+  const f = C.sampleExportRaw();
+  const wb = XLSX.utils.book_new();
+  for (const sh of f.sheets) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sh.aoa), sh.name);
+  wb.Props = { Title: '시험용 예제(가짜 데이터)', CreatedDate: new Date(Date.UTC(2026, 10, 18)) };
+  writeFileSync(join(dir, '시험용', f.name), XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', compression: true }));
+  console.log('썼습니다: 시험용/' + f.name, '시트 ' + f.sheets.map(s => s.name).join('·'));
+  const g = C.sampleImportGN(), wb2 = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb2, XLSX.utils.aoa_to_sheet(g.aoa), '데이터');
+  wb2.Props = { Title: '시험용 예제(가짜 데이터)', CreatedDate: new Date(Date.UTC(2026, 10, 18)) };
+  writeFileSync(join(dir, '시험용', g.name), XLSX.write(wb2, { type: 'buffer', bookType: 'xlsx', compression: true }));
+  console.log('썼습니다: 시험용/' + g.name, (g.aoa.length - 1) + '줄');
+}

@@ -35,6 +35,8 @@
         HS,
         { key: 'goods', label: '물자대', type: 'num', req: true, aliases: ['물품가액', '과세가격', '물자대금액', '수입금액', '과세가격원화', '금액', 'amount'] },
         { key: 'duty', label: '관세', type: 'num', req: true, aliases: ['관세액', '관세금액', '납부관세', '납부세액관세', 'duty'] },
+        // (v1.8.0) 결제방법 — GN(샘플 등 무환거래) 줄은 수입도 실적에서 뺀다. ERP 수입 파일은 「Payment method」 열.
+        { key: 'payment', label: '결제방법', type: 'text', keepBlank: true, exact: ['Payment method', 'Payment'], aliases: ['결제방법', '결제방식', '결제조건', 'paymentmethod', 'payment'] },
         FTA_GOODS, SAVING
       ]
     },
@@ -57,6 +59,8 @@
           aliases: ['수출신고번호', '신고번호', 'certifcateno', 'certificateno', 'declarationno'] },
         { key: 'broker', label: '관세사', type: 'text', exact: ['AgentNm'], aliases: ['관세사명', '관세법인', 'agentnm', 'agentname'] },
         { key: 'payment', label: '결제방법', type: 'text', keepBlank: true, exact: ['Payment'], aliases: ['결제방식', '결제조건', '지급조건', 'paymentterms', 'payment'] },
+        // (v1.8.0) 무환구분 — N 이면 무환. Payment GN 과 어긋나는 줄을 세어 알린다(입력 오류 점검 — 빼는 기준은 Payment 하나)
+        { key: 'monetary', label: '무환구분', type: 'text', keepBlank: true, exact: ['Monetary Transaction'], aliases: ['monetarytransaction', '유무환', '유무환구분', '무환구분'] },
         FTA_GOODS, SAVING
       ]
     },
@@ -109,7 +113,7 @@
     ]
   };
   // (v1.6.0) 결정문 탭의 기본 조회 시작 — 고정비 절감 과제를 이 달부터 누적 관리한다(사용자가 바꿀 수 있다).
-  var RULING_BASE_FROM = '2026-01';
+  var RULING_BASE_FROM = '2026-01';   // = DASH_BASE_FROM
   // 진행중 = 이 상태들(띄어쓰기 무시)
   var RULING_PROGRESS = ['경정청구중', '재심사', '심판청구'];
   // (v1.7.0) 수출 Plant 번호 → 본부(기본값). 설정에서 고친 표가 있으면 그것을 쓴다(normalize 의 opts.plantHq).
@@ -118,6 +122,10 @@
   var HQ_UNCLASSIFIED = '본부 미분류';
   // (v1.7.0) 결제방법이 이 값이면 수출 실적에서 뺀다(설정에서 끌 수 있다 — 기본 켜짐)
   var EXPORT_EXCLUDE_PAYMENT = 'GN';
+  // (v1.8.0) 대시보드 기본 조회 시작 — 데이터는 2026년 1월부터 관리한다(사용자가 바꿀 수 있다). 결정문 탭도 같은 값.
+  var DASH_BASE_FROM = '2026-01';
+  // (v1.8.0) 집계표 시트 이름(「종합」 · 「10월 소계」 …) — 여러 시트를 합칠 때 건너뛴다
+  var SUMMARY_SHEET_RE = /종합|소계|합계|총계|집계|요약|summary|total|pivot/i;
   var KINDS = ['import', 'export', 'refund', 'errors', 'ruling'];
   function fieldsOf(kind) { return DATASETS[kind].fields; }
   function hasField(kind, key) { return fieldsOf(kind).some(function (f) { return f.key === key; }); }
@@ -282,23 +290,32 @@
   // (v1.7.0) opts = { plantHq: {번호: 본부}, excludeGN: true|false } — 수출 설정. 없으면 기본값(EXPORT_PLANT_HQ · GN 제외 켜짐).
   //   결제방법(payment)이 GN 인 줄은 레코드에서 빼고 excluded 로 센다(「건너뛴 줄」과 따로).
   //   신고번호(declNo)가 짝지어져 있으면 줄마다 declState = ok | blank | bad(길이 ≠ 14 · 영문으로 시작) — 건수는 ok 번호의 고유 개수.
+  // (v1.8.0) GN 제외는 수입(물자대) · 수출(금액) 모두. 무환구분(monetary)과 결제방법이 둘 다 있으면 「N 인데 GN 아님 / GN 인데 N 아님」 줄을 mismatch 로 센다
+  //   (GN 제외 설정과 관계없이 모든 줄). opts.rowNos[i] = { sheet, row } 를 주면(여러 시트를 이어 붙인 줄) 줄 번호를 「RAW3 15」처럼 적고 rec.sheet 를 남긴다.
   function normalize(rows, kind, map, offset, opts) {
     opts = opts || {};
     var fields = fieldsOf(kind), recs = [], skipped = [], blanks = {}, bad = {}, badRows = {}, unknownCodes = {}, multi = {};
-    var plantHq = opts.plantHq || EXPORT_PLANT_HQ, dropGN = kind === 'export' && !!map.payment && opts.excludeGN !== false;
+    var plantHq = opts.plantHq || EXPORT_PLANT_HQ, dropGN = (kind === 'export' || kind === 'import') && !!map.payment && opts.excludeGN !== false;
+    var gnAmt = kind === 'import' ? map.goods : map.amount, chkMon = !!(map.monetary && map.payment), mismatch = { n: 0, rows: [], monN: 0, gnN: 0 };
     var excluded = { n: 0, amount: null, rows: [] }, unclassified = {}, declBad = { blank: 0, bad: 0, rows: [] };
     (rows || []).forEach(function (r, i) {
-      var row = i + 2 + (offset || 0), vals = fields.map(function (f) { return map[f.key] ? r[map[f.key]] : undefined; });
+      var rn = opts.rowNos && opts.rowNos[i], row = rn ? (rn.sheet ? rn.sheet + ' ' + rn.row : rn.row) : i + 2 + (offset || 0), vals = fields.map(function (f) { return map[f.key] ? r[map[f.key]] : undefined; });
       if (vals.every(function (x) { return clean(x) === ''; })) return;                       // 완전히 빈 줄
       var text = fields.filter(function (f) { return f.type === 'text' && map[f.key]; }).map(function (f) { return clean(r[map[f.key]]); });
       var firstCells = Object.keys(r).slice(0, 3).map(function (k) { return clean(r[k]); });
       if (text.concat(firstCells).some(function (t) { return TOTAL_RE.test(t); })) { skipped.push({ row: row, reason: '합계·소계 줄' }); return; }
-      if (dropGN && clean(r[map.payment]).toUpperCase() === EXPORT_EXCLUDE_PAYMENT) {
-        var ga = map.amount ? parseNum(r[map.amount]) : null;
+      var isGN = map.payment && clean(r[map.payment]).toUpperCase() === EXPORT_EXCLUDE_PAYMENT;
+      if (chkMon) {
+        var isN = clean(r[map.monetary]).toUpperCase() === 'N';
+        if (isN !== isGN) { mismatch.n++; mismatch.rows.push(row); if (isN) mismatch.monN++; else mismatch.gnN++; }
+      }
+      if (dropGN && isGN) {
+        var ga = gnAmt ? parseNum(r[gnAmt]) : null;
         excluded.n++; excluded.rows.push(row); if (ga != null && !isNaN(ga)) excluded.amount = (excluded.amount || 0) + ga;
         return;
       }
       var rec = { row: row };
+      if (rn && rn.sheet) rec.sheet = rn.sheet;
       var ok = true;
       fields.forEach(function (f) {
         if (!map[f.key]) return;
@@ -362,11 +379,13 @@
     });
     if (uncl.length) issues.push(HQ_UNCLASSIFIED + ' ' + unclN + '줄 · 금액 ' + fmtNum(unclAmt) + ' — Plant 값 ' + uncl.map(function (c) { return c + ' ' + unclassified[c].length + '줄'; }).join(', ') +
       '. 본부를 추측하지 않고 따로 셉니다(금액은 합계에 넣음). 설정의 Plant → 본부 표에 넣으면 그 본부로 셉니다.');
-    if (excluded.n) issues.push('결제방법 ' + EXPORT_EXCLUDE_PAYMENT + ' ' + excluded.n + '줄을 실적에서 뺐습니다(금액 ' + fmtNum(excluded.amount) + ') — 설정에서 끌 수 있습니다.');
+    if (excluded.n) issues.push('결제방법 ' + EXPORT_EXCLUDE_PAYMENT + '(무환) ' + excluded.n + '줄을 실적에서 뺐습니다(' + (kind === 'import' ? '물자대 ' : '금액 ') + fmtNum(excluded.amount) + ') — 설정에서 끌 수 있습니다.');
+    if (mismatch.n) issues.push('무환구분(Monetary Transaction)과 결제방법(Payment)이 어긋나는 줄 ' + mismatch.n + '개 — N 인데 GN 아님 ' + mismatch.monN + ' · GN 인데 N 아님 ' + mismatch.gnN +
+      '(엑셀 ' + mismatch.rows.slice(0, 5).join('·') + '행' + (mismatch.rows.length > 5 ? ' 외' : '') + '). 입력 오류인지 확인해 주세요. 실적에서 빼는 기준은 결제방법 GN 하나입니다.');
     if (declBad.rows.length) issues.push('신고번호 확인 필요 ' + declBad.rows.length + '줄(빈칸 ' + declBad.blank + ' · 형식 다름 ' + declBad.bad + ', 엑셀 ' + declBad.rows.slice(0, 5).join('·') + '행' + (declBad.rows.length > 5 ? ' 외' : '') + ') — 건수에서는 빼고 금액은 더합니다.');
     if (skipped.length) issues.push('건너뛴 줄 ' + skipped.length + '개(합계 줄·날짜 없음)');
     return { records: recs, skipped: skipped, issues: issues, blanks: blanks, period: periodOf(recs), unknownCodes: unk,
-      excluded: excluded, unclassified: { n: unclN, amount: unclAmt, codes: uncl }, declBad: { n: declBad.rows.length, blank: declBad.blank, bad: declBad.bad, rows: declBad.rows } };
+      excluded: excluded, mismatch: mismatch, unclassified: { n: unclN, amount: unclAmt, codes: uncl }, declBad: { n: declBad.rows.length, blank: declBad.blank, bad: declBad.bad, rows: declBad.rows } };
   }
   // (v1.7.0) Plant 값 → { hq, code, unclassified }. 번호표에 있으면 그 본부, 표에 없는 숫자 번호 · 빈칸은 「본부 미분류」,
   // 글자가 든 값(예: 「건설기계본부」)은 본부 이름으로 보고 그대로 둔다.
@@ -424,10 +443,20 @@
   // (v1.7.0) opts = 수출 설정(normalize 와 같음). 머리글은 uniqueHeaders 로 맞춘다(같은 이름 열 구분).
   function mergeFiles(kind, files, opts) {
     var per = (files || []).map(function (f) {
-      var res = mapColumns(uniqueHeaders(f.headers || []), kind, f.override);
-      var norm = res.missing.length ? null : normalize(aoaToRows(f.aoa || []), kind, res.map, f.offset, opts);
+      var res = mapColumns(uniqueHeaders(f.headers || []), kind, f.override), norm = null, sheets = null;
+      if (!res.missing.length) {
+        if (f.parts && f.parts.length > 1) {
+          // (v1.8.0) 같은 모양의 시트 여러 장 — 줄을 이어 붙이고 시트별 엑셀 줄 번호를 넘긴다
+          var rows = [], rowNos = [];
+          f.parts.forEach(function (pt) { aoaToRows(pt.aoa || [[]]).forEach(function (r, i) { rows.push(r); rowNos.push({ sheet: pt.sheet, row: i + 2 + (pt.offset || 0) }); }); });
+          var o = {}; Object.keys(opts || {}).forEach(function (k) { o[k] = opts[k]; }); o.rowNos = rowNos;
+          norm = normalize(rows, kind, res.map, 0, o);
+          sheets = f.parts.map(function (pt) { var rs = norm.records.filter(function (r) { return r.sheet === pt.sheet; }); return { sheet: pt.sheet, n: rs.length, period: periodOf(rs) }; });
+        } else norm = normalize(aoaToRows(f.aoa || []), kind, res.map, f.offset, opts);
+      }
       return { file: f.file || f.name || '', name: fileKey(f), uploadedAt: f.uploadedAt || '', res: res, norm: norm, ok: !res.missing.length, period: norm ? norm.period : null,
-        excluded: norm ? norm.excluded.n : 0, excludedAmount: norm ? norm.excluded.amount : null, declBad: norm ? norm.declBad.n : 0, unclassified: norm ? norm.unclassified.n : 0 };
+        sheets: sheets, skippedSheets: f.skippedSheets || [],
+        excluded: norm ? norm.excluded.n : 0, excludedAmount: norm ? norm.excluded.amount : null, declBad: norm ? norm.declBad.n : 0, unclassified: norm ? norm.unclassified.n : 0, mismatch: norm ? norm.mismatch.n : 0 };
     });
     var ok = per.length > 0 && per.every(function (p) { return p.ok; });
     var records = [], skipped = [], issues = [], unknown = {}, map = {}, partial = {};
@@ -451,7 +480,7 @@
     var tot = function (k) { return per.reduce(function (t, p) { return t + (p[k] || 0); }, 0); };
     return {
       kind: kind, files: per, ok: ok, records: records, skipped: skipped, issues: issues, unknownCodes: Object.keys(unknown).sort(),
-      excluded: tot('excluded'), declBad: tot('declBad'), unclassified: tot('unclassified'),
+      excluded: tot('excluded'), declBad: tot('declBad'), unclassified: tot('unclassified'), mismatch: tot('mismatch'),
       period: periodOf(records), map: map, partial: partial, overlaps: overlaps
     };
   }
@@ -471,8 +500,14 @@
     Object.keys(j.sets).forEach(function (k) {
       if (!DATASETS[k]) return;
       var s = j.sets[k], list = s && Array.isArray(s.files) ? s.files : s && s.aoa ? [s] : [];
-      list = list.filter(function (f) { return f && Array.isArray(f.aoa) && Array.isArray(f.headers); }).map(function (f) {
-        return { name: f.name || f.file || '', file: f.file || f.name || '', uploadedAt: f.uploadedAt || '', headers: f.headers, aoa: f.aoa, offset: f.offset || 0, override: f.override || {}, reason: f.reason };
+      list = list.filter(function (f) { return f && Array.isArray(f.headers) && (Array.isArray(f.aoa) || (Array.isArray(f.parts) && f.parts.length)); }).map(function (f) {
+        // (v1.8.0) 여러 시트(parts)로 기억한 파일은 aoa 를 비워 두었다 → 첫 시트로 채운다(열 확인의 예시 값)
+        var parts = Array.isArray(f.parts) && f.parts.length > 1 ? f.parts.filter(function (pt) { return pt && Array.isArray(pt.aoa); }) : null;
+        var aoa = Array.isArray(f.aoa) && f.aoa.length ? f.aoa : parts ? parts[0].aoa : [];
+        var o = { name: f.name || f.file || '', file: f.file || f.name || '', uploadedAt: f.uploadedAt || '', headers: f.headers, aoa: aoa, offset: f.offset || 0, override: f.override || {}, reason: f.reason };
+        if (parts) o.parts = parts;
+        if (Array.isArray(f.skippedSheets)) o.skippedSheets = f.skippedSheets;
+        return o;
       });
       if (list.length) out.sets[k] = { files: list };
     });
@@ -495,10 +530,11 @@
     var p = periods.filter(Boolean); if (!p.length) return null;
     return { from: p.map(function (x) { return x.from; }).sort()[0], to: p.map(function (x) { return x.to; }).sort().pop() };
   }
-  // 기본 조회 기간 = 마지막 달이 든 해의 1월(데이터가 그보다 늦게 시작하면 그 달) ~ 마지막 달
+  // 기본 조회 기간 — (v1.8.0) 자료가 2026-01(DASH_BASE_FROM) 이후까지 있으면 2026-01(자료가 더 늦게 시작하면 그 달) ~ 마지막 달.
+  // 자료가 모두 그보다 앞서면 예전 규칙: 마지막 달이 든 해의 1월(데이터가 그보다 늦게 시작하면 그 달) ~ 마지막 달.
   function defaultRange(period) {
     if (!period) return null;
-    var from = period.to.slice(0, 4) + '-01';
+    var from = period.to < DASH_BASE_FROM ? period.to.slice(0, 4) + '-01' : DASH_BASE_FROM;
     return { from: from < period.from ? period.from : from, to: period.to };
   }
   // (v1.6.0) 결정문 탭은 기간을 따로 가진다. 고를 수 있는 달 = 시행일자 · 경정청구일 모두 + 마지막 해 12월까지.
@@ -510,11 +546,7 @@
   }
   function rulingMonths(period) { return period ? monthsBetween(period.from, period.to.slice(0, 4) + '-12') : []; }
   // 기본 = RULING_BASE_FROM(2026-01) ~ 자료 마지막 달. 자료가 모두 그보다 앞서면 다른 탭과 같은 규칙.
-  function rulingDefaultRange(period) {
-    if (!period) return null;
-    if (period.to < RULING_BASE_FROM) return defaultRange(period);
-    return { from: RULING_BASE_FROM < period.from ? period.from : RULING_BASE_FROM, to: period.to };
-  }
+  function rulingDefaultRange(period) { return defaultRange(period); }   // (v1.8.0) 다른 탭과 같은 규칙이 됨
   // 전년 동기 = 같은 달 수만큼 12개월 앞. 12개월을 넘게 고르면 두 기간이 겹친다(overlap).
   function prevRange(range) {
     return { from: shiftMonth(range.from, -12), to: shiftMonth(range.to, -12), overlap: monthsBetween(range.from, range.to).length > 12 };
@@ -603,6 +635,8 @@
     var months = monthsBetween(range.from, range.to);
     var mc = byMonth(cur, months, ['amount']), mp = byMonth(prev, months.map(function (m) { return shiftMonth(m, -12); }), ['amount']);
     var tot = change(sum(cur, 'amount'), sum(prev, 'amount')), cnt = countDecl(cur);
+    // (v1.8.0) 전년 동기 자료가 하나도 없으면 0 으로 보지 않는다 — 전년 · 증감 · 증감률 모두 null(「—」)
+    if (!prev.length) { tot = { cur: tot.cur, prev: null, diff: null, rate: null }; groups.forEach(function (g) { g.prev = null; g.diff = null; g.rate = null; }); }
     return {
       range: range, prevRange: pr, n: cnt.n, badN: cnt.badN, rows: cnt.rows, amount: tot.cur, prev: tot.prev, diff: tot.diff, rate: tot.rate,
       hasPrev: prev.length > 0, groups: groups,
@@ -1232,6 +1266,77 @@
     });
     return { name: '예제_수출통관실적_ERP원본열(가상).xlsx', kind: 'export', sheet: 'Sheet1', aoa: aoa };
   }
+  // (v1.8.0) 한 파일의 시트들 → 읽을 시트 고르기. sheets = [{ name, aoa(머리글 줄부터), offset }] (빈 시트는 이미 뺀 것).
+  //   집계표 이름(SUMMARY_SHEET_RE)은 건너뛰고, 나머지를 머리글이 같은 것끼리 묶어 종류 판단이 가장 잘 되는 묶음을 고른다(같으면 줄이 많은 쪽).
+  //   묶음에 들지 않은 시트는 「열 구성이 다름」으로 건너뛴다. 모든 시트가 집계표 이름이면 이름 규칙 없이 고른다.
+  //   → { use: [시트], skipped: [{ name, why }], detect }
+  function pickSheets(sheets, fileName) {
+    var list = (sheets || []).filter(function (sh) { return sh && sh.aoa && sh.aoa.length > 1; }), skipped = [];
+    var named = list.filter(function (sh) { return !SUMMARY_SHEET_RE.test(sh.name || ''); });
+    if (named.length) list.forEach(function (sh) { if (named.indexOf(sh) < 0) skipped.push({ name: sh.name, why: '집계표' }); });
+    else named = list;
+    var groups = {}, order = [];
+    named.forEach(function (sh) {
+      var sig = uniqueHeaders(sh.aoa[0]).map(normKey).join('|');
+      if (!groups[sig]) { groups[sig] = []; order.push(sig); }
+      groups[sig].push(sh);
+    });
+    var best = null;
+    order.forEach(function (sig) {
+      var g = groups[sig], d = detectKind(g[0].aoa[0].map(String), (fileName || '') + ' ' + g[0].name), rows = g.reduce(function (t, sh) { return t + sh.aoa.length - 1; }, 0);
+      var c = { sheets: g, d: d, rows: rows };
+      if (!best || (!!c.d.kind) - (!!best.d.kind) > 0 || ((!!c.d.kind) === (!!best.d.kind) && (c.d.ratio > best.d.ratio || (c.d.ratio === best.d.ratio && c.rows > best.rows)))) best = c;
+    });
+    if (!best) return { use: [], skipped: skipped, detect: { kind: null, ratio: 0, reason: '' } };
+    named.forEach(function (sh) { if (best.sheets.indexOf(sh) < 0) skipped.push({ name: sh.name, why: '열 구성이 다름' }); });
+    var idx = function (nm) { return (sheets || []).map(function (sh) { return sh.name; }).indexOf(nm); };
+    skipped.sort(function (a, b) { return idx(a.name) - idx(b.name); });
+    return { use: best.sheets, skipped: skipped, detect: best.d };
+  }
+  // (v1.8.0) 월별 RAW 시트 파일(가짜) — 종합(집계표) · RAW1~RAW3(같은 55열 + Monetary Transaction) · 3월 소계(집계표) · Memo(열이 다름).
+  // GN 2줄, 무환구분 불일치 2줄(N 인데 TT · GN 인데 Y), 같은 신고번호 2줄, Plant 빈칸 1줄. 손계산은 test/logic.test.js v1.8.0.
+  function sampleExportRaw() {
+    var head = sampleExportErp().aoa[0].slice();
+    head[14] = 'Monetary Transaction';
+    function sheet(rows) {
+      return [head].concat(rows.map(function (d, i) {
+        var row = head.map(function () { return ''; });
+        row[0] = 'INV-' + d[0].slice(5, 7) + pad2(i + 1) + '(가상)'; row[1] = d[7]; row[2] = d[0]; row[3] = d[0].slice(0, 8) + '01'; row[4] = d[1]; row[5] = 'CE'; row[6] = d[2];
+        row[7] = 'USD'; row[8] = Math.round(d[3] / 1300); row[9] = d[3]; row[10] = Math.round(d[3] / 1300); row[11] = d[4]; row[12] = d[5]; row[13] = '가상관세법인 A'; row[14] = d[6];
+        row[23] = 'KRW'; row[25] = 'USD'; row[27] = 'EUR'; row[29] = 'KRW';
+        return row;
+      }));
+    }
+    // [신고일, Plant, 업체, FOB(원), 국가, Payment, Monetary, 신고번호]
+    var raw1 = sheet([
+      ['2026-01-05', 1000, '가상건설상사(미국)', 100000000, 'US', 'TT', 'Y', '12345-26-0010101'],
+      ['2026-01-10', 1130, '가상머신(독일)', 50000000, 'DE', 'TT', 'Y', '12345-26-0010102'],
+      ['2026-01-15', 6000, '가상건설상사(미국)', 5000000, 'US', 'GN', 'N', '12345-26-0010103'],
+      ['2026-01-20', 1100, '가상중장비(브라질)', 70000000, 'BR', 'TT', 'N', '12345-26-0010104']]);
+    var raw2 = sheet([
+      ['2026-02-03', 1111, '가상기계무역(인니)', 80000000, 'ID', 'LC', 'Y', '12345-26-0020201'],
+      ['2026-02-07', 1000, '가상건설상사(미국)', 40000000, 'US', 'GN', 'Y', '12345-26-0020202'],
+      ['2026-02-25', '', '가상엔지니어링(호주)', 10000000, 'AU', 'TT', 'Y', '12345-26-0020203']]);
+    var raw3 = sheet([
+      ['2026-03-02', 1000, '가상건설상사(미국)', 120000000, 'US', 'TT', 'Y', '12345-26-0030301'],
+      ['2026-03-02', 1000, '가상건설상사(미국)', 30000000, 'US', 'TT', 'Y', '12345-26-0030301'],
+      ['2026-03-09', 1130, '가상머신(독일)', 60000000, 'DE', 'DA', ' y ', '12345-26-0030302'],
+      ['2026-03-20', 6000, '가상트레이딩(사우디)', 20000000, 'SA', 'TT', 'Y', '12345-26-0030303']]);
+    var sub3 = sheet([['2026-03-31', '', '3월 소계(가상)', 230000000, '', '', '', '']]);
+    return { name: '예제_수출_RAW시트(가상).xlsx', kind: 'export', sheets: [
+      { name: '종합', aoa: [['본부', '1월', '2월', '3월', '합계'], ['건기본부(가상)', 170000000, 80000000, 150000000, 400000000]] },
+      { name: 'RAW1', aoa: raw1 }, { name: 'RAW2', aoa: raw2 }, { name: 'RAW3', aoa: raw3 },
+      { name: '3월 소계', aoa: sub3 }, { name: 'Memo', aoa: [['메모', '내용'], ['가상', '시험용 메모(가상)']] }] };
+  }
+  // (v1.8.0) 수입 ERP 처럼 「Payment method」 열이 있는 가짜 수입 실적 — GN 1줄
+  function sampleImportGN() {
+    return { name: '예제_수입_결제방법GN(가상).xlsx', kind: 'import', aoa: [
+      ['수리일자', '사업본부', '원산지국', '거래처명', 'HS부호', '물자대(원)', '관세액', 'Payment method'],
+      ['2026-01-07', '건기본부', '중국', '가람정밀(가상)', '8431.49-9090', 30000000, 2400000, 'TT'],
+      ['2026-01-12', '엔진본부', '일본', '한빛유압(가상)', '8482.10-0000', 20000000, 1600000, 'LC'],
+      ['2026-01-20', '건기본부', '독일', '새솔산업(가상)', '8413.60-9000', 1500000, 0, 'GN'],
+      ['2026-02-03', '부품센터', '중국', '솔빛고무(가상)', '4009.42-0000', 10000000, 800000, 'TT']] };
+  }
   // 표(첫 줄 머리글) → sheet_to_json 과 같은 객체 배열
   function aoaToRows(aoa) {
     var head = uniqueHeaders(aoa[0] || []);
@@ -1247,7 +1352,8 @@
     applyFilter: applyFilter, valuesOf: valuesOf, sum: sum, ratio: ratio, change: change, group: group, byMonth: byMonth, topN: topN,
     importStats: importStats, exportStats: exportStats, exportReport: exportReport, tradeTotal: tradeTotal, countDecl: countDecl, declNoOf: declNoOf, plantValue: plantValue,
     exportSettings: exportSettings, exportBasis: exportBasis, uniqueHeaders: uniqueHeaders, EXPORT_PLANT_HQ: EXPORT_PLANT_HQ, HQ_UNCLASSIFIED: HQ_UNCLASSIFIED, EXPORT_EXCLUDE_PAYMENT: EXPORT_EXCLUDE_PAYMENT,
-    sampleExportErp: sampleExportErp, ftaStats: ftaStats, refundStats: refundStats, refundCountBasis: refundCountBasis, errorStats: errorStats,
+    sampleExportErp: sampleExportErp, ftaStats: ftaStats,
+    pickSheets: pickSheets, sampleExportRaw: sampleExportRaw, sampleImportGN: sampleImportGN, DASH_BASE_FROM: DASH_BASE_FROM, SUMMARY_SHEET_RE: SUMMARY_SHEET_RE, refundStats: refundStats, refundCountBasis: refundCountBasis, errorStats: errorStats,
     parseRate: parseRate, rulingStats: rulingStats, RULING_BY: RULING_BY, RULING_BASIS: RULING_BASIS, RULING_BASE_FROM: RULING_BASE_FROM, RULING_PROGRESS: RULING_PROGRESS,
     isProgress: isProgress, rowImpact: rowImpact, rulingPeriod: rulingPeriod, rulingMonths: rulingMonths, rulingDefaultRange: rulingDefaultRange,
     sampleRulingCheck: sampleRulingCheck, sampleRulingAmounts: sampleRulingAmounts,

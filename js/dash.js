@@ -75,9 +75,11 @@
     list.forEach(function (f) {
       var sheets = sheetsOf(f.wb);
       if (!sheets.length) { notes.push(esc(f.name) + ' — 읽을 표가 없습니다.'); warn = true; return; }
-      var best = null;
-      sheets.forEach(function (s) { var d = C.detectKind(s.aoa[0].map(String), f.name + ' ' + s.name); if (!best || d.ratio > best.d.ratio) best = { s: s, d: d }; });
-      var item = { name: f.name, file: f.name + (sheets.length > 1 ? ' · ' + best.s.name : ''), uploadedAt: now(), headers: C.uniqueHeaders(best.s.aoa[0]), aoa: best.s.aoa, offset: best.s.offset, override: {} };
+      // (v1.8.0) 같은 모양의 시트는 모두 읽어 합친다(RAW1~RAW10 등). 집계표 · 열이 다른 시트는 건너뛰고 이름을 남긴다 — 고르는 규칙은 C.pickSheets
+      var pk = C.pickSheets(sheets, f.name), use = pk.use, best = { s: use[0], d: pk.detect };
+      var item = { name: f.name, file: f.name + (use.length === 1 && sheets.length > 1 ? ' · ' + best.s.name : ''), uploadedAt: now(), headers: C.uniqueHeaders(best.s.aoa[0]), aoa: best.s.aoa, offset: best.s.offset, override: {} };
+      if (use.length > 1) item.parts = use.map(function (s) { return { sheet: s.name, aoa: s.aoa, offset: s.offset }; });
+      if (pk.skipped.length) item.skippedSheets = pk.skipped;
       // 사람이 전에 같은 머리글의 파일 종류를 바꿔 준 적이 있으면 그 종류가 앞선다
       var pref = kindPrefs()[item.headers.join('|')];
       if (pref && C.DATASETS[pref]) best.d = { kind: pref, reason: '전에 직접 고른 종류' };
@@ -135,7 +137,13 @@
     if (!$('d-remember').checked) return '';
     var keep = {};
     Object.keys(state.sets).forEach(function (k) {
-      keep[k] = { files: state.sets[k].files.map(function (f) { return { name: f.name, file: f.file, uploadedAt: f.uploadedAt, headers: f.headers, aoa: f.aoa, offset: f.offset, override: f.override, reason: f.reason }; }) };
+      keep[k] = { files: state.sets[k].files.map(function (f) {
+        // (v1.8.0) 여러 시트면 parts 만 기억한다(aoa 는 첫 시트와 같아 비워 둔다 — 되읽을 때 채움)
+        var o = { name: f.name, file: f.file, uploadedAt: f.uploadedAt, headers: f.headers, aoa: f.parts ? [] : f.aoa, offset: f.offset, override: f.override, reason: f.reason };
+        if (f.parts) o.parts = f.parts;
+        if (f.skippedSheets) o.skippedSheets = f.skippedSheets;
+        return o;
+      }) };
     });
     try { localStorage.setItem(LS.data, JSON.stringify({ v: 2, sets: keep })); return ''; }
     catch (e) {
@@ -175,13 +183,18 @@
           h += '<tr data-kind="' + k + '" data-file="' + i + '"' + (miss.length ? ' class="flag"' : '') + '><td><b>' + esc(label(k)) + '</b><br><small class="sub">' + esc(C.DATASETS[k].source) + ' · ' + esc(C.DATASETS[k].cycle) + (f.reason ? ' · 근거: ' + esc(f.reason) : '') + '</small>' +
             '<br><label class="sub"><small>종류 바꾸기</small> <select data-rekind="' + k + '" data-i="' + i + '" aria-label="' + esc(f.file) + ' 종류 바꾸기">' +
             C.KINDS.map(function (o) { return '<option value="' + o + '"' + (o === k ? ' selected' : '') + '>' + esc(label(o)) + '</option>'; }).join('') + '</select></label></td>' +
-            '<td class="wrapcell">' + esc(f.file) + '</td><td data-k="asof" title="올린 시각 ' + esc(f.uploadedAt) + '">' + esc(String(f.uploadedAt || '').slice(0, 10) || '—') + '</td><td>' + plabel(n && n.period) + '</td>' +
+            '<td class="wrapcell">' + esc(f.file) +
+            // (v1.8.0) 어느 시트를 몇 줄씩 읽었는지 · 건너뛴 시트
+            (p.sheets ? '<br><small class="sub" data-k="sheets">시트 ' + p.sheets.length + '장 합침 — ' + esc(p.sheets.map(function (x) { return x.sheet + ' ' + C.fmtNum(x.n) + '줄'; }).join(' · ')) + '</small>' : '') +
+            (p.skippedSheets && p.skippedSheets.length ? '<br><small class="sub" data-k="skipped-sheets">건너뛴 시트: ' + esc(p.skippedSheets.map(function (x) { return x.name + '(' + x.why + ')'; }).join(', ')) + '</small>' : '') +
+            '</td><td data-k="asof" title="올린 시각 ' + esc(f.uploadedAt) + '">' + esc(String(f.uploadedAt || '').slice(0, 10) || '—') + '</td><td>' + plabel(n && n.period) + '</td>' +
             '<td class="num">' + (n ? C.fmtNum(n.records.length) : '—') + '</td><td class="num">' + (n ? C.fmtNum(n.skipped.length) : '—') + '</td>' +
             '<td>' + (miss.length ? '<span class="tag bad-t">못 찾은 열 ' + miss.length + '</span>' : '<span class="tag ok-t">필수 열 모두 찾음</span>') +
             (ov.length ? ' <span class="tag bad-t" title="' + esc(ov.map(function (o) { return (o.a === p.file ? o.b : o.a) + ' (' + C.monthLabel(o.from) + ' ~ ' + C.monthLabel(o.to) + ')'; }).join(', ')) + '">기간 겹침 — 중복 집계일 수 있음</span>' : '') +
             (n && n.unknownCodes && n.unknownCodes.length ? ' <span class="tag bad-t" title="본부 번호표에 없는 번호 — 열 확인을 눌러 보세요">새 제품그룹 번호 ' + esc(n.unknownCodes.join('·')) + '</span>' : '') +
             // (v1.7.0) 수출 — 뺀 줄 · 확인할 줄
-            (n && n.excluded && n.excluded.n ? ' <span class="tag ah-t" data-k="gn" title="결제방법 GN 줄은 실적에서 뺍니다(설정에서 끌 수 있음)">제외 GN ' + C.fmtNum(n.excluded.n) + '줄</span>' : '') +
+            (n && n.excluded && n.excluded.n ? ' <span class="tag ah-t" data-k="gn" title="결제방법 GN(샘플 등 무환거래) 줄은 수입 · 수출 실적에서 뺍니다(설정에서 끌 수 있음)">제외 GN ' + C.fmtNum(n.excluded.n) + '줄</span>' : '') +
+            (n && n.mismatch && n.mismatch.n ? ' <span class="tag bad-t" data-k="mismatch" title="Monetary Transaction 이 N 인데 Payment 가 GN 이 아니거나 그 반대 — 입력 오류인지 확인(실적에서 빼는 기준은 Payment GN)">무환 · GN 불일치 ' + C.fmtNum(n.mismatch.n) + '줄</span>' : '') +
             (n && n.declBad && n.declBad.n ? ' <span class="tag ah-t" title="빈칸이거나 형식이 다른 신고번호 — 건수에서 빼고 금액은 더합니다">신고번호 확인 필요 ' + C.fmtNum(n.declBad.n) + '줄</span>' : '') +
             (n && n.unclassified && n.unclassified.n ? ' <span class="tag bad-t" title="Plant 번호표에 없는 값 · 빈칸 — 설정에서 표를 고치면 본부로 셉니다">' + esc(C.HQ_UNCLASSIFIED) + ' ' + C.fmtNum(n.unclassified.n) + '줄</span>' : '') +
             ' <button class="x" data-toggle="' + k + '" data-i="' + i + '">' + (open ? '접기' : '열 확인') + '</button>' +
@@ -330,6 +343,8 @@
     $('sum-trade').innerHTML = tradeTotalLine();
     if (fi) {
       var s = C.importStats(fi.recs, state.range, by);
+      // (v1.8.0) 결제방법 열이 있는 수입 파일만 — GN(무환) 제외 안내. 열이 없으면 예전 화면 그대로
+      if (fi.set.m.map.payment) k += '<p class="rul-basis" data-k="imp-basis"><b>기준</b> ' + (state.settings.excludeGN === false ? '결제방법 GN(무환) 포함 — 설정에서 껐습니다' : '결제방법 GN(무환) 제외 · 제외 ' + C.fmtNum(fi.set.m.excluded) + '줄(파일 전체)') + '</p>';
       k += kpi('수입 물자대', money(s.goods), C.fmtNum(s.n) + '건', '합계', 'imp-goods') + kpi('관세', money(s.duty), '', '합계', 'imp-duty') +
         kpi('관세부담율', C.fmtPct(s.burden, 2), '', '계산: 관세 ÷ 물자대', 'imp-burden');
       ch += monthChart('월별 수입 물자대 · 관세', months, [{ name: '물자대', color: COL[0], values: s.monthly.map(function (m) { return m.goods; }), fmt: money }, { name: '관세', color: COL[3], values: s.monthly.map(function (m) { return m.duty; }), fmt: money }], 'bar');
@@ -423,7 +438,7 @@
   // (v1.7.0) 설정 — Plant → 본부 표 · GN 제외. 값 정리는 C.exportSettings, 저장은 이 브라우저.
   function renderSettings() {
     var st = state.settings;
-    $('d-settings-body').innerHTML = '<label class="chk"><input type="checkbox" id="set-gn"' + (st.excludeGN ? ' checked' : '') + '> 결제방법(Payment) <b>' + esc(C.EXPORT_EXCLUDE_PAYMENT) + '</b> 줄을 수출 실적에서 빼기(기본 켜짐)</label>' +
+    $('d-settings-body').innerHTML = '<label class="chk"><input type="checkbox" id="set-gn"' + (st.excludeGN ? ' checked' : '') + '> 결제방법 <b>' + esc(C.EXPORT_EXCLUDE_PAYMENT) + '</b>(샘플 등 무환거래) 줄을 <b>수입 · 수출</b> 실적에서 빼기(기본 켜짐) — 수입은 「Payment method」, 수출은 「Payment」 열</label>' +
       '<p class="sub" style="margin:8px 0 4px">수출 Plant 번호 → 본부. 표에 없는 번호 · 빈칸은 「' + esc(C.HQ_UNCLASSIFIED) + '」로 따로 셉니다. 글자로 적힌 본부 이름은 그대로 둡니다.</p>' +
       '<div class="tablewrap"><table class="set-plant"><thead><tr><th>Plant 번호</th><th>본부</th><th></th></tr></thead><tbody>' +
       st.rows.map(function (r, i) { return '<tr><td><input type="text" data-set="code" value="' + esc(r.code) + '" aria-label="Plant 번호 ' + (i + 1) + '"></td><td><input type="text" data-set="hq" value="' + esc(r.hq) + '" aria-label="본부 ' + (i + 1) + '"></td><td><button class="x" type="button" data-set-del="' + i + '">빼기</button></td></tr>'; }).join('') +

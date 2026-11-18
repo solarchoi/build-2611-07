@@ -974,7 +974,66 @@ var v160 = passed + failed;
   eq([wb.SheetNames[0], XL.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' })], ['Sheet1', X.aoa], 'v1.7.0 samples/시험용/ ' + X.name + ' = 예제 정의');
   ok(JSON.stringify(X.aoa).indexOf('(가상)') > 0, 'v1.7.0 가짜 예제에 「가상」 표기');
 })();
-console.log('v1.7.0 ' + (passed + failed - v160) + '개 검사');
+var v170 = passed + failed;
+
+/* ===================== v1.8.0 — GN 은 수입 · 수출 모두 · 무환구분 점검 · 여러 시트 합치기 · 기본 기간 2026-01 ===================== */
+(function () {
+  var W = C.sampleExportRaw();
+  function prep(list) { return list.map(function (s) { var hr = C.findHeaderRow(s.aoa); return { name: s.name, aoa: s.aoa.slice(hr), offset: hr }; }); }
+  var pk = C.pickSheets(prep(W.sheets), W.name);
+  // 여러 시트 고르기
+  eq([pk.detect.kind, pk.use.map(function (s) { return s.name; })], ['export', ['RAW1', 'RAW2', 'RAW3']], 'v1.8.0 같은 모양 시트 RAW1~RAW3 를 모두 고른다');
+  eq(pk.skipped, [{ name: '종합', why: '집계표' }, { name: '3월 소계', why: '집계표' }, { name: 'Memo', why: '열 구성이 다름' }], 'v1.8.0 집계표 · 열이 다른 시트는 건너뛰고 이름을 알린다');
+  eq(C.pickSheets(prep([{ name: '수출실적 합계', aoa: W.sheets[1].aoa }]), 'x.xlsx').use.length, 1, 'v1.8.0 모든 시트가 집계표 이름이면 이름 규칙 없이 고른다');
+  eq(C.pickSheets([], 'x').use, [], 'v1.8.0 시트가 없으면 빈 결과');
+  ok(['종합', '10월 소계', '합계', 'Summary', '집계표'].every(function (n) { return C.SUMMARY_SHEET_RE.test(n); }) && !C.SUMMARY_SHEET_RE.test('RAW10'), 'v1.8.0 집계표 시트 이름 규칙');
+  // 합치기 — 시트별 줄 수 · 엑셀 행 번호
+  var item = { name: W.name, file: W.name, headers: C.uniqueHeaders(pk.use[0].aoa[0]), aoa: pk.use[0].aoa, parts: pk.use.map(function (s) { return { sheet: s.name, aoa: s.aoa, offset: s.offset }; }), skippedSheets: pk.skipped };
+  var m = C.mergeFiles('export', [item]), p = m.files[0];
+  eq([m.ok, m.records.length, p.sheets.map(function (s) { return [s.sheet, s.n]; })], [true, 9, [['RAW1', 3], ['RAW2', 2], ['RAW3', 4]]], 'v1.8.0 시트 3장을 합쳐 읽고 시트별 줄 수를 돌려준다');
+  eq(p.skippedSheets.map(function (s) { return s.name; }), ['종합', '3월 소계', 'Memo'], 'v1.8.0 건너뛴 시트를 파일 결과에 남긴다');
+  eq([m.records[0].sheet, m.records[0].row, m.records[m.records.length - 1].row], ['RAW1', 'RAW1 2', 'RAW3 5'], 'v1.8.0 줄 번호는 시트별 엑셀 행(「RAW3 5」)');
+  eq(p.period, { from: '2026-01', to: '2026-03' }, 'v1.8.0 합친 기간');
+  // GN · 무환구분
+  eq([p.excluded, p.excludedAmount], [2, 45000000], 'v1.8.0 수출 GN 2줄(RAW1 · RAW2) 제외');
+  eq([p.mismatch, p.norm.mismatch.monN, p.norm.mismatch.gnN, p.norm.mismatch.rows], [2, 1, 1, ['RAW1 5', 'RAW2 3']], 'v1.8.0 무환구분 N ↔ Payment GN 불일치 줄(N 인데 TT · GN 인데 Y)');
+  eq(C.mergeFiles('export', [item], { excludeGN: false }).files[0].mismatch, 2, 'v1.8.0 불일치 점검은 GN 제외 설정과 관계없이');
+  has(p.norm.issues.join(' '), '실적에서 빼는 기준은 결제방법 GN 하나', 'v1.8.0 불일치는 알리기만');
+  // 손계산: 1월 100+50+70 = 220 · 3건, 2월 80+10 = 90 · 2건, 3월 120+30+60+20 = 230 · 3건(같은 번호 1) → 540백만 · 8건
+  var r = C.exportReport(m.records, { from: '2026-01', to: '2026-03' });
+  eq([r.total.amount, r.total.n, r.monthly.map(function (c) { return [c.n, c.amount]; })], [540000000, 8, [[3, 220000000], [2, 90000000], [3, 230000000]]], 'v1.8.0 시트 3장 합친 집계');
+  // 수입 GN — Payment method
+  var I = C.sampleImportGN(), im = C.mapColumns(I.aoa[0], 'import'), inr = C.normalize(C.aoaToRows(I.aoa), 'import', im.map);
+  eq([im.map.payment, inr.records.length, inr.excluded.n, inr.excluded.amount], ['Payment method', 3, 1, 1500000], 'v1.8.0 수입도 Payment method GN 줄 제외(물자대 금액)');
+  eq(C.importStats(inr.records, { from: '2026-01', to: '2026-02' }, 'hq').goods, 60000000, 'v1.8.0 수입 물자대에서 GN 금액이 빠짐');
+  eq(C.normalize(C.aoaToRows(I.aoa), 'import', im.map, 0, { excludeGN: false }).records.length, 4, 'v1.8.0 설정에서 끄면 수입 GN 도 넣음');
+  eq(C.mergeFiles('import', [{ name: I.name, file: I.name, headers: I.aoa[0], aoa: I.aoa }]).excluded, 1, 'v1.8.0 수입 파일 「제외 GN」 수');
+  eq(C.mapColumns(C.sampleFiles()[0].aoa[0], 'import').map.payment, undefined, 'v1.8.0 기존 수입 예제에는 결제방법 열 없음(그대로)');
+  // 기본 기간
+  eq(C.defaultRange({ from: '2025-01', to: '2026-10' }), { from: '2026-01', to: '2026-10' }, 'v1.8.0 기본 기간 시작 2026-01');
+  eq(C.defaultRange({ from: '2026-03', to: '2026-10' }), { from: '2026-03', to: '2026-10' }, 'v1.8.0 자료가 더 늦게 시작하면 그 달');
+  eq(C.defaultRange({ from: '2025-01', to: '2027-02' }), { from: '2026-01', to: '2027-02' }, 'v1.8.0 2027년까지 있어도 2026-01 부터');
+  eq(C.defaultRange({ from: '2024-01', to: '2025-10' }), { from: '2025-01', to: '2025-10' }, 'v1.8.0 자료가 모두 2026년 이전이면 예전 규칙(예제 5종 그대로)');
+  eq(C.DASH_BASE_FROM, '2026-01', 'v1.8.0 기본 시작 상수');
+  // 전년 자료가 없으면 「—」(0 이나 추정값 없음)
+  var es = C.exportStats(m.records, { from: '2026-01', to: '2026-03' }, 'hq');
+  eq([es.hasPrev, es.prev, es.diff, es.rate], [false, null, null, null], 'v1.8.0 전년 동기 자료가 없으면 전년 · 증감 · 증감률 null');
+  ok(es.groups.every(function (g) { return g.prev === null && g.diff === null && g.rate === null; }) && es.monthly.every(function (x) { return x.prev === null; }), 'v1.8.0 묶음 · 월별도 null');
+  isNull(r.yoy.amount.rate, 'v1.8.0 전년 동월 대비 카드도 null');
+  // 기억한 자료 — 여러 시트
+  var saved = C.migrateSaved({ v: 2, sets: { export: { files: [{ name: W.name, file: W.name, headers: item.headers, aoa: [], parts: item.parts, skippedSheets: pk.skipped, offset: 0, override: {} }] } } });
+  var sf = saved.sets.export.files[0];
+  eq([sf.parts.length, sf.aoa.length > 1, sf.skippedSheets.length, C.mergeFiles('export', saved.sets.export.files).records.length], [3, true, 3, 9], 'v1.8.0 여러 시트로 기억한 자료를 다시 읽는다');
+  // samples/시험용/ = 예제 정의
+  var XL = require('../lib/xlsx.full.min.js'), fs = require('fs'), pth = require('path');
+  var wb = XL.read(fs.readFileSync(pth.join(__dirname, '..', 'samples', '시험용', W.name)), { type: 'buffer' });
+  eq([wb.SheetNames, wb.SheetNames.map(function (n) { return XL.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' }); })], [W.sheets.map(function (s) { return s.name; }), W.sheets.map(function (s) { return s.aoa; })], 'v1.8.0 samples/시험용/ ' + W.name + ' = 예제 정의');
+  var wb2 = XL.read(fs.readFileSync(pth.join(__dirname, '..', 'samples', '시험용', I.name)), { type: 'buffer' });
+  eq(XL.utils.sheet_to_json(wb2.Sheets[wb2.SheetNames[0]], { header: 1, raw: true, defval: '' }), I.aoa, 'v1.8.0 samples/시험용/ ' + I.name + ' = 예제 정의');
+  ok(JSON.stringify(W).indexOf('(가상)') > 0 && JSON.stringify(I).indexOf('(가상)') > 0, 'v1.8.0 가짜 예제에 「가상」 표기');
+})();
+console.log('v1.8.0 ' + (passed + failed - v170) + '개 검사');
+console.log('v1.7.0 ' + (v170 - v160) + '개 검사');
 console.log('v1.6.0 ' + (v160 - v150) + '개 검사');
 console.log('v1.5.0 ' + (v150 - v146) + '개 검사');
 console.log('v1.4.6 ' + (v146 - v145) + '개 검사');
