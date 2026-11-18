@@ -22,6 +22,7 @@
 - 시험: v1.7.0 58개 추가(`node test/logic.test.js` 통과 646 · 실패 0). `test/smoke.browser.js` 를 두 탭에 맞춤(이 PC에 playwright 없음 — 문법만 확인, Edge headless 로 41개 확인)
 - 사용법(guide.html) · README
 - 개발일지: `Dev_md/2026-11-18_v1.7.0_수출실적.md`
+- (2026-11-18) 워드 기획서 v1.7.0 — `docs/기획서/build-2611-07_최창섭_수출입통관통합관리DashBoard_기획서_v1.7.0.docx`(v1.6.0 판 짜임에 v1.7.0 내용: 요약 · 목표 · 요구사항 3 · 기능 2 · 규칙 4 · 검증 · 제한 3 · 다음 단계 · 판 이력 · 개발일지). `docs/plan.json` · `docs/기획서.md` · `plan.html`(판 목록 · 개발일지) 도 v1.7.0 으로
 
 ## v1.6.0 — 2026-11-18
 
