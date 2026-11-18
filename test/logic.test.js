@@ -322,7 +322,7 @@ eq(C.fmtShort(1500, '천원'), '1,500 천원', '원이 아니면 줄이지 않�
 
 // 엑셀 표
 var book = C.exportBook({ range: R25, filter: {}, unit: '원', data: { import: { file: 'a.xlsx', uploadedAt: '2026-11-03', period: ni.period, records: ni.records, map: IMP_MAP, skipped: ni.skipped } } });
-eq(book.map(function (b) { return b.name; }), ['안내', '수입_본부', '수입_국가', '수입_업체', '수입_HS4단위', 'FTA_수입_본부', 'FTA_수입_국가'], '엑셀: 올린 데이터만 시트로');
+eq(book.map(function (b) { return b.name; }), ['안내', '수입_본부', '수입_국가', '수입_업체', '수입_HS4단위', '수입_본부월', 'FTA_수입_본부', 'FTA_수입_국가'], '엑셀: 올린 데이터만 시트로(v1.9.0 수입_본부월 더함)');
 ok(book.every(function (b) { return b.name.length <= 31; }), '엑셀: 시트 이름 31자 이내');
 var bs = book[1].aoa;
 eq(bs[bs.length - 1], ['합계', 4, 7000, 230, 3.29], '엑셀: 수입 합계 줄(부담율 %)');
@@ -936,7 +936,7 @@ var v160 = passed + failed;
   eq(C.exportBasis({ excludeGN: false }), 'GN 포함 · 건수는 신고번호 기준', 'v1.7.0 GN 제외를 끄면 문구도');
   // 설정 — Plant 표 고치기
   var st = C.exportSettings({ plant: [{ code: '1000', hq: '건기본부' }, { code: '7000', hq: '가상본부' }, { code: '', hq: 'x' }], excludeGN: false });
-  eq([st.plantHq, st.excludeGN, st.custom], [{ 1000: '건기본부', 7000: '가상본부' }, false, true], 'v1.7.0 설정 표(빈 줄 뺌)');
+  eq([st.plantHq, st.excludeGN, st.custom], [{ 1000: '건기본부', 1131: '엔진본부', 7000: '가상본부' }, false, true], 'v1.7.0 설정 표(빈 줄 뺌 · v1.9.0 부터 1131 = 엔진본부는 늘 넣음)');
   eq([C.exportSettings(null).plantHq, C.exportSettings(null).excludeGN], [C.EXPORT_PLANT_HQ, true], 'v1.7.0 설정 기본값');
   var y = load(X.aoa, { plantHq: { 1000: '건기본부', 1100: '건기본부', 1111: '건기본부', 1130: '엔진본부' } });
   eq(C.exportReport(y.n.records, OCT, { plantHq: { 1000: '건기본부', 1130: '엔진본부' } }).pivot.map(function (p) { return [p.hq, p.total.amount]; }), [['건기본부', 750000000], ['엔진본부', 210000000], ['본부 미분류', 60000000]], 'v1.7.0 표에서 6000 을 빼면 미분류로');
@@ -1032,7 +1032,84 @@ var v170 = passed + failed;
   eq(XL.utils.sheet_to_json(wb2.Sheets[wb2.SheetNames[0]], { header: 1, raw: true, defval: '' }), I.aoa, 'v1.8.0 samples/시험용/ ' + I.name + ' = 예제 정의');
   ok(JSON.stringify(W).indexOf('(가상)') > 0 && JSON.stringify(I).indexOf('(가상)') > 0, 'v1.8.0 가짜 예제에 「가상」 표기');
 })();
-console.log('v1.8.0 ' + (passed + failed - v170) + '개 검사');
+var v180 = passed + failed;
+
+/* ===================== v1.9.0 — 수입 실적: ERP 수입실적 원본 열 · Plant → 본부 · 합계 행 · 신고번호 건수 · 신고 종류 ===================== */
+(function () {
+  var I = C.sampleImportErp(), H = C.uniqueHeaders(I.aoa[0]), RG = { from: '2026-01', to: '2026-02' };
+  // 열 짝짓기 — 실제 ERP 이름, 짝지으면 안 되는 열은 피함
+  var mc = C.mapColumns(H, 'import');
+  eq([mc.missing, C.detectKind(I.aoa[0].map(String), I.name).kind, C.detectKind(I.aoa[0].map(String), 'x.xlsx').kind], [[], 'import', 'import'], 'v1.9.0 ERP 수입 파일 — 필수 열 모두 찾음 · 수입으로 판단(파일 이름 없이도)');
+  eq([mc.map.date, mc.map.hq, mc.map.country, mc.map.goods, mc.map.duty, mc.map.declNo, mc.map.payment, mc.map.dutyType, mc.map.broker, mc.map.supplier],
+    ['Acceptance date', 'Plant', 'Origin', '(\\)Taxable.Amt', 'Tot.Duty Amt', 'Import declaration number', 'Payment method', 'Duty Type', 'Customs Broker', 'Supplier'], 'v1.9.0 열 짝짓기(신고일자 · 본부 · 국가 · 물자대 · 관세 · 신고번호 · 결제방법 · 세율구분 · 관세사 · 공급지역)');
+  ok(['Carry-in date', 'Declaration date desired', 'Sh.Country', 'Amount', '($)Taxable.Amt', 'Tot.Tax Sum', 'Tot.Ratal Amt'].every(function (h) { return mc.unused.indexOf(h) >= 0; }), 'v1.9.0 Carry-in date · Sh.Country · ($)Taxable.Amt · Amount · Tot.Tax Sum · Tot.Ratal Amt 는 짝짓지 않음');
+  // 같은 이름 열 — 몇 번째 열인지 구분, 업체는 Vendor Code 옆
+  eq([H[1], H[7], H[21], H[29], H[39], H[40]], ['Vendor Name (2번째 열)', 'Vendor Name (8번째 열)', 'Short Descript. (22번째 열)', 'Short Descript. (30번째 열)', '열40', '열41'], 'v1.9.0 같은 이름 · 빈 이름 열에 열 번호');
+  eq([mc.map.company, H.indexOf(mc.map.company) + 1], ['Vendor Name (8번째 열)', 8], 'v1.9.0 업체 = Vendor Code 옆 Vendor Name(앞쪽 같은 이름 열이 아님)');
+  isNull(mc.map.hs || null, 'v1.9.0 HS 코드 열 없음(선택 열)');
+  // 읽기 · 뺄 줄
+  var mg = C.mergeFiles('import', [{ name: I.name, file: I.name, headers: I.aoa[0], aoa: I.aoa }]), recs = mg.records, fp = mg.files[0];
+  eq([mg.ok, recs.length, mg.excluded, mg.totalRows, fp.totalRows], [true, 9, 1, 1, 1], 'v1.9.0 HS 열 없이 집계 · 10줄 중 GN 1줄 · 합계 행 1줄만 뺌');
+  eq([fp.norm.totalRows.rows, fp.norm.totalRows.amount], [[12], 427500000], 'v1.9.0 합계 행 = 맨 아래 신고번호 빈 줄(엑셀 12행) — 그 금액은 더하지 않음');
+  ok(!recs.some(function (r) { return r.company === '솔빛고무(가상)' && r.month === '2026-01'; }), 'v1.9.0 Payment method GN 1줄은 실적에 없음');
+  eq(C.mergeFiles('import', [{ name: I.name, file: I.name, headers: I.aoa[0], aoa: I.aoa }], { excludeGN: false }).records.length, 10, 'v1.9.0 GN 제외를 끄면 GN 줄도 넣음(합계 행은 여전히 뺌)');
+  // Plant → 본부
+  var r1131 = recs.filter(function (r) { return r.plant === '1131'; });
+  eq([r1131.length, r1131[0].hq, C.EXPORT_PLANT_HQ['1131']], [1, '엔진본부', '엔진본부'], 'v1.9.0 Plant 1131 → 엔진본부');
+  eq([mg.unclassified, fp.norm.unclassified.amount, fp.norm.unclassified.codes], [1, 5000000, ['9999']], 'v1.9.0 표에 없는 Plant 9999 → 본부 미분류(건수 · 물자대 따로)');
+  // 특송 · 영문 섞인 신고번호 · 보세공장 B
+  var ex = recs.filter(function (r) { return r.declNo === '2235626B68687M'; })[0];
+  eq([!!ex, ex && ex.declState, ex && ex.declType, ex && ex.broker, ex && ex.goods], [true, 'ok', 'M', '가상특송관세사(가상)', 3000000], 'v1.9.0 특송 관세사 · 영문 섞인 신고번호 유환 건은 실적에 들어감(일반 수입)');
+  var bd = recs.filter(function (r) { return r.declType === 'B'; });
+  eq([bd.length, bd[0].goods, bd[0].duty, bd[0].dutyExcl, C.DECL_TYPES.B], [1, 200000000, null, 16000000, '보세공장 사용신고'], 'v1.9.0 끝 B 건 — 실적(물자대)에 들어가고 관세(Tot.Duty Amt)는 관세 합계에서 뺌');
+  eq(recs.map(function (r) { return r.declNo; }).filter(Boolean).length, 8, 'v1.9.0 신고번호를 레코드에 보관');
+  // 건수 · 금액 · 관세부담율(손계산: 물자대 426백만 = 100+50+20+3+200+10+30+5+8, 관세 18.08백만 = B 16백만 뺌, 건수 7 = 같은 번호 1 · 빈 번호 1 뺌)
+  var r = C.importReport(recs, RG);
+  eq([r.total.n, r.total.badN, r.total.goods, r.total.duty, r.total.dutyExcl], [7, 1, 426000000, 18080000, 16000000], 'v1.9.0 건수 = 신고번호 고유 개수 · 빈 번호 줄은 건수에서만 빼고 금액은 더함');
+  near(r.total.burden, 18080000 / 426000000, 'v1.9.0 관세부담율 = 관세 합계 ÷ 물자대 합계(B 물자대는 분모에 넣음)');
+  near(C.importStats(recs, RG, 'hq').burden, 18080000 / 426000000, 'v1.9.0 importStats 관세부담율도 같음');
+  eq(C.importStats(recs, RG, 'hq').n, 7, 'v1.9.0 importStats 건수 = 신고번호 기준');
+  eq(r.pivot.map(function (p) { return [p.hq, p.total.n, p.total.goods, p.total.duty]; }), [['건기본부', 3, 338000000, 11040000], ['엔진본부', 2, 73000000, 5840000], ['부품센터', 1, 10000000, 800000], ['본부 미분류', 1, 5000000, 400000]], 'v1.9.0 표 ① 본부 합계(건기 · 엔진 · 부품센터 · 미분류)');
+  eq(r.monthly.map(function (c) { return [c.n, c.goods, c.duty]; }), [[4, 373000000, 13840000], [3, 53000000, 4240000]], 'v1.9.0 월별 건수 · 물자대 · 관세');
+  near(r.pivot[0].months[1].burden, 3040000 / 38000000, 'v1.9.0 본부 × 월 관세부담율(건기 2월)');
+  eq(r.suppliers.slice(0, 3).map(function (c) { return [c.key, c.goods]; }), [['KR', 200000000], ['CN', 138000000], ['JP', 70000000]], 'v1.9.0 표 ② 공급지역(Supplier) 물자대 큰 순');
+  near(r.suppliers[0].share, 200 / 426, 'v1.9.0 공급지역 비중 = 물자대 ÷ 합계');
+  eq(r.declTypes.map(function (t) { return [t.label, t.n, t.goods, t.duty, t.dutyExcl]; }), [['일반 수입', 5, 188000000, 15040000, null], ['보세공장 사용신고', 1, 200000000, null, 16000000], ['구분 모름', 1, 38000000, 3040000, null]], 'v1.9.0 표 ③ 신고 종류별 건수 · 물자대 · 관세');
+  near(r.mom.goods.rate, 53 / 373 - 1, 'v1.9.0 전월 대비(2월 vs 1월 물자대)');
+  eq([r.yoy.goods.prev, r.yoy.goods.rate, r.yoy.n.diff], [null, null, null], 'v1.9.0 전년 자료가 없으면 전년 동월 대비 「—」(0 · 추정값 없음)');
+  eq(r.basis, 'GN 제외 · 건수는 신고번호 기준 · 관세부담율 = 관세 ÷ 물자대 · 보세공장 사용신고(B) 관세는 관세 합계에서 제외', 'v1.9.0 화면 기준 문구');
+  var tt = C.tradeTotal(recs, [{ month: '2026-02', amount: 100, declState: 'ok', declNo: 'X1' }], RG);
+  eq([tt.importN, tt.importGoods, tt.n], [7, 426000000, 8], 'v1.9.0 수출입 합계의 수입 건수도 신고번호 기준');
+  // 신고번호 규칙(수입 = 느슨하게)
+  eq([C.declNoOf('2235626B68687M', true).state, C.declNoOf('12345-26-000203', true).state, C.declNoOf('12345가26', true).state, C.declNoOf('', true).state, C.declNoOf('A2345-26-1000081').state], ['ok', 'ok', 'bad', 'blank', 'bad'], 'v1.9.0 수입 신고번호는 영문 · 숫자면 셈(수출 규칙은 그대로)');
+  // 중간 빈 번호 줄은 합계 행이 아님 · 여러 시트는 시트마다 합계 행
+  var sh = function (nm) { return { sheet: nm, aoa: I.aoa, offset: 0 }; };
+  var mm = C.mergeFiles('import', [{ name: 'RAW(가상).xlsx', file: 'RAW(가상).xlsx', headers: I.aoa[0], aoa: I.aoa, parts: [sh('RAW1'), sh('RAW2')] }]);
+  eq([mm.records.length, mm.totalRows, mm.files[0].norm.totalRows.rows], [18, 2, ['RAW1 12', 'RAW2 12']], 'v1.9.0 시트마다 맨 아래 합계 행을 뺌');
+  // 설정 — 1131 은 늘 엔진본부, 이름을 바꾸면 그 이름
+  eq(C.exportSettings({ plant: [{ code: '1131', hq: '엔진(가상)' }] }).plantHq, { 1131: '엔진(가상)' }, 'v1.9.0 설정에서 1131 이름을 바꾸면 그 이름');
+  // 엑셀 내보내기
+  var bk = C.exportBook({ range: RG, filter: {}, unit: '원', data: { import: { file: I.name, period: mg.period, records: recs, map: mg.map, skipped: [], files: [{ file: I.name, uploadedAt: '2026-11-18', period: mg.period, n: 9, skipped: 0, excluded: 1, totalRows: 1 }] } } });
+  var names = bk.map(function (b) { return b.name; });
+  ok(names.indexOf('수입_본부월') > 0 && names.indexOf('수입_공급지역상위10') > 0 && names.indexOf('수입_신고종류') > 0 && names.indexOf('수입_HS4단위') < 0, 'v1.9.0 엑셀 — 수입 본부월 · 공급지역 · 신고종류, HS 열 없으면 HS4단위 시트 없음', names.join(','));
+  ok(bk[0].aoa.some(function (rw) { return rw[0] === '수입 통관 실적' && rw[6] === 1 && rw[7] === 1; }) && bk[0].aoa.some(function (rw) { return rw[0] === '수입 기준'; }), 'v1.9.0 엑셀 안내 — 제외 GN · 합계 행 · 수입 기준');
+  var dt = bk[names.indexOf('수입_신고종류')].aoa;
+  eq(dt[2], ['보세공장 사용신고', 1, 200000000, '집계 제외', 16000000], 'v1.9.0 엑셀 신고종류 — B 관세는 「집계 제외」');
+  // 기존 한글 예제는 그대로(신고번호 · 결제방법 열 없음 → 건수 = 줄 수, 본부 이름 그대로, 합계 행 규칙 안 씀)
+  var old = C.sampleFiles()[0], om = C.mapColumns(old.aoa[0], 'import'), on = C.normalize(C.aoaToRows(old.aoa), 'import', om.map);
+  eq([om.missing, om.map.hs, om.map.declNo, on.totalRows.n, on.unclassified.n], [[], 'HS부호', undefined, 0, 0], 'v1.9.0 기존 수입 예제 그대로 읽힘');
+  var ost = C.importStats(on.records, { from: '2025-01', to: '2025-10' }, 'hq');
+  eq(ost.n, on.records.filter(function (x) { return x.month >= '2025-01' && x.month <= '2025-10'; }).length, 'v1.9.0 기존 예제 건수 = 줄 수(예전과 같음)');
+  eq(C.importReport(on.records, { from: '2025-01', to: '2025-10' }, null, { payment: false }).basis, '건수는 줄 수 · 관세부담율 = 관세 ÷ 물자대', 'v1.9.0 신고번호 · 결제방법 열이 없으면 기준 문구도 그에 맞춤');
+  ok(C.importReport(on.records, { from: '2025-01', to: '2025-10' }).pivot.every(function (p) { return p.hq !== '본부 미분류'; }), 'v1.9.0 기존 예제 본부에 미분류 없음');
+  // samples/시험용/ = 예제 정의
+  var XL = require('../lib/xlsx.full.min.js'), fs = require('fs'), pth = require('path');
+  var wb = XL.read(fs.readFileSync(pth.join(__dirname, '..', 'samples', '시험용', I.name)), { type: 'buffer' });
+  eq([wb.SheetNames[0], XL.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' })], ['Sheet1', I.aoa], 'v1.9.0 samples/시험용/ ' + I.name + ' = 예제 정의');
+  ok(JSON.stringify(I.aoa).indexOf('(가상)') > 0 && I.aoa[0].length === 70, 'v1.9.0 가짜 예제(70열)에 「가상」 표기');
+})();
+console.log('v1.9.0 ' + (passed + failed - v180) + '개 검사');
+console.log('v1.8.0 ' + (v180 - v170) + '개 검사');
 console.log('v1.7.0 ' + (v170 - v160) + '개 검사');
 console.log('v1.6.0 ' + (v160 - v150) + '개 검사');
 console.log('v1.5.0 ' + (v150 - v146) + '개 검사');

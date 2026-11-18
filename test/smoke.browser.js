@@ -100,9 +100,10 @@ srv.listen(0, async function () {
     var ex = await expect();
     ok(await kv('imp-goods') === ex.goods && await kv('imp-burden') === ex.burden, '수입 물자대·관세부담율 카드 = 엔진 계산', ex.goods + ' ' + ex.burden);
     ok(/계산: 관세 ÷ 물자대/.test(await pg.textContent('.kpi[data-k="imp-burden"]')), '계산한 값은 계산식 표시');
-    ok(await pg.$$eval('#ch-trade svg.chart', function (t) { return t.length; }) === 2, 'v1.7.0 수입 실적 그래프 2개(수출은 수출 실적 탭)');
+    ok(await pg.$$eval('#ch-trade svg.chart, #ch-trade-by svg.chart', function (t) { return t.length; }) === 2, 'v1.9.0 수입 실적 그래프 2개(월별 + 묶음별 — 예제에는 공급지역 열이 없음)');
     ok(await pg.$$eval('#kpi-trade [data-k^="exp-"]', function (t) { return t.length; }) === 0, 'v1.7.0 수입 실적 탭에는 수출 카드가 없다');
-    ok(await pg.$$eval('#ch-trade svg.chart rect[fill="#154b6e"]', function (t) { return t.length; }) > 10, '막대가 그려진다');
+    ok(await pg.$$eval('#ch-trade svg.chart rect[fill="#154b6e"], #ch-trade-by svg.chart rect[fill="#154b6e"]', function (t) { return t.length; }) > 10, '막대가 그려진다');
+    ok(await pg.$$eval('table.imp-pivot tbody tr.sum', function (t) { return t.length; }) === 1 && /신고번호 열이 없어/.test(await pg.textContent('#tb-trade-report')), 'v1.9.0 본부 × 월 표 · 신고번호 없는 예제는 신고 종류 표 대신 안내');
     ok(await pg.$$eval('table.trade-imp tbody tr:not(.sum)', function (t) { return t.length; }) === ex.hqs, '수입 본부별 표 = 본부 수');
     await pg.selectOption('#by-trade', 'hs4');
     var hsKeys = await pg.$$eval('table.trade-imp tbody tr:not(.sum) td:first-child', function (t) { return t.map(function (x) { return x.textContent; }); });

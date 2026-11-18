@@ -99,7 +99,7 @@
     <span class="sub">하나씩 받기 — <a class="ex-file" href="samples/예제_수입통관실적_ERP.xlsx" download>수입통관 실적</a> · <a class="ex-file" href="samples/예제_수출통관실적_ERP.xlsx" download>수출통관 실적</a> · <a class="ex-file" href="samples/예제_관세환급실적.xlsx" download>관세환급 실적</a> · <a class="ex-file" href="samples/예제_수출입오류점수.xlsx" download>수출입 오류점수</a> · <a class="ex-file" href="samples/예제_품목분류결정문현황.xlsx" download>품목분류 결정문 현황</a></span></div>
   <label class="chk"><input type="checkbox" id="d-remember" checked> 올린 데이터를 이 브라우저에 기억하기(다음에 열 때 다시 올리지 않아도 됩니다)</label>
   <details class="settings" id="d-settings">
-    <summary>설정 — 수출 Plant → 본부 표 · 결제방법 GN(무환) 제외(수입 · 수출)</summary>
+    <summary>설정 — Plant → 본부 표(수입 · 수출) · 결제방법 GN(무환) 제외(수입 · 수출)</summary>
     <div id="d-settings-body"></div>
   </details>
   <div id="d-msg"></div>
@@ -129,13 +129,15 @@
   <div class="tabpanel" id="t-trade" role="tabpanel">
     <div class="trade-total" id="sum-trade"></div>
     <div class="kpis" id="kpi-trade"></div>
+    <div class="charts" id="ch-trade"></div>
+    <div id="tb-trade-report"></div>
     <div class="ctrl">
       <label>묶는 기준 <select id="by-trade">
         <option value="hq">본부</option><option value="country">국가</option><option value="company">업체</option><option value="hs4">HS 4단위</option>
       </select></label>
       <label>상위 <select id="top-trade"><option>5</option><option selected>10</option><option>20</option></select></label>
     </div>
-    <div class="charts" id="ch-trade"></div>
+    <div class="charts" id="ch-trade-by"></div>
     <div id="tb-trade"></div>
   </div>
   <div class="tabpanel" id="t-export" role="tabpanel" hidden>

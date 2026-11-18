@@ -193,7 +193,9 @@
             (ov.length ? ' <span class="tag bad-t" title="' + esc(ov.map(function (o) { return (o.a === p.file ? o.b : o.a) + ' (' + C.monthLabel(o.from) + ' ~ ' + C.monthLabel(o.to) + ')'; }).join(', ')) + '">기간 겹침 — 중복 집계일 수 있음</span>' : '') +
             (n && n.unknownCodes && n.unknownCodes.length ? ' <span class="tag bad-t" title="본부 번호표에 없는 번호 — 열 확인을 눌러 보세요">새 제품그룹 번호 ' + esc(n.unknownCodes.join('·')) + '</span>' : '') +
             // (v1.7.0) 수출 — 뺀 줄 · 확인할 줄
-            (n && n.excluded && n.excluded.n ? ' <span class="tag ah-t" data-k="gn" title="결제방법 GN(샘플 등 무환거래) 줄은 수입 · 수출 실적에서 뺍니다(설정에서 끌 수 있음)">제외 GN ' + C.fmtNum(n.excluded.n) + '줄</span>' : '') +
+            // (v1.9.0) 수입(신고번호 열 있음) — 「제외 GN N줄 · 합계 행 N줄」을 늘 보인다
+            (n && k === 'import' && p.res.map.declNo ? ' <span class="tag ah-t" data-k="imp-drop" title="실적에서 빼는 줄은 결제방법 GN(설정에서 끌 수 있음)과 맨 아래 신고번호가 빈 합계 행뿐입니다">' + (p.res.map.payment && state.settings.excludeGN !== false ? '제외 GN ' + C.fmtNum(n.excluded.n) + '줄' : 'GN 포함') + ' · 합계 행 ' + C.fmtNum(n.totalRows.n) + '줄</span>' :
+            n && n.excluded && n.excluded.n ? ' <span class="tag ah-t" data-k="gn" title="결제방법 GN(샘플 등 무환거래) 줄은 수입 · 수출 실적에서 뺍니다(설정에서 끌 수 있음)">제외 GN ' + C.fmtNum(n.excluded.n) + '줄</span>' : '') +
             (n && n.mismatch && n.mismatch.n ? ' <span class="tag bad-t" data-k="mismatch" title="Monetary Transaction 이 N 인데 Payment 가 GN 이 아니거나 그 반대 — 입력 오류인지 확인(실적에서 빼는 기준은 Payment GN)">무환 · GN 불일치 ' + C.fmtNum(n.mismatch.n) + '줄</span>' : '') +
             (n && n.declBad && n.declBad.n ? ' <span class="tag ah-t" title="빈칸이거나 형식이 다른 신고번호 — 건수에서 빼고 금액은 더합니다">신고번호 확인 필요 ' + C.fmtNum(n.declBad.n) + '줄</span>' : '') +
             (n && n.unclassified && n.unclassified.n ? ' <span class="tag bad-t" title="Plant 번호표에 없는 값 · 빈칸 — 설정에서 표를 고치면 본부로 셉니다">' + esc(C.HQ_UNCLASSIFIED) + ' ' + C.fmtNum(n.unclassified.n) + '줄</span>' : '') +
@@ -207,7 +209,7 @@
         h += '<tr class="sum" data-kind-sum="' + k + '"><td><b>' + esc(label(k)) + ' 합계</b></td><td>파일 ' + s.files.length + '개</td><td></td><td>' + plabel(m.period) + '</td>' +
           '<td class="num">' + C.fmtNum(m.records.length) + '</td><td class="num">' + C.fmtNum(m.skipped.length) + '</td><td>' +
           (bad ? '<span class="tag bad-t">못 찾은 열이 있는 파일 ' + bad + '개 — 열을 고르거나 그 파일을 빼면 계산합니다</span>' : '<span class="tag ok-t">모두 더해 계산</span>') +
-          (m.excluded ? ' <span class="tag ah-t">제외 GN ' + C.fmtNum(m.excluded) + '줄</span>' : '') +
+          (k === 'import' && m.map.declNo ? ' <span class="tag ah-t" data-k="imp-drop-sum">제외 GN ' + C.fmtNum(m.excluded) + '줄 · 합계 행 ' + C.fmtNum(m.totalRows) + '줄</span>' : m.excluded ? ' <span class="tag ah-t">제외 GN ' + C.fmtNum(m.excluded) + '줄</span>' : '') +
           (m.overlaps.length ? ' <span class="tag bad-t">기간이 겹칩니다. 중복 집계일 수 있습니다</span>' : '') +
           (part.length ? '<br><small class="sub">' + esc(part.join(' / ')) + '</small>' : '') + '</td></tr>';
       });
@@ -334,27 +336,94 @@
     var parts = (fi ? '수입 물자대 ' + esc(money(t.importGoods)) + ' · ' + C.fmtNum(t.importN) + '건' : '수입 자료 없음') + ' + ' +
       (fe ? '수출금액 ' + esc(money(t.exportAmount)) + ' · ' + C.fmtNum(t.exportN) + '건' : '수출 자료 없음');
     return '<p class="trade-total-line" data-k="trade-total"><b>수출입 합계</b> <span class="tt-v">' + (t.both ? esc(money(t.amount)) + ' · ' + C.fmtNum(t.n) + '건' : '—') + '</span>' +
-      ' <small>(' + parts + (t.both ? '' : ' — 두 자료가 모두 있어야 합계를 냅니다') + ' · 수출 건수는 신고번호 기준)</small></p>';
+      ' <small>(' + parts + (t.both ? '' : ' — 두 자료가 모두 있어야 합계를 냅니다') + (fi && fi.set.m.map.declNo ? ' · 수입 · 수출 건수는 신고번호 기준' : ' · 수출 건수는 신고번호 기준') + ')</small></p>';
   }
-  // 「수입 실적」 탭 — v1.6.0 까지 「수출입 실적」 탭의 수입 부분을 그대로 옮겼다
+  // (v1.9.0) 월별 물자대 · 관세 막대(왼쪽 축) + 관세부담율 선(오른쪽 축, %)
+  function importChart(title, months, goods, duty, burden) {
+    var W = 640, H = 250, L = 62, R = 46, T = 30, B = 30, iw = W - L - R, ih = H - T - B;
+    var maxA = niceMax(Math.max.apply(null, [0].concat(goods.concat(duty).filter(function (v) { return v != null; })))), maxP = niceMax(Math.max.apply(null, [0].concat(burden.filter(function (v) { return v != null; }))));
+    var fmt = axisFmt('money'), step = iw / Math.max(1, months.length), ya = function (v) { return T + ih - (v / maxA) * ih; }, yp = function (v) { return T + ih - (v / maxP) * ih; };
+    var b = legend([{ name: '물자대', color: COL[0] }, { name: '관세', color: COL[3] }, { name: '관세부담율', color: COL[4] }], L);
+    for (var g = 0; g <= 4; g++) {
+      b += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + ya(maxA * g / 4) + '" y2="' + ya(maxA * g / 4) + '" class="grid"/><text x="' + (L - 6) + '" y="' + (ya(maxA * g / 4) + 4) + '" class="ax" text-anchor="end">' + esc(fmt(maxA * g / 4)) + '</text>' +
+        '<text x="' + (W - R + 6) + '" y="' + (yp(maxP * g / 4) + 4) + '" class="ax">' + esc(C.fmtPct(maxP * g / 4, 1)) + '</text>';
+    }
+    var every = Math.ceil(months.length / 12), bw = Math.max(2, step * 0.34), segs = [], seg = [];
+    months.forEach(function (m, i) {
+      var cx = L + step * i + step / 2;
+      if (i % every === 0) b += '<text x="' + cx + '" y="' + (H - 10) + '" class="ax" text-anchor="middle">' + esc(m.slice(2, 4) + '.' + m.slice(5, 7)) + '</text>';
+      [[goods[i], COL[0], '물자대', -bw], [duty[i], COL[3], '관세', 0]].forEach(function (x) {
+        if (x[0] != null && x[0] > 0) b += '<rect x="' + (cx + x[3]).toFixed(1) + '" y="' + ya(x[0]).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + (T + ih - ya(x[0])).toFixed(1) + '" fill="' + x[1] + '"><title>' + esc(C.monthLabel(m) + ' ' + x[2] + ' ' + money(x[0])) + '</title></rect>';
+      });
+      if (burden[i] == null) { if (seg.length) segs.push(seg); seg = []; } else seg.push([cx, yp(burden[i]), burden[i], m]);
+    });
+    if (seg.length) segs.push(seg);
+    segs.forEach(function (sg) {
+      b += '<polyline fill="none" stroke="' + COL[4] + '" stroke-width="2.4" points="' + sg.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' ') + '"/>';
+      sg.forEach(function (p) { b += '<circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="3" fill="' + COL[4] + '"><title>' + esc(C.monthLabel(p[3]) + ' 관세부담율 ' + C.fmtPct(p[2], 2)) + '</title></circle>'; });
+    });
+    return frame(title, '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(title) + '">' + b + '</svg>');
+  }
+  // 「수입 실적」 탭 — (v1.9.0) 계산은 C.importReport · C.importStats. 여기서는 그리기만 한다.
   function renderTrade() {
-    var by = $('by-trade').value, top = +$('top-trade').value, BYL = C.BY[by], k = '', ch = '', tb = '';
-    var fi = filtered('import'), months = C.monthsBetween(state.range.from, state.range.to);
     $('sum-trade').innerHTML = tradeTotalLine();
-    if (fi) {
-      var s = C.importStats(fi.recs, state.range, by);
-      // (v1.8.0) 결제방법 열이 있는 수입 파일만 — GN(무환) 제외 안내. 열이 없으면 예전 화면 그대로
-      if (fi.set.m.map.payment) k += '<p class="rul-basis" data-k="imp-basis"><b>기준</b> ' + (state.settings.excludeGN === false ? '결제방법 GN(무환) 포함 — 설정에서 껐습니다' : '결제방법 GN(무환) 제외 · 제외 ' + C.fmtNum(fi.set.m.excluded) + '줄(파일 전체)') + '</p>';
-      k += kpi('수입 물자대', money(s.goods), C.fmtNum(s.n) + '건', '합계', 'imp-goods') + kpi('관세', money(s.duty), '', '합계', 'imp-duty') +
-        kpi('관세부담율', C.fmtPct(s.burden, 2), '', '계산: 관세 ÷ 물자대', 'imp-burden');
-      ch += monthChart('월별 수입 물자대 · 관세', months, [{ name: '물자대', color: COL[0], values: s.monthly.map(function (m) { return m.goods; }), fmt: money }, { name: '관세', color: COL[3], values: s.monthly.map(function (m) { return m.duty; }), fmt: money }], 'bar');
-      var t = C.topN(s.groups, top);
-      ch += hbar(BYL + '별 수입 물자대 상위 ' + top, t.rows.map(function (g) { return { label: g.key, value: g.goods }; }), money, COL[0]);
-      tb += '<h3 class="tb-h">수입 — ' + esc(BYL) + '별 물자대 · 관세 · 관세부담율</h3>' + ignoredNote(fi.ignored) +
-        table([esc(BYL), '건수', '물자대', '관세', '관세부담율'], t.rows.concat(t.rest ? [t.rest] : []).map(function (g) { return { cls: g === t.rest ? 'rest' : '', cells: [esc(g.key), n0(g.n), n0(g.goods), n0(g.duty), esc(C.fmtPct(g.burden, 2))] }; }),
-          ['합계', n0(s.n), n0(s.goods), n0(s.duty), esc(C.fmtPct(s.burden, 2))], 'trade-imp');
-    } else k += empty('import');
-    $('kpi-trade').innerHTML = k; $('ch-trade').innerHTML = ch; $('tb-trade').innerHTML = tb;
+    var fi = filtered('import');
+    if (!fi) { $('kpi-trade').innerHTML = empty('import'); ['ch-trade', 'tb-trade-report', 'ch-trade-by', 'tb-trade'].forEach(function (id) { $(id).innerHTML = ''; }); return; }
+    var m = fi.set.m, has = { payment: !!m.map.payment, declNo: !!m.map.declNo, supplier: !!m.map.supplier }, hasHs = !!m.map.hs;
+    var bySel = $('by-trade'), hsOpt = bySel.querySelector('option[value="hs4"]');
+    hsOpt.disabled = !hasHs; hsOpt.textContent = hasHs ? 'HS 4단위' : 'HS 4단위(HS 열 없음)';
+    if (!hasHs && bySel.value === 'hs4') bySel.value = 'hq';
+    var by = bySel.value, top = +$('top-trade').value, BYL = C.BY[by];
+    var r = C.importReport(fi.recs, state.range, state.settings, has), s = C.importStats(fi.recs, state.range, by);
+    var base = C.monthLabel(r.base), k = '', ch = '', tb = '', pct2 = function (v) { return esc(C.fmtPct(v, 2)); };
+    var notes = ['<b>기준</b> ' + esc(r.basis), '전월 · 전년 동월 대비는 기준월 <b>' + base + '</b>(조회 기간의 마지막 달)'];
+    if (has.declNo) notes.push('<span data-k="imp-drop">' + (state.settings.excludeGN === false && has.payment ? 'GN 포함(설정에서 껐습니다)' : '제외 GN ' + C.fmtNum(m.excluded) + '줄') + ' · 합계 행 ' + C.fmtNum(m.totalRows) + '줄(파일 전체)</span>');
+    else if (has.payment) notes.push(state.settings.excludeGN === false ? '결제방법 GN(무환) 포함 — 설정에서 껐습니다' : '제외 GN ' + C.fmtNum(m.excluded) + '줄(파일 전체)');
+    if (r.total.badN) notes.push('신고번호 확인 필요 ' + C.fmtNum(r.total.badN) + '줄 — 건수에서 빼고 금액은 더함');
+    if (r.total.dutyExcl != null) notes.push('보세공장(B) 관세 ' + esc(money(r.total.dutyExcl)) + '는 관세 합계에서 뺐습니다');
+    if (r.unclassified.rows) notes.push('<b>' + esc(C.HQ_UNCLASSIFIED) + ' ' + C.fmtNum(r.unclassified.n) + '건 · ' + esc(money(r.unclassified.goods)) + '</b>' + (r.unclassified.codes.length ? '(Plant ' + esc(r.unclassified.codes.join('·')) + ')' : '(Plant 빈칸)') + ' — 설정에서 Plant 표를 고치면 본부로 셉니다');
+    k += '<p class="rul-basis" data-k="imp-basis">' + notes.join(' · ') + '</p>';
+    function vsSub(v) {
+      if (v.goods.prev == null && v.goods.rate == null && v.n.prev == null) return C.monthLabel(v.month) + ' 자료 없음';
+      return base + ' vs ' + C.monthLabel(v.month) + ' · ' + sp(v.goods.diff, (v.goods.diff > 0 ? '+' : '') + money(v.goods.diff)) + ' · 건수 ' + esc(C.fmtSigned(v.n.diff)) + '건';
+    }
+    var per = C.monthLabel(state.range.from) + ' ~ ' + C.monthLabel(state.range.to);
+    k += kpi('수입 물자대', money(r.total.goods), per, '합계' + (has.payment ? ' · ' + (state.settings.excludeGN === false ? 'GN 포함' : 'GN 제외') : ''), 'imp-goods') +
+      kpi('관세', money(r.total.duty), has.declNo ? '보세공장(B) 관세 제외' : '', '합계(Tot.Duty Amt)', 'imp-duty') +
+      kpi('관세부담율', C.fmtPct(r.total.burden, 2), '', '계산: 관세 ÷ 물자대', 'imp-burden') +
+      kpi('수입 건수', C.fmtNum(r.total.n) + '건', has.declNo ? '신고번호 고유 개수' + (r.total.badN ? ' · 확인 필요 ' + r.total.badN + '줄 제외' : '') : '줄 수', has.declNo ? '같은 신고번호 여러 줄 = 1건' : '', 'imp-n') +
+      kpi('전월 대비', C.fmtSignedPct(r.mom.goods.rate), vsSub(r.mom), '계산: (기준월 − 전월) ÷ 전월 · 물자대', 'imp-mom') +
+      kpi('전년 동월 대비', C.fmtSignedPct(r.yoy.goods.rate), vsSub(r.yoy), '계산: (기준월 − 전년 같은 달) ÷ 전년 같은 달 · 물자대', 'imp-yoy');
+    ch += importChart('월별 수입 물자대 · 관세 · 관세부담율', r.months, r.monthly.map(function (c) { return c.goods; }), r.monthly.map(function (c) { return c.duty; }), r.monthly.map(function (c) { return c.burden; }));
+    if (r.suppliers) ch += hbar('공급지역(Supplier)별 물자대 상위 10', r.suppliers.map(function (c) { return { label: c.key, value: c.goods }; }), money, COL[0]);
+    // 표 ① 본부 × 월
+    var head = ['본부'];
+    r.months.map(C.monthLabel).forEach(function (lab) { head.push(esc(lab) + '<br><small>건수</small>', esc(lab) + '<br><small>물자대</small>', esc(lab) + '<br><small>관세</small>', esc(lab) + '<br><small>부담율</small>'); });
+    head.push('기간 합계<br><small>건수</small>', '기간 합계<br><small>물자대</small>', '기간 합계<br><small>관세</small>', '기간 합계<br><small>부담율</small>');
+    var c4 = function (x) { return [n0(x.n), n0(x.goods), n0(x.duty), pct2(x.burden)]; };
+    var rows = r.pivot.map(function (p) {
+      var c = [esc(p.hq)]; p.months.forEach(function (x) { c = c.concat(c4(x)); });
+      return { cls: p.unclassified ? 'uncl' : '', cells: c.concat(c4(p.total)) };
+    });
+    var foot = ['합계']; r.monthly.forEach(function (x) { foot = foot.concat(c4(x)); });
+    tb += '<h3 class="tb-h">① 본부 × 월 — 건수 · 물자대 · 관세 · 관세부담율</h3><p class="sub">' + esc(r.basis) + ' · 본부 순서는 설정의 Plant 표 → 그 밖 → ' + esc(C.HQ_UNCLASSIFIED) + '. 본부별 건수를 더하면 합계보다 클 수 있습니다(한 신고번호가 여러 본부에 걸칠 때).</p>' + ignoredNote(fi.ignored) +
+      table(head, rows, foot.concat(c4(r.total)), 'imp-pivot');
+    // 표 ② 공급지역 상위 10
+    tb += '<h3 class="tb-h">② 공급지역(Supplier) 상위 10 — 물자대 큰 순 · 비중</h3>' + (r.suppliers ?
+      table(['공급지역', '건수', '물자대', '비중'], r.suppliers.concat(r.supplierRest ? [r.supplierRest] : []).map(function (c) { return { cls: c === r.supplierRest ? 'rest' : '', cells: [esc(c.key), n0(c.n), n0(c.goods), esc(C.fmtPct(c.share))] }; }),
+        ['합계(' + r.supplierN + '곳)', n0(r.total.n), n0(r.total.goods), r.total.goods ? '100.0%' : '—'], 'imp-supplier') : '<p class="sub" data-k="no-supplier">이 자료에는 공급지역(Supplier) 열이 없습니다.</p>');
+    // 표 ③ 신고 종류
+    tb += '<h3 class="tb-h">③ 신고 종류별 — 신고번호 끝 글자(M 일반 수입 · B 보세공장 사용신고)</h3>' + (r.declTypes ?
+      '<p class="sub">모두 실적(건수 · 물자대)에 넣습니다. 보세공장 사용신고(B)의 관세는 관세 합계에서 빼고 참고로만 보입니다.</p>' +
+      table(['신고 종류', '건수', '물자대', '관세', '관세 집계 제외(참고)'], r.declTypes.map(function (t) { return { cells: [esc(t.label), n0(t.n), n0(t.goods), t.dutyExcluded ? '<span class="sub">집계 제외</span>' : n0(t.duty), t.dutyExcluded ? n0(t.dutyExcl) : '—'] }; }),
+        ['합계', n0(r.total.n), n0(r.total.goods), n0(r.total.duty), n0(r.total.dutyExcl)], 'imp-decltype') : '<p class="sub" data-k="no-decl">이 자료에는 신고번호 열이 없어 신고 종류를 나누지 않습니다.</p>');
+    $('kpi-trade').innerHTML = k; $('ch-trade').innerHTML = ch; $('tb-trade-report').innerHTML = tb;
+    // 묶음별 물자대 · 관세(v1.8.0 까지의 수입 표) — 그대로 아래에 둔다
+    var t = C.topN(s.groups, top);
+    $('ch-trade-by').innerHTML = hbar(BYL + '별 수입 물자대 상위 ' + top, t.rows.map(function (g) { return { label: g.key, value: g.goods }; }), money, COL[0]);
+    $('tb-trade').innerHTML = '<h3 class="tb-h">수입 — ' + esc(BYL) + '별 물자대 · 관세 · 관세부담율</h3>' +
+      table([esc(BYL), '건수', '물자대', '관세', '관세부담율'], t.rows.concat(t.rest ? [t.rest] : []).map(function (g) { return { cls: g === t.rest ? 'rest' : '', cells: [esc(g.key), n0(g.n), n0(g.goods), n0(g.duty), pct2(g.burden)] }; }),
+        ['합계', n0(s.n), n0(s.goods), n0(s.duty), pct2(s.burden)], 'trade-imp');
   }
   // (v1.7.0) 월별 금액 막대 + 건수 선(오른쪽 축)
   function comboChart(title, months, amounts, counts) {
@@ -439,7 +508,7 @@
   function renderSettings() {
     var st = state.settings;
     $('d-settings-body').innerHTML = '<label class="chk"><input type="checkbox" id="set-gn"' + (st.excludeGN ? ' checked' : '') + '> 결제방법 <b>' + esc(C.EXPORT_EXCLUDE_PAYMENT) + '</b>(샘플 등 무환거래) 줄을 <b>수입 · 수출</b> 실적에서 빼기(기본 켜짐) — 수입은 「Payment method」, 수출은 「Payment」 열</label>' +
-      '<p class="sub" style="margin:8px 0 4px">수출 Plant 번호 → 본부. 표에 없는 번호 · 빈칸은 「' + esc(C.HQ_UNCLASSIFIED) + '」로 따로 셉니다. 글자로 적힌 본부 이름은 그대로 둡니다.</p>' +
+      '<p class="sub" style="margin:8px 0 4px">Plant 번호 → 본부(수입 · 수출 같은 표). 1131(엔진본부)은 표를 고쳐도 늘 들어갑니다. 표에 없는 번호 · 빈칸은 「' + esc(C.HQ_UNCLASSIFIED) + '」로 따로 셉니다. 글자로 적힌 본부 이름은 그대로 둡니다.</p>' +
       '<div class="tablewrap"><table class="set-plant"><thead><tr><th>Plant 번호</th><th>본부</th><th></th></tr></thead><tbody>' +
       st.rows.map(function (r, i) { return '<tr><td><input type="text" data-set="code" value="' + esc(r.code) + '" aria-label="Plant 번호 ' + (i + 1) + '"></td><td><input type="text" data-set="hq" value="' + esc(r.hq) + '" aria-label="본부 ' + (i + 1) + '"></td><td><button class="x" type="button" data-set-del="' + i + '">빼기</button></td></tr>'; }).join('') +
       '<tr class="new"><td><input type="text" data-set-new="code" placeholder="새 번호"></td><td><input type="text" data-set-new="hq" placeholder="본부 이름"></td><td><button class="x" type="button" data-set-add>더하기</button></td></tr>' +
@@ -614,7 +683,7 @@
       var s = ready(k); if (!s) return;
       var m = s.m;
       data[k] = { file: m.files.map(function (p) { return p.file; }).join(' + '), period: m.period, records: m.records, map: m.map, skipped: m.skipped,
-        files: m.files.map(function (p) { return { file: p.file, uploadedAt: p.uploadedAt, period: p.period, n: p.norm.records.length, skipped: p.norm.skipped.length, excluded: p.excluded }; }) };
+        files: m.files.map(function (p) { return { file: p.file, uploadedAt: p.uploadedAt, period: p.period, n: p.norm.records.length, skipped: p.norm.skipped.length, excluded: p.excluded, totalRows: p.totalRows }; }) };
     });
     var book = C.exportBook({ range: state.range, rulingRange: state.rrange, filter: state.filter, unit: state.unit, data: data, exportOpts: state.settings });
     var wb = XLSX.utils.book_new();

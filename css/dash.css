@@ -95,6 +95,8 @@ label:has(> #api-bl){min-width:0;max-width:100%;}
 .trade-total-line small{color:var(--sub);}
 tr.uncl td{background:#fff4e0;}
 table.exp-pivot th{white-space:nowrap;} table.exp-pivot th small{font-weight:600; color:var(--sub);}
+/* (v1.9.0) 수입 본부 × 월 — 월마다 4칸(건수 · 물자대 · 관세 · 부담율) */
+table.imp-pivot th{white-space:nowrap;} table.imp-pivot th small{font-weight:600; color:var(--sub);} table.imp-pivot td:first-child{white-space:nowrap;}
 details.settings{margin:12px 0; border:1px solid var(--line); border-radius:10px; padding:8px 14px; background:#fbfcfd;}
 details.settings summary{cursor:pointer; font-weight:700; min-height:32px; display:flex; align-items:center;}
 table.set-plant input{font:inherit; font-size:13.5px; padding:4px 6px; border:1px solid var(--line); border-radius:6px; width:100%; min-width:90px;}
