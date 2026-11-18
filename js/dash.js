@@ -529,7 +529,19 @@
     var note = Object.keys(state.sets).length ? rebuild(false) : '';
     msg(text + (Object.keys(state.sets).length ? ' 올린 수출 자료를 다시 계산했습니다.' : '') + note, note ? 'warn' : 'ok');
   }
+  // (v1.9.1) 관세율표 — FTA 탭을 처음 열 때 한 번만 받는다(js/tariff.js 가 캐시). 실패해도 다른 집계는 그대로.
+  function showTariffMeta() {
+    var el = $('tariff-meta'), T = window.Tariff;
+    if (!el || !T || el.dataset.state) return;
+    el.dataset.state = 'loading'; el.textContent = '관세율표를 불러오는 중…';
+    T.loadTariff().then(function (r) {
+      el.dataset.state = r.ok ? 'ok' : 'fail';
+      el.classList.toggle('warn', !r.ok);
+      el.textContent = r.ok ? T.tariffMetaText(r.meta) + ' (' + r.meta.source + ')' : T.FAIL_TEXT + ' — 세율 조회만 건너뜁니다.';
+    });
+  }
   function renderFta() {
+    showTariffMeta();
     var by = $('by-fta').value, BYL = C.BY[by], k = '', ch = '', tb = '', months = C.monthsBetween(state.range.from, state.range.to), monthly = [];
     ['import', 'export'].forEach(function (kind, i) {
       var f = filtered(kind), nm = kind === 'import' ? '수입' : '수출';
@@ -724,7 +736,7 @@
   $('f-unit').addEventListener('change', function () { state.unit = this.value; localStorage.setItem(LS.unit, this.value); renderFilter(); renderTab(); });
   $('btn-f-reset').addEventListener('click', function () { state.range = C.defaultRange(state.period); state.rrange = C.rulingDefaultRange(state.rperiod); state.filter = {}; renderFilter(); renderTab(); });
   $('btn-dash-xlsx').addEventListener('click', exportXlsx);
-  document.querySelector('.tabs').addEventListener('click', function (e) { var b = e.target.closest('.tab'); if (b) { state.tab = b.dataset.tab; renderFilter(); renderTab(); } });
+  document.querySelector('.tabs').addEventListener('click', function (e) { var b = e.target.closest('.tab'); if (b) { state.tab = b.dataset.tab; if (state.tab === 'fta') showTariffMeta(); renderFilter(); renderTab(); } });
   ['by-trade', 'top-trade', 'by-export', 'top-export', 'by-fta', 'by-ruling', 'sort-ruling'].forEach(function (id) { $(id).addEventListener('change', renderTab); });
   // (v1.7.0) 설정
   $('d-settings-body').addEventListener('change', function (e) {

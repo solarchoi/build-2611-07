@@ -1108,7 +1108,61 @@ var v180 = passed + failed;
   eq([wb.SheetNames[0], XL.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' })], ['Sheet1', I.aoa], 'v1.9.0 samples/시험용/ ' + I.name + ' = 예제 정의');
   ok(JSON.stringify(I.aoa).indexOf('(가상)') > 0 && I.aoa[0].length === 70, 'v1.9.0 가짜 예제(70열)에 「가상」 표기');
 })();
-console.log('v1.9.0 ' + (passed + failed - v180) + '개 검사');
+var v190 = passed + failed;
+// ---------- v1.9.1 관세율표 조회(js/tariff.js) ----------
+(async function () {
+  var T = require('../js/tariff.js');
+  var AC = { meta: { year: 2026, source: '관세율표(가상)', hsCount: 4 }, rates: { '8409911000': { A: 8, C: 13 }, '8409990000': { C: 5 }, '0101210000': { A: 0, C: 0 }, '9999999999': {} } };
+  var FTA = { meta: { year: 2026, source: '관세율표(가상)', hsCount: 1 }, rates: { '8409911000': { FCN1: 0, FEU1: 2.4 } } };
+  var calls = [];
+  T.setFetcher(function (u) { calls.push(u); return Promise.resolve(u.indexOf('fta') >= 0 ? FTA : AC); });
+  eq([T.baseRate('8409911000'), T.ftaRate('8409911000', 'FCN1'), T.tariffMeta()], [null, null, null], 'v1.9.1 받기 전 조회는 null');
+  eq(calls.length, 0, 'v1.9.1 불러오기 전에는 받지 않음(lazy)');
+  var r1 = await T.loadTariff(), r2 = await T.loadTariff();
+  ok(r1.ok && r2.ok, 'v1.9.1 받기 성공');
+  eq(calls.slice().sort(), ['data/tariff-ac.json', 'data/tariff-fta.json'], 'v1.9.1 두 번 불러도 파일마다 한 번만 받음');
+  ok(T.loadTariff() === T.loadTariff(), 'v1.9.1 같은 Promise 를 돌려줌');
+  eq(T.normHs('8409-91-1000'), '8409911000', 'v1.9.1 HS 하이픈 지움');
+  eq(T.normHs(' 8409 911000 '), '8409911000', 'v1.9.1 HS 공백 지움');
+  eq(T.normHs("'8409911000"), '8409911000', 'v1.9.1 HS 따옴표 지움');
+  eq(T.normHs(8409911000), '8409911000', 'v1.9.1 HS 숫자 칸');
+  eq([T.normHs('101210000'), T.normHs(101210000), T.normHs('84099110001'), T.normHs(''), T.normHs(null), T.normHs('8409.91')], [null, null, null, null, null, null], 'v1.9.1 10자리가 아니면 null(앞 0 · 자르기 추측 없음)');
+  eq(T.baseRate('8409-91-1000'), 8, 'v1.9.1 A · C 둘 다 있으면 A');
+  eq(T.baseRate('8409990000'), 5, 'v1.9.1 A 없으면 C');
+  eq(T.baseRate('0101210000'), 0, 'v1.9.1 세율 0 은 0 그대로');
+  eq([T.baseRate('9999999999'), T.baseRate('1234567890'), T.baseRate('101210000')], [null, null, null], 'v1.9.1 세율 없음 · 표에 없는 HS · 9자리 → null');
+  eq([T.ftaRate('8409911000', 'fcn1'), T.ftaRate('8409911000', ' FEU1 '), T.ftaRate('8409911000', 'FUS1'), T.ftaRate('8409990000', 'FCN1'), T.ftaRate('8409911000', ''), T.ftaRate('8409911000', null)], [0, 2.4, null, null, null, null], 'v1.9.1 협정세율 — 대문자로 찾고 없으면 null');
+  eq(T.tariffMeta(), { year: 2026, source: '관세율표(가상)', hsCount: 4 }, 'v1.9.1 tariffMeta = 기준세율 표 meta');
+  eq(T.tariffMetaText({ year: 2026, source: 'x', hsCount: 11326 }), '관세율표 2026년 기준 · HS 11,326종', 'v1.9.1 화면 표기 문구');
+  var src = fsx.readFileSync(__dirname + '/../js/tariff.js', 'utf8');
+  ok(!/localStorage|sessionStorage|indexedDB/.test(src.replace(/\/\*[\s\S]*?\*\//, '')), 'v1.9.1 브라우저 저장소를 쓰지 않음');
+  ok(!/\.(forEach|filter|find|some|map|reduce)\(|for \(|while \(/.test(src), 'v1.9.1 조회에 배열 순회 없음(해시 조회)');
+  // 실패 — 조회는 null, 다른 집계는 그대로
+  T.setFetcher(function (u) { return u.indexOf('fta') >= 0 ? Promise.reject(new Error('404')) : Promise.resolve(AC); });
+  var bad = await T.loadTariff();
+  eq([bad.ok, bad.error], [false, '관세율표를 불러오지 못했습니다'], 'v1.9.1 받기 실패 → { ok:false } · 안내 문구');
+  eq([T.baseRate('8409911000'), T.ftaRate('8409911000', 'FCN1'), T.tariffMeta(), T.tariffMetaText()], [null, null, null, null], 'v1.9.1 실패하면 조회는 모두 null');
+  T.setFetcher(function () { return Promise.resolve({ rates: {} }); });
+  eq((await T.loadTariff()).ok, false, 'v1.9.1 meta 없는 파일은 실패로');
+  // 실제 data/*.json
+  var real = {}; ['ac', 'fta'].forEach(function (k) { real[k] = JSON.parse(fsx.readFileSync(__dirname + '/../data/tariff-' + k + '.json', 'utf8')); });
+  T.setFetcher(function (u) { return Promise.resolve(u.indexOf('fta') >= 0 ? real.fta : real.ac); });
+  var rr = await T.loadTariff();
+  ok(rr.ok && rr.meta.year === 2026 && rr.meta.hsCount === 11326, 'v1.9.1 실제 관세율표 2026 · HS 11,326종');
+  eq([Object.keys(real.ac.rates).length, Object.keys(real.fta.rates).length], [real.ac.meta.hsCount, real.fta.meta.hsCount], 'v1.9.1 meta.hsCount = rates 개수');
+  var h0 = Object.keys(real.ac.rates)[0], e0 = real.ac.rates[h0];
+  eq(T.baseRate(h0.slice(0, 4) + '-' + h0.slice(4)), e0.A != null ? e0.A : e0.C, 'v1.9.1 실제 표 기준세율 조회 ' + h0);
+  var hf = Object.keys(real.fta.rates)[0], kf = Object.keys(real.fta.rates[hf])[0];
+  eq(T.ftaRate(hf, kf.toLowerCase()), real.fta.rates[hf][kf], 'v1.9.1 실제 표 협정세율 조회 ' + hf + ' ' + kf);
+  ok(Object.keys(real.ac.rates).every(function (h) { return /^\d{10}$/.test(h); }), 'v1.9.1 실제 표 HS 는 모두 10자리');
+  T.reset();
+  var html = fsx.readFileSync(__dirname + '/../dashboard.html', 'utf8');
+  ok(html.indexOf('<script src="js/tariff.js">') > 0 && html.indexOf('id="tariff-meta"') > 0 && html.indexOf('tariff-ac.json') < 0, 'v1.9.1 쪽은 스크립트만 붙이고 JSON 은 받지 않음');
+  console.log('v1.9.1 ' + (passed + failed - v190) + '개 검사');
+  finish();
+})().catch(function (e) { console.log('  X v1.9.1 예외 ' + (e && e.stack)); failed++; finish(); });
+function finish() {
+console.log('v1.9.0 ' + (v190 - v180) + '개 검사');
 console.log('v1.8.0 ' + (v180 - v170) + '개 검사');
 console.log('v1.7.0 ' + (v170 - v160) + '개 검사');
 console.log('v1.6.0 ' + (v160 - v150) + '개 검사');
@@ -1120,3 +1174,4 @@ console.log('v1.3 ' + (v13 - v12) + '개 검사');
 console.log('v1.0 ' + v10 + ' · v1.1 ' + (v11 - v10) + ' · v1.2 ' + (v12 - v11) + '개 검사');
 console.log('\n통과 ' + passed + ' · 실패 ' + failed);
 process.exit(failed ? 1 : 0);
+}
