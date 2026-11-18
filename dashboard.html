@@ -69,7 +69,7 @@
   <div class="tablewrap"><table class="map7">
     <thead><tr><th>항목</th><th>하는 일</th><th>자료 · 주기</th><th>As-Is → To-Be</th><th>이 도구에서</th></tr></thead>
     <tbody>
-      <tr><td>1. 수출입통관 실적</td><td>수입: 물자대·관세·관세부담율 / 수출: 전년 대비 증감 — 본부·국가·업체·HS 4단위</td><td>ERP 엑셀 · 매일</td><td>매월 1일 전월 분석 뒤 메일 공유 → 매일 대시보드</td><td><a href="#d-upload" data-go-tab="trade">「수출입 실적」 탭</a></td></tr>
+      <tr><td>1. 수출입통관 실적</td><td>수입: 물자대·관세·관세부담율 / 수출: 전년 대비 증감 — 본부·국가·업체·HS 4단위</td><td>ERP 엑셀 · 매일</td><td>매월 1일 전월 분석 뒤 메일 공유 → 매일 대시보드</td><td><a href="#d-upload" data-go-tab="trade">「수입 실적」 탭</a> · <a href="#d-upload" data-go-tab="export">「수출 실적」 탭</a></td></tr>
       <tr><td>2. FTA 수출입 실적</td><td>FTA 체결국 수입·수출 신고 건의 관세 절감 실적</td><td>ERP 엑셀 · 매일</td><td>→ 매일 대시보드, 메일로 공유할 화면</td><td><a href="#d-upload" data-go-tab="fta">「FTA」 탭</a></td></tr>
       <tr><td>3. 관세환급 실적</td><td>본부별 매월 환급 실적</td><td>환급프로그램 엑셀 · 매월</td><td>→ 월별 표</td><td><a href="#d-upload" data-go-tab="refund">「관세환급」 탭</a></td></tr>
       <tr><td>4. 수출입 오류점수</td><td>신고·오류 건수, 오류점수, 비율</td><td>관세청 엑셀 · 매월</td><td>→ 월별·구분별</td><td><a href="#d-upload" data-go-tab="errors">「오류점수」 탭</a> · <a href="errors.html">v1.3 오류점수 분석(인천·울산)</a></td></tr>
@@ -98,6 +98,10 @@
     <div class="btnrow" style="margin:8px 0 6px"><button class="btn primary" type="button" data-ex5>예제 엑셀 5개 모두 내려받기</button><a class="btn" href="samples/예제_엑셀_5종.zip" download>ZIP 한 파일로 받기</a></div>
     <span class="sub">하나씩 받기 — <a class="ex-file" href="samples/예제_수입통관실적_ERP.xlsx" download>수입통관 실적</a> · <a class="ex-file" href="samples/예제_수출통관실적_ERP.xlsx" download>수출통관 실적</a> · <a class="ex-file" href="samples/예제_관세환급실적.xlsx" download>관세환급 실적</a> · <a class="ex-file" href="samples/예제_수출입오류점수.xlsx" download>수출입 오류점수</a> · <a class="ex-file" href="samples/예제_품목분류결정문현황.xlsx" download>품목분류 결정문 현황</a></span></div>
   <label class="chk"><input type="checkbox" id="d-remember" checked> 올린 데이터를 이 브라우저에 기억하기(다음에 열 때 다시 올리지 않아도 됩니다)</label>
+  <details class="settings" id="d-settings">
+    <summary>설정 — 수출 Plant → 본부 표 · 결제방법 GN 제외</summary>
+    <div id="d-settings-body"></div>
+  </details>
   <div id="d-msg"></div>
   <div id="d-sets"></div>
 </section>
@@ -114,7 +118,8 @@
   <p class="sub" id="f-note"></p>
 
   <div class="tabs" role="tablist" aria-label="분석 종류">
-    <button role="tab" class="tab" data-tab="trade" aria-selected="true">수출입 실적</button>
+    <button role="tab" class="tab" data-tab="trade" aria-selected="true">수입 실적</button>
+    <button role="tab" class="tab" data-tab="export" aria-selected="false">수출 실적</button>
     <button role="tab" class="tab" data-tab="fta" aria-selected="false">FTA</button>
     <button role="tab" class="tab" data-tab="refund" aria-selected="false">관세환급</button>
     <button role="tab" class="tab" data-tab="errors" aria-selected="false">오류점수</button>
@@ -122,6 +127,7 @@
   </div>
 
   <div class="tabpanel" id="t-trade" role="tabpanel">
+    <div class="trade-total" id="sum-trade"></div>
     <div class="kpis" id="kpi-trade"></div>
     <div class="ctrl">
       <label>묶는 기준 <select id="by-trade">
@@ -131,6 +137,20 @@
     </div>
     <div class="charts" id="ch-trade"></div>
     <div id="tb-trade"></div>
+  </div>
+  <div class="tabpanel" id="t-export" role="tabpanel" hidden>
+    <div class="trade-total" id="sum-export"></div>
+    <div class="kpis" id="kpi-export"></div>
+    <div class="charts" id="ch-export"></div>
+    <div id="tb-export-report"></div>
+    <div class="ctrl">
+      <label>묶는 기준 <select id="by-export">
+        <option value="hq">본부</option><option value="country">국가</option><option value="company">업체</option><option value="hs4">HS 4단위</option>
+      </select></label>
+      <label>상위 <select id="top-export"><option>5</option><option selected>10</option><option>20</option></select></label>
+    </div>
+    <div class="charts" id="ch-export-by"></div>
+    <div id="tb-export"></div>
   </div>
   <div class="tabpanel" id="t-fta" role="tabpanel" hidden>
     <div class="kpis" id="kpi-fta"></div>

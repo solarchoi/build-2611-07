@@ -872,7 +872,110 @@ var v150 = passed + failed;
     eq(XL.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' }), f.aoa, 'v1.6.0 samples/시험용/ ' + f.name + ' = 예제 정의');
   });
 })();
-console.log('v1.6.0 ' + (passed + failed - v150) + '개 검사');
+var v160 = passed + failed;
+
+/* ===================== v1.7.0 — 수출 실적: ERP EXPORT 원본 열 · Plant → 본부 · GN 제외 · 신고번호 건수 ===================== */
+(function () {
+  var X = C.sampleExportErp(), H = C.uniqueHeaders(X.aoa[0]);
+  function load(aoa, opts, override) { var hh = C.uniqueHeaders(aoa[0]), m = C.mapColumns(hh, 'export', override); return { m: m, n: C.normalize(C.aoaToRows(aoa), 'export', m.map, 0, opts) }; }
+  var x = load(X.aoa), recs = x.n.records, OCT = { from: '2026-10', to: '2026-10' };
+  // 열 짝짓기 — 원본 열 이름
+  eq([X.aoa[0].length, X.sheet], [55, 'Sheet1'], 'v1.7.0 가짜 예제 = 55열 · Sheet1');
+  eq(C.detectKind(X.aoa[0].map(String)).kind, 'export', 'v1.7.0 ERP EXPORT 원본 → 수출 (파일 이름 없이도)');
+  eq(C.detectKind(X.aoa[0].map(String), 'EXPORT_202610.xlsx').kind, 'export', 'v1.7.0 ERP EXPORT 원본 → 수출 (파일 이름)');
+  eq(x.m.missing, [], 'v1.7.0 필수 열 모두 찾음(HS 열 없이)');
+  eq([x.m.map.date, x.m.map.hq, x.m.map.country, x.m.map.amount, x.m.map.company], ['Declaration Date', 'Plant', 'Destination', 'FOB(￦)', 'Sold-to Party Name'], 'v1.7.0 신고일자 · 본부 · 국가 · 금액 · 업체');
+  eq([x.m.map.declNo, x.m.map.broker, x.m.map.payment, x.m.map.hs], ['Certifcate No.', 'AgentNm', 'Payment', undefined], 'v1.7.0 신고번호 · 관세사 · 결제방법 · HS 없음');
+  var mapped = Object.keys(x.m.map).map(function (k) { return x.m.map[k]; });
+  eq(['Req.Date', 'Division', 'FOB($)', 'Invoice Amt.'].filter(function (h) { return mapped.indexOf(h) >= 0; }), [], 'v1.7.0 Req.Date · Division · FOB($) · Invoice Amt. 는 짝짓지 않는다');
+  eq(C.mapColumns(['Req.Date', 'Division', 'FOB($)', 'Invoice Amt.', 'Destination'], 'export').map, { country: 'Destination' }, 'v1.7.0 원하는 열이 없어도 엉뚱한 열로 채우지 않는다');
+  // 같은 이름 열(Curr 5개)
+  eq(H.filter(function (h) { return /^Curr/.test(h); }), ['Curr (8번째 열)', 'Curr (24번째 열)', 'Curr (26번째 열)', 'Curr (28번째 열)', 'Curr (30번째 열)'], 'v1.7.0 Curr 5개를 몇 번째 열인지로 구분');
+  var row1 = C.aoaToRows(X.aoa)[0];
+  eq([row1['Curr (8번째 열)'], row1['Curr (24번째 열)'], row1['Curr (28번째 열)']], ['USD', 'KRW', 'EUR'], 'v1.7.0 같은 이름 열 값이 서로 덮어쓰지 않는다');
+  eq(C.uniqueHeaders(['A', '', 'B']), ['A', '열2', 'B'], 'v1.7.0 같은 이름이 없으면 그대로(빈 이름은 열N)');
+  // 요청 시험 ① Plant 1111 → 건기본부
+  eq(C.plantValue(1111).hq, '건기본부', 'v1.7.0 Plant 1111 → 건기본부');
+  eq([C.plantValue('1000').hq, C.plantValue(1100).hq, C.plantValue(1130).hq, C.plantValue('6000').hq], ['건기본부', '건기본부', '엔진본부', '부품센터'], 'v1.7.0 Plant 기본 표');
+  eq(recs.filter(function (r) { return r.plant === '1111'; }).map(function (r) { return r.hq; }), ['건기본부'], 'v1.7.0 예제의 Plant 1111 줄 = 건기본부');
+  // 요청 시험 ④ Plant 빈칸 → 본부 미분류
+  eq([C.plantValue('').hq, C.plantValue('').unclassified], ['본부 미분류', true], 'v1.7.0 Plant 빈칸 → 본부 미분류');
+  eq([C.plantValue(9999).hq, C.plantValue('건설기계본부(가상)').hq, C.plantValue('A').hq], ['본부 미분류', '건설기계본부(가상)', 'A'], 'v1.7.0 표에 없는 번호는 미분류, 글자 본부 이름은 그대로');
+  eq([x.n.unclassified.n, x.n.unclassified.amount], [1, 20000000], 'v1.7.0 예제 미분류 1줄 · 2,000만');
+  // 요청 시험 ② GN 줄은 건수 · 금액에서 빠진다
+  eq([x.n.excluded.n, x.n.excluded.amount, recs.length], [2, 40000000, 13], 'v1.7.0 GN 2줄(소문자 gn 포함) 제외 · 레코드 13');
+  ok(!recs.some(function (r) { return String(r.payment).toUpperCase() === 'GN'; }), 'v1.7.0 GN 줄은 레코드에 없다');
+  var noGN = load(X.aoa, { excludeGN: false });
+  eq([noGN.n.records.length, noGN.n.excluded.n, C.exportReport(noGN.n.records, OCT).total.amount], [15, 0, 1060000000], 'v1.7.0 설정에서 GN 제외를 끄면 넣는다');
+  // 요청 시험 ③ 같은 신고번호 2줄 = 1건
+  var two = recs.filter(function (r) { return r.declNo === '12345261000011'; });
+  eq([two.length, C.countDecl(two).n], [2, 1], 'v1.7.0 같은 신고번호 2줄 = 1건');
+  eq([C.declNoOf('12345-26-1000011').state, C.declNoOf('').state, C.declNoOf('A2345-26-1000081').state, C.declNoOf('12345-26-100009').state], ['ok', 'blank', 'bad', 'bad'], 'v1.7.0 신고번호 형식(하이픈 지운 뒤 14자리 · 영문 시작 아님)');
+  eq([x.n.declBad.n, x.n.declBad.blank, x.n.declBad.bad], [3, 1, 2], 'v1.7.0 신고번호 확인 필요 3줄 알림');
+  // 요청 시험 ⑤ HS 열 없이 집계 — 손계산(2026-10, GN 제외): 300+50+120+80+150+60+40+20+90+110 = 1,020백만, 건수 6(같은 번호 1 · 빈칸/형식 다름 3줄 제외)
+  var r = C.exportReport(recs, OCT);
+  eq([r.total.amount, r.total.n, r.total.badN, r.total.rows], [1020000000, 6, 3, 10], 'v1.7.0 HS 열 없이 집계 — 10월 금액 · 건수');
+  eq(r.pivot.map(function (p) { return [p.hq, p.total.n, p.total.amount]; }), [['건기본부', 3, 750000000], ['엔진본부', 1, 210000000], ['부품센터', 1, 40000000], ['본부 미분류', 1, 20000000]], 'v1.7.0 본부 × 월 — 건기 · 엔진 · 부품센터 · 미분류');
+  eq(r.pivot.reduce(function (t, p) { return t + p.total.amount; }, 0), r.total.amount, 'v1.7.0 본부 합 = 전체 금액');
+  // 전월 대비 · 전년 동월 대비 — 9월 300백만 · 2건, 2025-10 130백만 · 1건
+  eq([r.mom.month, r.mom.amount.prev, r.mom.n.prev, r.mom.n.diff], ['2026-09', 300000000, 2, 4], 'v1.7.0 전월 대비(기준월 = 기간 마지막 달)');
+  near(r.mom.amount.rate, 2.4, 'v1.7.0 전월 대비 증감률 = (1,020 − 300) ÷ 300');
+  eq([r.yoy.month, r.yoy.amount.prev, r.yoy.n.prev], ['2025-10', 130000000, 1], 'v1.7.0 전년 동월 대비');
+  var r2 = C.exportReport(recs, { from: '2026-09', to: '2026-09' });
+  isNull(r2.yoy.amount.rate, 'v1.7.0 전년 같은 달 자료가 없으면 null(「—」)');
+  isNull(r2.yoy.amount.diff, 'v1.7.0 비교할 달이 없으면 증감도 null');
+  var r3 = C.exportReport(recs, { from: '2026-09', to: '2026-10' });
+  eq(r3.pivot[0].months.map(function (c) { return [c.n, c.amount]; }), [[1, 200000000], [3, 750000000]], 'v1.7.0 본부 × 월 칸(건기 9월 · 10월)');
+  eq([r3.pivot[2].months[0].n, r3.pivot[2].months[0].amount], [0, null], 'v1.7.0 자료 없는 칸은 0건 · 금액 「—」');
+  near(r3.pivot[0].mom.amount.rate, 2.75, 'v1.7.0 본부별 전월 대비(건기 750 ÷ 200 − 1)');
+  // 국가 상위 10 · 비중
+  eq(r.countries.slice(0, 3).map(function (c) { return [c.key, c.amount]; }), [['US', 350000000], ['BR', 230000000], ['DE', 150000000]], 'v1.7.0 국가 상위(금액 큰 순)');
+  near(r.countries[0].share, 350 / 1020, 'v1.7.0 국가 비중 = 국가 금액 ÷ 합계');
+  isNull(r.countryRest, 'v1.7.0 10개국 이하이면 「그 밖」 없음');
+  eq(r.basis, 'GN 제외 · 건수는 신고번호 기준', 'v1.7.0 기준 문구');
+  eq(C.exportBasis({ excludeGN: false }), 'GN 포함 · 건수는 신고번호 기준', 'v1.7.0 GN 제외를 끄면 문구도');
+  // 설정 — Plant 표 고치기
+  var st = C.exportSettings({ plant: [{ code: '1000', hq: '건기본부' }, { code: '7000', hq: '가상본부' }, { code: '', hq: 'x' }], excludeGN: false });
+  eq([st.plantHq, st.excludeGN, st.custom], [{ 1000: '건기본부', 7000: '가상본부' }, false, true], 'v1.7.0 설정 표(빈 줄 뺌)');
+  eq([C.exportSettings(null).plantHq, C.exportSettings(null).excludeGN], [C.EXPORT_PLANT_HQ, true], 'v1.7.0 설정 기본값');
+  var y = load(X.aoa, { plantHq: { 1000: '건기본부', 1100: '건기본부', 1111: '건기본부', 1130: '엔진본부' } });
+  eq(C.exportReport(y.n.records, OCT, { plantHq: { 1000: '건기본부', 1130: '엔진본부' } }).pivot.map(function (p) { return [p.hq, p.total.amount]; }), [['건기본부', 750000000], ['엔진본부', 210000000], ['본부 미분류', 60000000]], 'v1.7.0 표에서 6000 을 빼면 미분류로');
+  // exportStats — 건수 = 신고번호 기준, 기존(신고번호 열 없음)은 줄 수
+  var es7 = C.exportStats(recs, OCT, 'hq');
+  eq([es7.n, es7.badN, es7.amount], [6, 3, 1020000000], 'v1.7.0 exportStats 건수 = 신고번호 고유 개수');
+  eq(C.exportStats(recs, OCT, 'hs4').groups.map(function (g) { return g.key; }), ['(미기재)'], 'v1.7.0 HS 열이 없으면 HS 4단위 묶음은 한 덩어리(화면에서는 막음)');
+  // 수출입 합계
+  var tt = C.tradeTotal([{ month: '2026-10', goods: 500 }, { month: '2026-10', goods: 300 }], recs, OCT);
+  eq([tt.importGoods, tt.exportAmount, tt.amount, tt.importN, tt.exportN, tt.n], [800, 1020000000, 1020000800, 2, 6, 8], 'v1.7.0 수출입 합계 = 수입 물자대 + 수출금액, 건수 = 수입 줄 + 수출 신고번호');
+  var t1 = C.tradeTotal(null, recs, OCT);
+  eq([t1.amount, t1.n, t1.exportAmount], [null, null, 1020000000], 'v1.7.0 한쪽 자료가 없으면 합계는 null');
+  // 여러 파일 합치기 · 파일별 제외 수
+  var mg = C.mergeFiles('export', [{ name: X.name, file: X.name, headers: X.aoa[0], aoa: X.aoa, offset: 0, override: {} }]);
+  eq([mg.ok, mg.excluded, mg.declBad, mg.unclassified, mg.files[0].excluded, mg.records.length], [true, 2, 3, 1, 2, 13], 'v1.7.0 mergeFiles — 파일별 제외 GN · 신고번호 · 미분류');
+  eq(C.mergeFiles('export', [{ name: X.name, file: X.name, headers: X.aoa[0], aoa: X.aoa }], { excludeGN: false }).records.length, 15, 'v1.7.0 mergeFiles 에 설정을 넘긴다');
+  // 엑셀 내보내기
+  var bk = C.exportBook({ range: { from: '2026-09', to: '2026-10' }, filter: {}, unit: '원', data: { export: { file: X.name, period: mg.period, records: mg.records, map: mg.map, skipped: [], files: [{ file: X.name, uploadedAt: '2026-11-18', period: mg.period, n: 13, skipped: 0, excluded: 2 }] } } });
+  var names = bk.map(function (b) { return b.name; });
+  ok(names.indexOf('수출_본부월') > 0 && names.indexOf('수출_국가상위10') > 0 && names.indexOf('수출_HS4단위') < 0, 'v1.7.0 엑셀 — 본부월 · 국가상위10 시트, HS 열 없으면 HS4단위 시트 없음', names.join(','));
+  var pv = bk[names.indexOf('수출_본부월')].aoa;
+  eq(pv[0].slice(0, 5), ['본부', '2026.09 건수', '2026.09 FOB', '2026.10 건수', '2026.10 FOB'], 'v1.7.0 엑셀 본부월 머리글');
+  eq(pv[pv.length - 1].slice(0, 7), ['합계', 2, 300000000, 6, 1020000000, 8, 1320000000], 'v1.7.0 엑셀 본부월 합계 줄');
+  ok(bk[0].aoa.some(function (rw) { return rw[0] === '수출 기준' && /GN 제외 · 건수는 신고번호 기준/.test(rw[1]); }), 'v1.7.0 엑셀 안내에 수출 기준');
+  ok(bk[0].aoa.some(function (rw) { return rw[0] === '수출 통관 실적' && rw[6] === 2; }), 'v1.7.0 엑셀 안내 — 제외 GN 수');
+  // 기존 예제(한글 열 · 한글 본부 · 신고번호 없음)는 그대로
+  var old = C.sampleFiles()[1], om = C.mapColumns(old.aoa[0], 'export'), on = C.normalize(C.aoaToRows(old.aoa), 'export', om.map);
+  eq([om.missing, om.map.hs, on.records.length, on.excluded.n, on.unclassified.n], [[], 'HS CODE', 186, 0, 0], 'v1.7.0 기존 수출 예제 그대로 읽힘');
+  var oes = C.exportStats(on.records, { from: '2025-01', to: '2025-10' }, 'hq');
+  eq(oes.n, oes.rows, 'v1.7.0 신고번호 열이 없으면 건수 = 줄 수(예전과 같음)');
+  ok(C.exportReport(on.records, { from: '2025-01', to: '2025-10' }).pivot.every(function (p) { return p.hq !== '본부 미분류' && /\(가상\)$/.test(p.hq); }), 'v1.7.0 기존 예제 본부 이름 그대로 · 미분류 줄 없음');
+  // samples/시험용/ = 예제 정의
+  var XL = require('../lib/xlsx.full.min.js');
+  var wb = XL.read(require('fs').readFileSync(require('path').join(__dirname, '..', 'samples', '시험용', X.name)), { type: 'buffer' });
+  eq([wb.SheetNames[0], XL.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' })], ['Sheet1', X.aoa], 'v1.7.0 samples/시험용/ ' + X.name + ' = 예제 정의');
+  ok(JSON.stringify(X.aoa).indexOf('(가상)') > 0, 'v1.7.0 가짜 예제에 「가상」 표기');
+})();
+console.log('v1.7.0 ' + (passed + failed - v160) + '개 검사');
+console.log('v1.6.0 ' + (v160 - v150) + '개 검사');
 console.log('v1.5.0 ' + (v150 - v146) + '개 검사');
 console.log('v1.4.6 ' + (v146 - v145) + '개 검사');
 console.log('v1.4.5 ' + (v145 - v14) + '개 검사');

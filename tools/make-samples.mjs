@@ -50,3 +50,12 @@ for (const f of [C.sampleRulingCheck(), C.sampleRulingAmounts()]) {
   writeFileSync(join(dir, '시험용', f.name), XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', compression: true }));
   console.log('썼습니다: 시험용/' + f.name, (f.aoa.length - 1) + '줄');
 }
+// (v1.7.0) 시험용 — ERP EXPORT 원본 열 이름(Sheet1 · 55열 · Curr 5개 · HS 열 없음)의 가짜 15줄.
+{
+  const f = C.sampleExportErp();
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(f.aoa), f.sheet);
+  wb.Props = { Title: '시험용 예제(가짜 데이터)', CreatedDate: new Date(Date.UTC(2026, 10, 18)) };
+  writeFileSync(join(dir, '시험용', f.name), XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', compression: true }));
+  console.log('썼습니다: 시험용/' + f.name, f.aoa[0].length + '열 ' + (f.aoa.length - 1) + '줄');
+}

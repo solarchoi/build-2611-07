@@ -92,15 +92,16 @@ srv.listen(0, async function () {
         var r = { from: '2025-01', to: '2025-10' };
         function F(k) { return C.applyFilter(d[k], k, fx).records; }
         var is = C.importStats(F('import'), r, 'hq'), es = C.exportStats(F('export'), r, 'hq'), fs = C.ftaStats(F('import'), 'import', r, 'hq'), xs = C.errorStats(F('errors'), r, 'kind'), rs = C.refundStats(F('refund'), r);
-        return { goods: C.fmtShort(is.goods, '원'), burden: C.fmtPct(is.burden, 2), rate: C.fmtSignedPct(es.rate), util: C.fmtPct(fs.util), err: C.fmtPct(xs.rate, 2), refund: C.fmtShort(rs.amount, '원'), hqs: is.groups.length };
+        var xr = C.exportReport(F('export'), r);
+        return { expAmount: C.fmtShort(xr.total.amount, '원'), expN: C.fmtNum(xr.total.n) + '건', goods: C.fmtShort(is.goods, '원'), burden: C.fmtPct(is.burden, 2), rate: C.fmtSignedPct(es.rate), util: C.fmtPct(fs.util), err: C.fmtPct(xs.rate, 2), refund: C.fmtShort(rs.amount, '원'), hqs: is.groups.length };
       }, f || {});
     }
     var kv = function (k) { return pg.textContent('.kpi[data-k="' + k + '"] .kpi-v'); };
     var ex = await expect();
     ok(await kv('imp-goods') === ex.goods && await kv('imp-burden') === ex.burden, '수입 물자대·관세부담율 카드 = 엔진 계산', ex.goods + ' ' + ex.burden);
-    ok(await kv('exp-rate') === ex.rate && /[+-]\d/.test(ex.rate), '수출 전년 동기 대비 카드 = 엔진 계산', ex.rate);
     ok(/계산: 관세 ÷ 물자대/.test(await pg.textContent('.kpi[data-k="imp-burden"]')), '계산한 값은 계산식 표시');
-    ok(await pg.$$eval('#ch-trade svg.chart', function (t) { return t.length; }) === 4, '수출입 실적 그래프 4개');
+    ok(await pg.$$eval('#ch-trade svg.chart', function (t) { return t.length; }) === 2, 'v1.7.0 수입 실적 그래프 2개(수출은 수출 실적 탭)');
+    ok(await pg.$$eval('#kpi-trade [data-k^="exp-"]', function (t) { return t.length; }) === 0, 'v1.7.0 수입 실적 탭에는 수출 카드가 없다');
     ok(await pg.$$eval('#ch-trade svg.chart rect[fill="#154b6e"]', function (t) { return t.length; }) > 10, '막대가 그려진다');
     ok(await pg.$$eval('table.trade-imp tbody tr:not(.sum)', function (t) { return t.length; }) === ex.hqs, '수입 본부별 표 = 본부 수');
     await pg.selectOption('#by-trade', 'hs4');
@@ -112,6 +113,12 @@ srv.listen(0, async function () {
     var exh = await expect({ hq: hq1 });
     ok(await kv('imp-goods') === exh.goods && exh.goods !== ex.goods, '본부 거르기 → 카드가 그 본부 값으로', hq1 + ' ' + exh.goods);
     await pg.selectOption('#f-hq', '');
+    // (v1.7.0) 수출 실적 탭
+    await pg.click('.tab[data-tab="export"]');
+    ok(await pg.isVisible('#t-export') && await pg.isHidden('#t-trade'), 'v1.7.0 수출 실적 탭');
+    ok(await kv('exp-amount') === ex.expAmount && await kv('exp-n') === ex.expN, 'v1.7.0 수출금액 · 건수 카드 = 엔진 계산', ex.expAmount + ' ' + ex.expN);
+    ok(/GN 제외 · 건수는 신고번호 기준/.test(await pg.textContent('[data-k="exp-basis"]')), 'v1.7.0 기준 문구');
+    ok(await pg.$('table.exp-pivot') && await pg.$('table.exp-country') && /수출입 합계/.test(await pg.textContent('#sum-export')), 'v1.7.0 본부 × 월 · 국가 상위 10 · 수출입 합계');
     await pg.click('.tab[data-tab="fta"]');
     ok(await pg.isVisible('#t-fta') && await pg.isHidden('#t-trade'), 'FTA 탭');
     ok(await kv('import-util') === ex.util, 'FTA 활용률 카드 = 엔진 계산', ex.util);
@@ -231,7 +238,7 @@ srv.listen(0, async function () {
     ok(impRow[4] === '220' && impRow[5] === '1', 'samples/ 수입 파일 220줄 · 합계 줄 1개 건너뜀', impRow.join('|'));
     ok(await pg.$$eval('#d-sets tr[data-kind].flag', function (t) { return t.length; }) === 0 && await kv('imp-goods') === ex.goods, 'samples/ 4종이 예제와 같은 값', await kv('imp-goods'));
     await pg.setViewportSize({ width: 360, height: 800 });
-    for (var tb of ['trade', 'fta', 'refund', 'errors']) {
+    for (var tb of ['trade', 'export', 'fta', 'refund', 'errors']) {
       await pg.click('.tab[data-tab="' + tb + '"]');
       var ov = await pg.evaluate(function () { return document.documentElement.scrollWidth - document.documentElement.clientWidth; });
       ok(ov <= 0, '360px 대시보드 ' + tb + ' 탭 가로 넘침 없음', ov);

@@ -88,3 +88,13 @@ table.ledger input{font:inherit; font-size:13px; padding:4px 6px; border:1px sol
 /* v1.4 — 좁은 화면에서 긴 BL 선택 상자가 화면 밖으로 나가지 않게 */
 #api-bl{max-width:100%;min-width:0;}
 label:has(> #api-bl){min-width:0;max-width:100%;}
+
+/* (v1.7.0) 수입 · 수출 실적 탭 — 수출입 합계 줄 · 본부 미분류 줄 · 설정 */
+.trade-total-line{margin:0 0 12px; padding:9px 14px; border-radius:9px; background:#eef6fa; border:1px solid #9cc3d8; font-size:14px; color:#0b3a4f;}
+.trade-total-line .tt-v{font-size:18px; font-weight:750; color:var(--brand-deep); font-variant-numeric:tabular-nums; margin:0 6px;}
+.trade-total-line small{color:var(--sub);}
+tr.uncl td{background:#fff4e0;}
+table.exp-pivot th{white-space:nowrap;} table.exp-pivot th small{font-weight:600; color:var(--sub);}
+details.settings{margin:12px 0; border:1px solid var(--line); border-radius:10px; padding:8px 14px; background:#fbfcfd;}
+details.settings summary{cursor:pointer; font-weight:700; min-height:32px; display:flex; align-items:center;}
+table.set-plant input{font:inherit; font-size:13.5px; padding:4px 6px; border:1px solid var(--line); border-radius:6px; width:100%; min-width:90px;}

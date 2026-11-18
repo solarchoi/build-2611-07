@@ -3,14 +3,18 @@
   'use strict';
   var $ = function (id) { return document.getElementById(id); };
   var C = window.Customs;
-  var LS = { data: 'b2611-07.dash', unit: 'b2611-07.dash.unit', kinds: 'b2611-07.dash.kinds' };
+  var LS = { data: 'b2611-07.dash', unit: 'b2611-07.dash.unit', kinds: 'b2611-07.dash.kinds', settings: 'b2611-07.dash.settings' };
+  // (v1.7.0) 수출 설정(Plant → 본부 표 · GN 제외) — 이 브라우저에만 둔다. 값 정리는 customs.js(exportSettings).
+  function loadSettings() { try { return C.exportSettings(JSON.parse(localStorage.getItem(LS.settings) || 'null')); } catch (e) { return C.exportSettings(null); } }
+  function saveSettings(raw) { state.settings = C.exportSettings(raw); try { localStorage.setItem(LS.settings, JSON.stringify(raw)); } catch (e) { /* 기억 못 해도 이번 화면에는 반영 */ } }
   // 사람이 고른 종류 — { '머리글|머리글…': kind }. 같은 모양의 파일을 다음에 올리면 이 종류로 넣는다.
   function kindPrefs() { try { return JSON.parse(localStorage.getItem(LS.kinds) || '{}') || {}; } catch (e) { return {}; } }
   function setKindPref(headers, kind) { try { var p = kindPrefs(); p[headers.join('|')] = kind; localStorage.setItem(LS.kinds, JSON.stringify(p)); } catch (e) { /* 기억 못 해도 이번 화면에는 반영된다 */ } }
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
   // (v1.5.0) sets[kind] = { files: [{ name, file, uploadedAt, headers, aoa(머리글 포함), offset, override, reason }], m: 합친 결과(build 가 붙임) }
   // 같은 종류 파일은 모두 더한다. 이름이 같은 파일은 그 파일만 바꾼다. 합치는 규칙은 customs.js(upsertFile · mergeFiles).
-  var state = { sets: {}, pending: [], filter: {}, range: null, tab: 'trade', unit: localStorage.getItem(LS.unit) || '원', open: {} };
+  var state = { sets: {}, pending: [], filter: {}, range: null, tab: 'trade', unit: localStorage.getItem(LS.unit) || '원', open: {}, settings: null };
+  state.settings = loadSettings();
   function openKey(k, f) { return k + '|' + C.fileKey(f); }
   function label(k) { return C.DATASETS[k].label; }
 
@@ -73,7 +77,7 @@
       if (!sheets.length) { notes.push(esc(f.name) + ' — 읽을 표가 없습니다.'); warn = true; return; }
       var best = null;
       sheets.forEach(function (s) { var d = C.detectKind(s.aoa[0].map(String), f.name + ' ' + s.name); if (!best || d.ratio > best.d.ratio) best = { s: s, d: d }; });
-      var item = { name: f.name, file: f.name + (sheets.length > 1 ? ' · ' + best.s.name : ''), uploadedAt: now(), headers: best.s.aoa[0].map(function (h, i) { return String(h).trim() || ('열' + (i + 1)); }), aoa: best.s.aoa, offset: best.s.offset, override: {} };
+      var item = { name: f.name, file: f.name + (sheets.length > 1 ? ' · ' + best.s.name : ''), uploadedAt: now(), headers: C.uniqueHeaders(best.s.aoa[0]), aoa: best.s.aoa, offset: best.s.offset, override: {} };
       // 사람이 전에 같은 머리글의 파일 종류를 바꿔 준 적이 있으면 그 종류가 앞선다
       var pref = kindPrefs()[item.headers.join('|')];
       if (pref && C.DATASETS[pref]) best.d = { kind: pref, reason: '전에 직접 고른 종류' };
@@ -109,7 +113,7 @@
   }
 
   /* ---------- 계산 묶기(엔진 호출) ---------- */
-  function build(k) { var s = state.sets[k]; s.m = C.mergeFiles(k, s.files); }
+  function build(k) { var s = state.sets[k]; s.m = C.mergeFiles(k, s.files, state.settings); }
   function ready(k) { return state.sets[k] && state.sets[k].m && state.sets[k].m.ok ? state.sets[k] : null; }
   // 다시 계산하고 그린다. 기억하지 못했으면 그 알림 문구(HTML)를 돌려준다 — 부른 쪽이 안내 문구 뒤에 붙인다.
   function rebuild(resetRange) {
@@ -143,7 +147,7 @@
   function restore() {
     try {
       var j = C.migrateSaved(JSON.parse(localStorage.getItem(LS.data) || 'null'));
-      Object.keys(j.sets).forEach(function (k) { state.sets[k] = j.sets[k]; });
+      Object.keys(j.sets).forEach(function (k) { j.sets[k].files.forEach(function (f) { f.headers = C.uniqueHeaders(f.headers); }); state.sets[k] = j.sets[k]; });
       return Object.keys(state.sets).length > 0;
     } catch (e) { state.sets = {}; return false; }
   }
@@ -162,7 +166,7 @@
       }).join('') + '</ul></div>';
     }
     if (ks.length) {
-      h += '<div class="tablewrap" style="margin-top:12px"><table class="sets"><thead><tr><th>자료</th><th>파일</th><th>올린 날짜</th><th>데이터 기간</th><th>읽은 줄</th><th>건너뛴 줄</th><th>열 확인</th></tr></thead><tbody>';
+      h += '<div class="tablewrap" style="margin-top:12px"><table class="sets"><thead><tr><th>자료</th><th>파일</th><th>자료 기준일<br><small class="sub">(파일을 올린 날)</small></th><th>데이터 기간</th><th>읽은 줄</th><th>건너뛴 줄</th><th>열 확인</th></tr></thead><tbody>';
       ks.forEach(function (k) {
         var s = state.sets[k], m = s.m;
         s.files.forEach(function (f, i) {
@@ -171,11 +175,15 @@
           h += '<tr data-kind="' + k + '" data-file="' + i + '"' + (miss.length ? ' class="flag"' : '') + '><td><b>' + esc(label(k)) + '</b><br><small class="sub">' + esc(C.DATASETS[k].source) + ' · ' + esc(C.DATASETS[k].cycle) + (f.reason ? ' · 근거: ' + esc(f.reason) : '') + '</small>' +
             '<br><label class="sub"><small>종류 바꾸기</small> <select data-rekind="' + k + '" data-i="' + i + '" aria-label="' + esc(f.file) + ' 종류 바꾸기">' +
             C.KINDS.map(function (o) { return '<option value="' + o + '"' + (o === k ? ' selected' : '') + '>' + esc(label(o)) + '</option>'; }).join('') + '</select></label></td>' +
-            '<td class="wrapcell">' + esc(f.file) + '</td><td>' + esc(f.uploadedAt) + '</td><td>' + plabel(n && n.period) + '</td>' +
+            '<td class="wrapcell">' + esc(f.file) + '</td><td data-k="asof" title="올린 시각 ' + esc(f.uploadedAt) + '">' + esc(String(f.uploadedAt || '').slice(0, 10) || '—') + '</td><td>' + plabel(n && n.period) + '</td>' +
             '<td class="num">' + (n ? C.fmtNum(n.records.length) : '—') + '</td><td class="num">' + (n ? C.fmtNum(n.skipped.length) : '—') + '</td>' +
             '<td>' + (miss.length ? '<span class="tag bad-t">못 찾은 열 ' + miss.length + '</span>' : '<span class="tag ok-t">필수 열 모두 찾음</span>') +
             (ov.length ? ' <span class="tag bad-t" title="' + esc(ov.map(function (o) { return (o.a === p.file ? o.b : o.a) + ' (' + C.monthLabel(o.from) + ' ~ ' + C.monthLabel(o.to) + ')'; }).join(', ')) + '">기간 겹침 — 중복 집계일 수 있음</span>' : '') +
             (n && n.unknownCodes && n.unknownCodes.length ? ' <span class="tag bad-t" title="본부 번호표에 없는 번호 — 열 확인을 눌러 보세요">새 제품그룹 번호 ' + esc(n.unknownCodes.join('·')) + '</span>' : '') +
+            // (v1.7.0) 수출 — 뺀 줄 · 확인할 줄
+            (n && n.excluded && n.excluded.n ? ' <span class="tag ah-t" data-k="gn" title="결제방법 GN 줄은 실적에서 뺍니다(설정에서 끌 수 있음)">제외 GN ' + C.fmtNum(n.excluded.n) + '줄</span>' : '') +
+            (n && n.declBad && n.declBad.n ? ' <span class="tag ah-t" title="빈칸이거나 형식이 다른 신고번호 — 건수에서 빼고 금액은 더합니다">신고번호 확인 필요 ' + C.fmtNum(n.declBad.n) + '줄</span>' : '') +
+            (n && n.unclassified && n.unclassified.n ? ' <span class="tag bad-t" title="Plant 번호표에 없는 값 · 빈칸 — 설정에서 표를 고치면 본부로 셉니다">' + esc(C.HQ_UNCLASSIFIED) + ' ' + C.fmtNum(n.unclassified.n) + '줄</span>' : '') +
             ' <button class="x" data-toggle="' + k + '" data-i="' + i + '">' + (open ? '접기' : '열 확인') + '</button>' +
             ' <button class="x" data-drop-file="' + k + '" data-i="' + i + '" aria-label="' + esc(f.file) + ' 빼기">이 파일 빼기</button></td></tr>';
           if (open) h += '<tr class="maprow"><td colspan="7">' + mapTable(k, i) + '</td></tr>';
@@ -186,10 +194,12 @@
         h += '<tr class="sum" data-kind-sum="' + k + '"><td><b>' + esc(label(k)) + ' 합계</b></td><td>파일 ' + s.files.length + '개</td><td></td><td>' + plabel(m.period) + '</td>' +
           '<td class="num">' + C.fmtNum(m.records.length) + '</td><td class="num">' + C.fmtNum(m.skipped.length) + '</td><td>' +
           (bad ? '<span class="tag bad-t">못 찾은 열이 있는 파일 ' + bad + '개 — 열을 고르거나 그 파일을 빼면 계산합니다</span>' : '<span class="tag ok-t">모두 더해 계산</span>') +
+          (m.excluded ? ' <span class="tag ah-t">제외 GN ' + C.fmtNum(m.excluded) + '줄</span>' : '') +
           (m.overlaps.length ? ' <span class="tag bad-t">기간이 겹칩니다. 중복 집계일 수 있습니다</span>' : '') +
           (part.length ? '<br><small class="sub">' + esc(part.join(' / ')) + '</small>' : '') + '</td></tr>';
       });
-      h += '</tbody></table></div><p class="sub" style="margin-top:8px">같은 종류의 엑셀은 따로 올리든 함께 올리든 모두 더해 계산합니다(머리글이 달라도 파일마다 열을 짝지어 합칩니다). 이름이 같은 파일을 다시 올리면 더하지 않고 그 파일만 바꿉니다. 데이터 기간이 겹치는 파일은 중복 집계일 수 있어 알려 드립니다. 필요 없는 파일은 「이 파일 빼기」로 뺍니다.</p>';
+      h += '</tbody></table></div><p class="sub" style="margin-top:8px">같은 종류의 엑셀은 따로 올리든 함께 올리든 모두 더해 계산합니다(머리글이 달라도 파일마다 열을 짝지어 합칩니다). 이름이 같은 파일을 다시 올리면 더하지 않고 그 파일만 바꿉니다. 데이터 기간이 겹치는 파일은 중복 집계일 수 있어 알려 드립니다. 필요 없는 파일은 「이 파일 빼기」로 뺍니다.</p>' +
+        '<p class="sub" data-k="erp-note" style="margin-top:4px">자료 기준일 = 파일을 올린 날입니다. <b>ERP 는 월 마감 뒤에도 신고가 더해지므로 같은 달 파일을 다시 올리면 숫자가 바뀔 수 있습니다.</b></p>';
     }
     $('d-sets').innerHTML = h;
     $('d-view').hidden = !state.range;
@@ -197,11 +207,12 @@
   function mapTable(k, i) {
     var f = state.sets[k].files[i], p = state.sets[k].m.files[i], res = p.res, n = p.norm;
     var h = (res.missing.length ? '<div class="warn">이 열을 찾지 못했습니다: <b>' + esc(res.missing.join(', ')) + '</b>. 아래에서 엑셀의 어느 열인지 골라 주세요. 고르기 전에는 이 종류를 집계하지 않습니다.</div>' : '') +
-      '<table class="map"><thead><tr><th>필요한 항목</th><th>엑셀 열</th><th>근거</th><th>예시 값</th></tr></thead><tbody>';
+      '<table class="map"><thead><tr><th>필요한 항목</th><th>엑셀 열</th><th>열 번호</th><th>근거</th><th>예시 값</th></tr></thead><tbody>';
     C.DATASETS[k].fields.forEach(function (fd) {
-      var cur = res.map[fd.key] || '';
+      var cur = res.map[fd.key] || '', col = cur ? f.headers.indexOf(cur) + 1 : 0;
       h += '<tr' + (fd.req && !cur ? ' class="flag"' : '') + '><td>' + esc(fd.label) + (fd.req ? ' <small class="req">필수</small>' : ' <small class="sub">선택</small>') + '</td>' +
         '<td><select data-map="' + k + '" data-i="' + i + '" data-f="' + fd.key + '"><option value="">(없음)</option>' + f.headers.map(function (hd) { return '<option' + (hd === cur ? ' selected' : '') + '>' + esc(hd) + '</option>'; }).join('') + '</select></td>' +
+        '<td class="num" data-k="col">' + (col ? col + '번째' : '—') + '</td>' +
         '<td>' + esc(REASON(res.score[fd.key])) + '</td><td class="wrapcell">' + esc(cur ? example(f, cur) : '') + '</td></tr>';
     });
     h += '</tbody></table>';
@@ -304,9 +315,19 @@
   function signCls(v) { return v == null ? '' : v < 0 ? ' class="neg"' : v > 0 ? ' class="pos"' : ''; }
   function sp(v, txt) { return '<span' + signCls(v) + '>' + esc(txt) + '</span>'; }
 
+  // (v1.7.0) 두 탭 맨 위 「수출입 합계」 한 줄 — 계산은 C.tradeTotal
+  function tradeTotalLine() {
+    var fi = filtered('import'), fe = filtered('export'), t = C.tradeTotal(fi ? fi.recs : null, fe ? fe.recs : null, state.range);
+    var parts = (fi ? '수입 물자대 ' + esc(money(t.importGoods)) + ' · ' + C.fmtNum(t.importN) + '건' : '수입 자료 없음') + ' + ' +
+      (fe ? '수출금액 ' + esc(money(t.exportAmount)) + ' · ' + C.fmtNum(t.exportN) + '건' : '수출 자료 없음');
+    return '<p class="trade-total-line" data-k="trade-total"><b>수출입 합계</b> <span class="tt-v">' + (t.both ? esc(money(t.amount)) + ' · ' + C.fmtNum(t.n) + '건' : '—') + '</span>' +
+      ' <small>(' + parts + (t.both ? '' : ' — 두 자료가 모두 있어야 합계를 냅니다') + ' · 수출 건수는 신고번호 기준)</small></p>';
+  }
+  // 「수입 실적」 탭 — v1.6.0 까지 「수출입 실적」 탭의 수입 부분을 그대로 옮겼다
   function renderTrade() {
     var by = $('by-trade').value, top = +$('top-trade').value, BYL = C.BY[by], k = '', ch = '', tb = '';
-    var fi = filtered('import'), fe = filtered('export'), months = C.monthsBetween(state.range.from, state.range.to);
+    var fi = filtered('import'), months = C.monthsBetween(state.range.from, state.range.to);
+    $('sum-trade').innerHTML = tradeTotalLine();
     if (fi) {
       var s = C.importStats(fi.recs, state.range, by);
       k += kpi('수입 물자대', money(s.goods), C.fmtNum(s.n) + '건', '합계', 'imp-goods') + kpi('관세', money(s.duty), '', '합계', 'imp-duty') +
@@ -318,19 +339,111 @@
         table([esc(BYL), '건수', '물자대', '관세', '관세부담율'], t.rows.concat(t.rest ? [t.rest] : []).map(function (g) { return { cls: g === t.rest ? 'rest' : '', cells: [esc(g.key), n0(g.n), n0(g.goods), n0(g.duty), esc(C.fmtPct(g.burden, 2))] }; }),
           ['합계', n0(s.n), n0(s.goods), n0(s.duty), esc(C.fmtPct(s.burden, 2))], 'trade-imp');
     } else k += empty('import');
-    if (fe) {
-      var e = C.exportStats(fe.recs, state.range, by);
-      k += kpi('수출금액', money(e.amount), '전년 동기 ' + esc(money(e.prev)), '합계', 'exp-amount') +
-        kpi('수출 전년 동기 대비', C.fmtSignedPct(e.rate), sp(e.diff, (e.diff > 0 ? '+' : '') + money(e.diff)) + (e.hasPrev ? '' : ' · 전년 데이터 없음'), '계산: (올해 − 전년) ÷ 전년', 'exp-rate');
-      ch += monthChart('월별 수출금액 — 올해와 전년 동기', months, [{ name: '올해', color: COL[2], values: e.monthly.map(function (m) { return m.amount; }), fmt: money }, { name: '전년 동기', color: PREV, dash: true, values: e.monthly.map(function (m) { return m.prev; }), fmt: money }], 'line');
-      var te = C.topN(e.groups, top);
-      ch += hbar(BYL + '별 수출금액 상위 ' + top, te.rows.map(function (g) { return { label: g.key, value: g.amount }; }), money, COL[2]);
-      tb += '<h3 class="tb-h">수출 — ' + esc(BYL) + '별 수출금액 전년 동기 대비</h3>' + ignoredNote(fe.ignored) +
-        table([esc(BYL), '건수', '수출금액', '전년 동기', '증감', '증감률'], te.rows.concat(te.rest ? [te.rest] : []).map(function (g) {
-          return { cls: g === te.rest ? 'rest' : '', cells: [esc(g.key), n0(g.n), n0(g.amount), n0(g.prev), sp(g.diff, C.fmtSigned(g.diff)), sp(g.rate, C.fmtSignedPct(g.rate))] };
-        }), ['합계', n0(e.n), n0(e.amount), n0(e.prev), sp(e.diff, C.fmtSigned(e.diff)), sp(e.rate, C.fmtSignedPct(e.rate))], 'trade-exp');
-    } else k += empty('export');
     $('kpi-trade').innerHTML = k; $('ch-trade').innerHTML = ch; $('tb-trade').innerHTML = tb;
+  }
+  // (v1.7.0) 월별 금액 막대 + 건수 선(오른쪽 축)
+  function comboChart(title, months, amounts, counts) {
+    var W = 640, H = 250, L = 62, R = 46, T = 30, B = 30, iw = W - L - R, ih = H - T - B;
+    var maxA = niceMax(Math.max.apply(null, [0].concat(amounts.filter(function (v) { return v != null; })))), maxN = niceMax(Math.max.apply(null, [0].concat(counts)));
+    var fmt = axisFmt('money'), step = iw / Math.max(1, months.length), ya = function (v) { return T + ih - (v / maxA) * ih; }, yn = function (v) { return T + ih - (v / maxN) * ih; };
+    var b = legend([{ name: '금액(FOB)', color: COL[2] }, { name: '건수', color: COL[3] }], L);
+    for (var g = 0; g <= 4; g++) {
+      b += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + ya(maxA * g / 4) + '" y2="' + ya(maxA * g / 4) + '" class="grid"/><text x="' + (L - 6) + '" y="' + (ya(maxA * g / 4) + 4) + '" class="ax" text-anchor="end">' + esc(fmt(maxA * g / 4)) + '</text>' +
+        '<text x="' + (W - R + 6) + '" y="' + (yn(maxN * g / 4) + 4) + '" class="ax">' + esc(C.fmtNum(maxN * g / 4)) + '</text>';
+    }
+    var every = Math.ceil(months.length / 12), bw = Math.max(2, step * 0.6), pts = [];
+    months.forEach(function (m, i) {
+      var cx = L + step * i + step / 2;
+      if (i % every === 0) b += '<text x="' + cx + '" y="' + (H - 10) + '" class="ax" text-anchor="middle">' + esc(m.slice(2, 4) + '.' + m.slice(5, 7)) + '</text>';
+      var v = amounts[i]; if (v != null && v > 0) b += '<rect x="' + (cx - bw / 2).toFixed(1) + '" y="' + ya(v).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + (T + ih - ya(v)).toFixed(1) + '" fill="' + COL[2] + '"><title>' + esc(C.monthLabel(m) + ' 금액 ' + money(v)) + '</title></rect>';
+      pts.push([cx, yn(counts[i] || 0), counts[i] || 0, m]);
+    });
+    if (pts.length) {
+      b += '<polyline fill="none" stroke="' + COL[3] + '" stroke-width="2.4" points="' + pts.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' ') + '"/>';
+      pts.forEach(function (p) { b += '<circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="3" fill="' + COL[3] + '"><title>' + esc(C.monthLabel(p[3]) + ' 건수 ' + C.fmtNum(p[2]) + '건') + '</title></circle>'; });
+    }
+    return frame(title, '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(title) + '">' + b + '</svg>');
+  }
+  // (v1.7.0) 「수출 실적」 탭 — 계산은 C.exportReport · C.exportStats. 여기서는 그리기만 한다.
+  function renderExport() {
+    $('sum-export').innerHTML = tradeTotalLine();
+    var fe = filtered('export');
+    if (!fe) { $('kpi-export').innerHTML = empty('export'); ['ch-export', 'tb-export-report', 'ch-export-by', 'tb-export'].forEach(function (id) { $(id).innerHTML = ''; }); return; }
+    var m = fe.set.m, hasHs = !!m.map.hs, bySel = $('by-export'), hsOpt = bySel.querySelector('option[value="hs4"]');
+    hsOpt.disabled = !hasHs; hsOpt.textContent = hasHs ? 'HS 4단위' : 'HS 4단위(HS 열 없음)';
+    if (!hasHs && bySel.value === 'hs4') bySel.value = 'hq';
+    var by = bySel.value, top = +$('top-export').value, BYL = C.BY[by];
+    var r = C.exportReport(fe.recs, state.range, state.settings), e = C.exportStats(fe.recs, state.range, by);
+    var base = C.monthLabel(r.base), k = '', ch = '', tb = '';
+    var notes = ['<b>기준</b> ' + esc(r.basis), '전월 · 전년 동월 대비는 기준월 <b>' + base + '</b>(조회 기간의 마지막 달)'];
+    if (m.excluded) notes.push('제외 GN ' + C.fmtNum(m.excluded) + '줄(파일 전체)');
+    else if (state.settings.excludeGN === false) notes.push('설정에서 GN 제외를 껐습니다');
+    if (r.total.badN) notes.push('신고번호 확인 필요 ' + C.fmtNum(r.total.badN) + '줄 — 건수에서 빼고 금액은 더함');
+    if (r.unclassified.rows) notes.push('<b>' + esc(C.HQ_UNCLASSIFIED) + ' ' + C.fmtNum(r.unclassified.n) + '건 · ' + esc(money(r.unclassified.amount)) + '</b>' + (r.unclassified.codes.length ? '(Plant ' + esc(r.unclassified.codes.join('·')) + ')' : '(Plant 빈칸)') + ' — 설정에서 Plant 표를 고치면 본부로 셉니다');
+    k += '<p class="rul-basis" data-k="exp-basis">' + notes.join(' · ') + '</p>';
+    function vsSub(v, label) {
+      if (v.amount.prev == null && v.amount.rate == null && v.n.prev == null) return C.monthLabel(v.month) + ' 자료 없음';
+      return base + ' vs ' + C.monthLabel(v.month) + ' · ' + sp(v.amount.diff, (v.amount.diff > 0 ? '+' : '') + money(v.amount.diff)) + ' · 건수 ' + esc(C.fmtSigned(v.n.diff)) + '건';
+    }
+    k += kpi('수출금액(FOB 원화)', money(r.total.amount), C.monthLabel(state.range.from) + ' ~ ' + C.monthLabel(state.range.to), '합계 · ' + (state.settings.excludeGN === false ? 'GN 포함' : 'GN 제외'), 'exp-amount') +
+      kpi('수출 건수', C.fmtNum(r.total.n) + '건', '신고번호 고유 개수' + (r.total.badN ? ' · 확인 필요 ' + r.total.badN + '줄 제외' : ''), '같은 신고번호 여러 줄 = 1건', 'exp-n') +
+      kpi('전월 대비', C.fmtSignedPct(r.mom.amount.rate), vsSub(r.mom), '계산: (기준월 − 전월) ÷ 전월', 'exp-mom') +
+      kpi('전년 동월 대비', C.fmtSignedPct(r.yoy.amount.rate), vsSub(r.yoy), '계산: (기준월 − 전년 같은 달) ÷ 전년 같은 달', 'exp-yoy');
+    ch += comboChart('월별 수출금액 · 건수', r.months, r.monthly.map(function (c) { return c.amount; }), r.monthly.map(function (c) { return c.n; }));
+    ch += hbar('국가별 수출금액 상위 10', r.countries.map(function (c) { return { label: c.key, value: c.amount }; }), money, COL[2]);
+    // 표 ① 본부 × 월(월말 보고 모양)
+    var head = ['본부'], mh = r.months.map(C.monthLabel);
+    mh.forEach(function (lab) { head.push(esc(lab) + '<br><small>건수</small>', esc(lab) + '<br><small>FOB</small>'); });
+    head.push('기간 합계<br><small>건수</small>', '기간 합계<br><small>FOB</small>', '전월 대비<br><small>' + base + ' FOB</small>');
+    var rows = r.pivot.map(function (p) {
+      var c = [esc(p.hq)];
+      p.months.forEach(function (x) { c.push(n0(x.n), n0(x.amount)); });
+      c.push(n0(p.total.n), n0(p.total.amount), sp(p.mom.amount.rate, C.fmtSignedPct(p.mom.amount.rate)));
+      return { cls: p.unclassified ? 'uncl' : '', cells: c };
+    });
+    var foot = ['합계']; r.monthly.forEach(function (x) { foot.push(n0(x.n), n0(x.amount)); });
+    foot.push(n0(r.total.n), n0(r.total.amount), sp(r.mom.amount.rate, C.fmtSignedPct(r.mom.amount.rate)));
+    tb += '<h3 class="tb-h">① 본부 × 월 — 건수 · FOB(원)</h3><p class="sub">' + esc(r.basis) + ' · 본부 순서는 설정의 Plant 표 → 그 밖 → ' + esc(C.HQ_UNCLASSIFIED) + '. 본부별 건수를 더하면 합계보다 클 수 있습니다(한 신고번호가 여러 본부에 걸칠 때).</p>' + ignoredNote(fe.ignored) +
+      table(head, rows, foot, 'exp-pivot');
+    // 표 ② 국가 상위 10
+    tb += '<h3 class="tb-h">② 국가(Destination) 상위 10 — 금액 큰 순 · 비중</h3>' +
+      table(['국가', '건수', 'FOB(원)', '비중'], r.countries.concat(r.countryRest ? [r.countryRest] : []).map(function (c) { return { cls: c === r.countryRest ? 'rest' : '', cells: [esc(c.key), n0(c.n), n0(c.amount), esc(C.fmtPct(c.share))] }; }),
+        ['합계(' + r.countryN + '개국)', n0(r.total.n), n0(r.total.amount), r.total.amount ? '100.0%' : '—'], 'exp-country');
+    $('kpi-export').innerHTML = k; $('ch-export').innerHTML = ch; $('tb-export-report').innerHTML = tb;
+    // 묶음별 전년 동기 대비(v1.6.0 까지의 수출 표) — 그대로 아래에 둔다
+    var months = C.monthsBetween(state.range.from, state.range.to), te = C.topN(e.groups, top), cb = '';
+    cb += monthChart('월별 수출금액 — 올해와 전년 동기', months, [{ name: '올해', color: COL[2], values: e.monthly.map(function (x) { return x.amount; }), fmt: money }, { name: '전년 동기', color: PREV, dash: true, values: e.monthly.map(function (x) { return x.prev; }), fmt: money }], 'line');
+    cb += hbar(BYL + '별 수출금액 상위 ' + top, te.rows.map(function (g) { return { label: g.key, value: g.amount }; }), money, COL[2]);
+    $('ch-export-by').innerHTML = cb;
+    $('tb-export').innerHTML = '<h3 class="tb-h">' + esc(BYL) + '별 수출금액 전년 동기 대비</h3>' + (e.hasPrev ? '' : '<p class="sub">전년 동기 자료가 없습니다.</p>') +
+      table([esc(BYL), '건수', '수출금액', '전년 동기', '증감', '증감률'], te.rows.concat(te.rest ? [te.rest] : []).map(function (g) {
+        return { cls: g === te.rest ? 'rest' : '', cells: [esc(g.key), n0(g.n), n0(g.amount), n0(g.prev), sp(g.diff, C.fmtSigned(g.diff)), sp(g.rate, C.fmtSignedPct(g.rate))] };
+      }), ['합계', n0(e.n), n0(e.amount), n0(e.prev), sp(e.diff, C.fmtSigned(e.diff)), sp(e.rate, C.fmtSignedPct(e.rate))], 'trade-exp');
+  }
+  // (v1.7.0) 설정 — Plant → 본부 표 · GN 제외. 값 정리는 C.exportSettings, 저장은 이 브라우저.
+  function renderSettings() {
+    var st = state.settings;
+    $('d-settings-body').innerHTML = '<label class="chk"><input type="checkbox" id="set-gn"' + (st.excludeGN ? ' checked' : '') + '> 결제방법(Payment) <b>' + esc(C.EXPORT_EXCLUDE_PAYMENT) + '</b> 줄을 수출 실적에서 빼기(기본 켜짐)</label>' +
+      '<p class="sub" style="margin:8px 0 4px">수출 Plant 번호 → 본부. 표에 없는 번호 · 빈칸은 「' + esc(C.HQ_UNCLASSIFIED) + '」로 따로 셉니다. 글자로 적힌 본부 이름은 그대로 둡니다.</p>' +
+      '<div class="tablewrap"><table class="set-plant"><thead><tr><th>Plant 번호</th><th>본부</th><th></th></tr></thead><tbody>' +
+      st.rows.map(function (r, i) { return '<tr><td><input type="text" data-set="code" value="' + esc(r.code) + '" aria-label="Plant 번호 ' + (i + 1) + '"></td><td><input type="text" data-set="hq" value="' + esc(r.hq) + '" aria-label="본부 ' + (i + 1) + '"></td><td><button class="x" type="button" data-set-del="' + i + '">빼기</button></td></tr>'; }).join('') +
+      '<tr class="new"><td><input type="text" data-set-new="code" placeholder="새 번호"></td><td><input type="text" data-set-new="hq" placeholder="본부 이름"></td><td><button class="x" type="button" data-set-add>더하기</button></td></tr>' +
+      '</tbody></table></div><div class="btnrow" style="margin-top:8px"><button class="btn" type="button" data-set-reset>기본 표로 되돌리기</button>' +
+      '<span class="sub">' + (st.custom ? '고친 표를 쓰는 중 · ' : '기본 표 · ') + '이 브라우저에만 저장됩니다(다른 PC · 다른 사람은 기본 표)</span></div>';
+  }
+  function settingsFromForm(extra) {
+    var rows = [];
+    document.querySelectorAll('#d-settings-body table.set-plant tbody tr:not(.new)').forEach(function (tr, i) {
+      if (extra && extra.del === i) return;
+      rows.push({ code: tr.querySelector('[data-set="code"]').value, hq: tr.querySelector('[data-set="hq"]').value });
+    });
+    if (extra && extra.add) rows.push(extra.add);
+    return { plant: rows, excludeGN: $('set-gn').checked };
+  }
+  function applySettings(raw, text) {
+    saveSettings(raw); renderSettings();
+    var note = Object.keys(state.sets).length ? rebuild(false) : '';
+    msg(text + (Object.keys(state.sets).length ? ' 올린 수출 자료를 다시 계산했습니다.' : '') + note, note ? 'warn' : 'ok');
   }
   function renderFta() {
     var by = $('by-fta').value, BYL = C.BY[by], k = '', ch = '', tb = '', months = C.monthsBetween(state.range.from, state.range.to), monthly = [];
@@ -471,11 +584,11 @@
       '<p class="sub">관세율은 올린 파일의 값을 그대로 보입니다. 물품설명서 초안에는 세율을 싣지 않는 규칙이 그대로입니다.</p>';
     $('kpi-ruling').innerHTML = k; $('ch-ruling').innerHTML = ch; $('tb-ruling').innerHTML = tb;
   }
-  var RENDER = { trade: renderTrade, fta: renderFta, refund: renderRefund, errors: renderErrors, ruling: renderRuling };
+  var RENDER = { trade: renderTrade, export: renderExport, fta: renderFta, refund: renderRefund, errors: renderErrors, ruling: renderRuling };
   function renderTab() {
     if (!state.range) return;
     document.querySelectorAll('.tab').forEach(function (b) { var on = b.dataset.tab === state.tab; b.setAttribute('aria-selected', on ? 'true' : 'false'); b.classList.toggle('on', on); });
-    ['trade', 'fta', 'refund', 'errors', 'ruling'].forEach(function (t) { $('t-' + t).hidden = t !== state.tab; });
+    Object.keys(RENDER).forEach(function (t) { $('t-' + t).hidden = t !== state.tab; });
     RENDER[state.tab]();
   }
 
@@ -486,9 +599,9 @@
       var s = ready(k); if (!s) return;
       var m = s.m;
       data[k] = { file: m.files.map(function (p) { return p.file; }).join(' + '), period: m.period, records: m.records, map: m.map, skipped: m.skipped,
-        files: m.files.map(function (p) { return { file: p.file, uploadedAt: p.uploadedAt, period: p.period, n: p.norm.records.length, skipped: p.norm.skipped.length }; }) };
+        files: m.files.map(function (p) { return { file: p.file, uploadedAt: p.uploadedAt, period: p.period, n: p.norm.records.length, skipped: p.norm.skipped.length, excluded: p.excluded }; }) };
     });
-    var book = C.exportBook({ range: state.range, rulingRange: state.rrange, filter: state.filter, unit: state.unit, data: data });
+    var book = C.exportBook({ range: state.range, rulingRange: state.rrange, filter: state.filter, unit: state.unit, data: data, exportOpts: state.settings });
     var wb = XLSX.utils.book_new();
     book.forEach(function (sh) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sh.aoa), sh.name); });
     XLSX.writeFile(wb, '수출입통관_집계_' + state.range.from.replace('-', '') + '-' + state.range.to.replace('-', '') + '.xlsx');
@@ -528,7 +641,28 @@
   $('btn-f-reset').addEventListener('click', function () { state.range = C.defaultRange(state.period); state.rrange = C.rulingDefaultRange(state.rperiod); state.filter = {}; renderFilter(); renderTab(); });
   $('btn-dash-xlsx').addEventListener('click', exportXlsx);
   document.querySelector('.tabs').addEventListener('click', function (e) { var b = e.target.closest('.tab'); if (b) { state.tab = b.dataset.tab; renderFilter(); renderTab(); } });
-  ['by-trade', 'top-trade', 'by-fta', 'by-ruling', 'sort-ruling'].forEach(function (id) { $(id).addEventListener('change', renderTab); });
+  ['by-trade', 'top-trade', 'by-export', 'top-export', 'by-fta', 'by-ruling', 'sort-ruling'].forEach(function (id) { $(id).addEventListener('change', renderTab); });
+  // (v1.7.0) 설정
+  $('d-settings-body').addEventListener('change', function (e) {
+    var t = e.target;
+    if (t.id === 'set-gn') applySettings(settingsFromForm(), '결제방법 ' + C.EXPORT_EXCLUDE_PAYMENT + ' 줄 ' + (t.checked ? '빼기를 켰습니다.' : '빼기를 껐습니다(GN 포함).'));
+    else if (t.dataset.set) applySettings(settingsFromForm(), 'Plant → 본부 표를 고쳤습니다.');
+  });
+  $('d-settings-body').addEventListener('click', function (e) {
+    var t = e.target;
+    if (t.dataset.setDel != null) applySettings(settingsFromForm({ del: +t.dataset.setDel }), 'Plant 번호 한 줄을 뺐습니다.');
+    else if (t.dataset.setAdd != null) {
+      var c = document.querySelector('[data-set-new="code"]').value.trim(), h = document.querySelector('[data-set-new="hq"]').value.trim();
+      if (!c || !h) { msg('새 Plant 번호와 본부 이름을 모두 적어 주세요.', 'warn'); return; }
+      applySettings(settingsFromForm({ add: { code: c, hq: h } }), 'Plant ' + esc(c) + ' → ' + esc(h) + ' 을(를) 더했습니다.');
+    } else if (t.dataset.setReset != null) {
+      try { localStorage.removeItem(LS.settings); } catch (er) { /* 지우지 못해도 화면은 기본 표 */ }
+      state.settings = C.exportSettings(null); renderSettings();
+      var note = Object.keys(state.sets).length ? rebuild(false) : '';
+      msg('Plant 표와 GN 제외를 기본값으로 되돌렸습니다.' + note, note ? 'warn' : 'ok');
+    }
+  });
+  renderSettings();
 
   if (location.hash === '#example') loadSample();
   else if (restore()) { var rn = rebuild(true); msg('이 브라우저에 기억한 데이터를 불러왔습니다. 오늘 엑셀을 올리면 같은 종류 파일에 더합니다(이름이 같은 파일은 바꿉니다).' + rn, rn ? 'warn' : 'note'); }
