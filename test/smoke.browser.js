@@ -299,6 +299,19 @@ srv.listen(0, async function () {
     var dl3 = await Promise.all([pg.waitForEvent('download', { timeout: 5000 }), pg.click('#btn-dash-xlsx')]);
     var wb3 = XLSX.read(fs.readFileSync(await dl3[0].path()), { type: 'buffer' });
     ok(['결정문_완제품', '결정문_관세사', '결정문_목록'].every(function (n) { return wb3.SheetNames.indexOf(n) >= 0; }), '결정문 엑셀 시트', wb3.SheetNames.join(','));
+    // v1.6.0 금액 열이 있는 결정문(가 · 나) — 예제 결정문을 빼고 확인용 2건만, 기간 2026-01 ~ 2026-12
+    await pg.setInputFiles('#d-file', path.join(ROOT, 'samples', '시험용', CU.sampleRulingCheck().name));
+    await pg.waitForFunction(function () { return document.querySelectorAll('#d-sets tr[data-kind="ruling"]').length === 2; }, null, { timeout: 5000 });
+    await pg.click('[data-drop-file="ruling"][data-i="0"]');
+    await pg.click('.tab[data-tab="ruling"]');
+    ok(await pg.inputValue('#f-from') === '2026-01', 'v1.6.0 결정문 기본 기간 시작 2026-01');
+    await pg.selectOption('#f-to', '2026-12');
+    ok(await kv('rul-n') === '1' && await kv('rul-claim') === '300만원' && await kv('rul-reserve') === '100만원' && await kv('rul-impact') === '400만원', 'v1.6.0 확인 — 1건 · 경정청구 300만원 · 유보 100만원 · impact 400만원');
+    var basis = await pg.textContent('[data-k="rul-basis"]');
+    ok(/건수와 유보액은 시행일자, 경정청구 금액은 경정청구일 기준/.test(basis) && /경정청구 금액 중 300만원은 기간 밖 결정문 건/.test(basis), 'v1.6.0 기준 문구 · 기간 밖 결정문 금액', basis);
+    ok(await pg.$$eval('table.ruling-list tr.outside', function (t) { return t.length; }) === 1, 'v1.6.0 목록에 기간 밖 결정문');
+    await pg.click('.tab[data-tab="trade"]');
+    ok(!/결정문 조회 기간/.test(await pg.textContent('#f-note')), 'v1.6.0 다른 탭 기간은 그대로');
     await pg.evaluate(function () { localStorage.clear(); });
     // 화물 추적
     await pg.goto(base + 'tracking.html');

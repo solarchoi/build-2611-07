@@ -118,6 +118,11 @@
     state.period = period;
     if (period && (resetRange || !state.range || state.range.from < period.from || state.range.to > period.to)) state.range = C.defaultRange(period);
     if (!period) state.range = null;
+    // (v1.6.0) 결정문 탭은 기간을 따로 — 기본 2026-01 ~ 자료 마지막 달(규칙은 customs.js)
+    var rs = ready('ruling'), rper = rs ? C.rulingPeriod(rs.m.records) : null, rms = C.rulingMonths(rper);
+    state.rperiod = rper;
+    if (rper && (resetRange || !state.rrange || rms.indexOf(state.rrange.from) < 0 || rms.indexOf(state.rrange.to) < 0)) state.rrange = C.rulingDefaultRange(rper);
+    if (!rper) state.rrange = null;
     var note = save();
     renderSets(); renderFilter(); renderTab();
     return note;
@@ -207,17 +212,26 @@
   }
 
   /* ---------- 거르기 ---------- */
+  // 지금 탭의 조회 기간 — 결정문 탭은 따로(state.rrange)
+  function isRulingRange() { return state.tab === 'ruling' && !!state.rrange; }
+  function curRange() { return isRulingRange() ? state.rrange : state.range; }
   function renderFilter() {
     if (!state.range) return;
-    var ms = C.monthsBetween(state.period.from, state.period.to);
+    var rul = isRulingRange(), cr = curRange();
+    var ms = rul ? C.rulingMonths(state.rperiod) : C.monthsBetween(state.period.from, state.period.to);
     var opt = function (v, sel, lab) { return '<option value="' + esc(v) + '"' + (v === sel ? ' selected' : '') + '>' + esc(lab == null ? v : lab) + '</option>'; };
-    $('f-from').innerHTML = ms.map(function (m) { return opt(m, state.range.from, C.monthLabel(m)); }).join('');
-    $('f-to').innerHTML = ms.map(function (m) { return opt(m, state.range.to, C.monthLabel(m)); }).join('');
+    $('f-from').innerHTML = ms.map(function (m) { return opt(m, cr.from, C.monthLabel(m)); }).join('');
+    $('f-to').innerHTML = ms.map(function (m) { return opt(m, cr.to, C.monthLabel(m)); }).join('');
     var hqs = {}, cos = {};
     C.KINDS.forEach(function (k) { var s = ready(k); if (!s) return; C.valuesOf(s.m.records, 'hq').forEach(function (v) { hqs[v] = 1; }); if (C.hasField(k, 'country')) C.valuesOf(s.m.records, 'country').forEach(function (v) { cos[v] = 1; }); });
     $('f-hq').innerHTML = opt('', state.filter.hq || '', '전체') + Object.keys(hqs).sort().map(function (v) { return opt(v, state.filter.hq); }).join('');
     $('f-country').innerHTML = opt('', state.filter.country || '', '전체') + Object.keys(cos).sort().map(function (v) { return opt(v, state.filter.country); }).join('');
     $('f-unit').value = state.unit;
+    if (rul) {
+      $('f-note').innerHTML = '결정문 조회 기간 <b>' + C.monthLabel(cr.from) + ' ~ ' + C.monthLabel(cr.to) + '</b> · ' + esc(C.RULING_BASIS) +
+        ' · 결정문 탭은 기간을 따로 가집니다(기본 ' + C.monthLabel(C.RULING_BASE_FROM) + '부터, 다른 탭 기간은 그대로) · 금액 단위는 올린 파일 그대로입니다(' + esc(state.unit) + ').';
+      return;
+    }
     var pr = C.prevRange(state.range);
     $('f-note').innerHTML = '조회 기간 <b>' + C.monthLabel(state.range.from) + ' ~ ' + C.monthLabel(state.range.to) + '</b> · 전년 동기 ' + C.monthLabel(pr.from) + ' ~ ' + C.monthLabel(pr.to) +
       (pr.overlap ? ' <span class="tag bad-t">12개월을 넘게 골라 전년 동기와 겹칩니다</span>' : '') + ' · 금액 단위는 올린 파일 그대로입니다(' + esc(state.unit) + ').';
@@ -368,25 +382,93 @@
     tb += '<h3 class="tb-h">월별</h3>' + table(['월', '신고건수', '오류건수', '오류 비율', '오류점수'], s.monthly.map(function (m) { return { cells: [esc(C.monthLabel(m.month)), n0(m.decl), n0(m.err), esc(C.fmtPct(m.rate, 2)), n0(m.score)] }; }), null, 'err-month');
     $('kpi-errors').innerHTML = k; $('ch-errors').innerHTML = ch; $('tb-errors').innerHTML = tb;
   }
+  // (v1.6.0) 연도별 쌓은 막대 + 누계 선. rows = [{year, ...}], stacks = [{key, name, color}], line = {key, name, color}
+  function yearChart(title, rows, stacks, line) {
+    var W = 640, H = 260, L = 62, R = 12, T = 30, B = 30, iw = W - L - R, ih = H - T - B;
+    var max = niceMax(Math.max.apply(null, [0].concat(rows.map(function (r) { return Math.max(r.total || 0, line ? r[line.key] || 0 : 0); }))));
+    var fmt = axisFmt('money'), step = iw / Math.max(1, rows.length), y = function (v) { return T + ih - (v / max) * ih; };
+    var b = legend(stacks.concat(line ? [line] : []), L);
+    for (var g = 0; g <= 4; g++) { var gv = max * g / 4; b += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(gv) + '" y2="' + y(gv) + '" class="grid"/><text x="' + (L - 6) + '" y="' + (y(gv) + 4) + '" class="ax" text-anchor="end">' + esc(fmt(gv)) + '</text>'; }
+    var bw = Math.min(56, step * 0.6);
+    rows.forEach(function (r, i) {
+      var cx = L + step * i + step / 2, top = T + ih;
+      b += '<text x="' + cx + '" y="' + (H - 10) + '" class="ax" text-anchor="middle">' + esc(String(r.year)) + '</text>';
+      stacks.forEach(function (s) {
+        var v = r[s.key]; if (!(v > 0)) return;
+        var h = (v / max) * ih; top -= h;
+        b += '<rect x="' + (cx - bw / 2).toFixed(1) + '" y="' + top.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + h.toFixed(1) + '" fill="' + s.color + '"><title>' + esc(r.year + '년 ' + s.name + ' ' + money(v)) + '</title></rect>';
+      });
+    });
+    if (line && rows.length) {
+      var pts = rows.map(function (r, i) { return [L + step * i + step / 2, y(r[line.key] || 0), r]; });
+      b += '<polyline fill="none" stroke="' + line.color + '" stroke-width="2.4" points="' + pts.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' ') + '"/>';
+      pts.forEach(function (p) { b += '<circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="3.5" fill="' + line.color + '"><title>' + esc(p[2].year + '년까지 ' + line.name + ' ' + money(p[2][line.key])) + '</title></circle>'; });
+    }
+    if (!rows.length) b += '<text x="' + L + '" y="' + (T + 24) + '" class="ax">데이터 없음</text>';
+    return frame(title, '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(title) + '">' + b + '</svg>');
+  }
   // (v1.2) 품목분류 결정문 현황 — 관세율은 올린 파일 값을 그대로 보인다(물품설명서 초안에는 여전히 싣지 않는다)
+  // (v1.6.0) 금액 열(경정청구 · 유보 · impact)이 있으면 impact 카드 · 연도별 그래프 · 완제품별 절감액 · 진행상태별 · 세율 인하 표를 더한다.
+  //          기간은 결정문 탭 전용(state.rrange). 계산 · 기준은 모두 C.rulingStats.
   function renderRuling() {
     var f = filtered('ruling'), k = '', ch = '', tb = '';
     if (!f) { $('kpi-ruling').innerHTML = empty('ruling'); $('ch-ruling').innerHTML = ''; $('tb-ruling').innerHTML = ''; return; }
-    var s = C.rulingStats(f.recs, state.range, $('by-ruling').value);
-    k += kpi('결정문 건수', C.fmtNum(s.n), '완제품 ' + s.products + '종 · 관세사 ' + s.brokers + '곳', '합계', 'rul-n') +
-      kpi('관세율 0% 결정', C.fmtNum(s.zero) + '건', C.fmtPct(s.zeroRate) + ' (0% 건수 ÷ 결정 건수)', '계산: 0% 건수 ÷ 결정 건수', 'rul-zero') +
-      kpi('종전보다 낮아진 건', s.withPrev ? C.fmtNum(s.lowered) + '건' : '—', s.withPrev ? '종전세율이 있는 ' + s.withPrev + '건 중' : '종전세율 열이 있을 때 보입니다', s.withPrev ? '계산: 결정세율 < 종전세율' : '', 'rul-lowered') +
-      kpi('절감 추정(연간)', s.saving == null ? '—' : money(s.saving), s.saving == null ? '종전세율 · 연간 수입액 열이 있을 때 계산합니다' : s.savingN + '건 기준 · 추정치', s.saving == null ? '' : '계산: 연간 수입액 × (종전세율 − 결정세율)', 'rul-saving') +
-      kpi('최근 시행', s.latest ? s.latest.date : '—', s.latest ? esc(s.latest.item) : '', '', 'rul-latest');
+    var s = C.rulingStats(f.recs, state.rrange || state.range, $('by-ruling').value, $('sort-ruling').value), am = s.amounts;
+    var mo = function (v) { return v == null ? '—' : money(v); };
+    var cls = function (h, c) { return h.replace('class="kpi"', 'class="kpi ' + c + '"'); };
+    var ext = am || s.has.status || s.has.claimDate || s.has.note;
+    if (am || s.has.claimDate) {
+      var notes = ['<b>기간 기준</b> ' + esc(s.basis)];
+      if (s.has.claim) notes.push(s.claimOutsideN ? '<b>경정청구 금액 중 ' + esc(money(s.claimOutside)) + '은 기간 밖 결정문 건</b>(' + s.claimOutsideN + '건)' : '경정청구 금액 중 기간 밖 결정문 건은 없습니다');
+      if (s.noDateN) notes.push('경정청구일이 비어 집계에서 뺀 경정청구 금액 ' + s.noDateN + '건 · ' + esc(money(s.noDate)) + '(파일 전체)');
+      if (s.impactOnlyN) notes.push('경정청구 · 유보가 비고 impact 값만 있는 ' + s.impactOnlyN + '건 ' + esc(money(s.impactOnly)) + '은 시행일자 기준으로 합계에 넣었습니다');
+      if (s.mismatchN) notes.push('impact 값이 경정청구 + 유보와 맞지 않는 ' + s.mismatchN + '건 — 합계는 경정청구 + 유보로 계산하고, 목록에는 impact 칸 값을 보입니다');
+      k += '<p class="rul-basis" data-k="rul-basis">' + notes.join(' · ') + '</p>';
+    }
+    if (am) {
+      k += cls(kpi('관세절감 impact 합계', mo(s.impact), '경정청구 ' + esc(mo(s.claim)) + ' + 관세유보 ' + esc(mo(s.reserve)) + (s.impactOnlyN ? ' + impact 값만 있는 ' + s.impactOnlyN + '건 ' + esc(money(s.impactOnly)) : ''), '계산: 경정청구 금액(경정청구일 기준) + 관세유보금액(시행일자 기준)', 'rul-impact'), 'big') +
+        kpi('경정청구 환급액', mo(s.claim), s.has.claim ? C.fmtNum(s.claimN) + '건 · 경정청구일 기준' + (s.claimOutsideN ? ' · 그중 ' + esc(money(s.claimOutside)) + '은 기간 밖 결정문 건' : '') : '경정청구 금액 열이 있을 때 보입니다', s.has.claim ? '경정청구일 기준' : '', 'rul-claim') +
+        kpi('관세유보액', mo(s.reserve), s.has.reserve ? '시행일자 기준' : '관세유보금액 열이 있을 때 보입니다', s.has.reserve ? '시행일자 기준' : '', 'rul-reserve');
+    }
+    k += kpi('결정문 건수', C.fmtNum(s.n), '완제품 ' + s.products + '종 · 관세사 ' + s.brokers + '곳', am ? '시행일자 기준' : '합계', 'rul-n');
+    if (am || s.has.status) k += kpi('진행중 건수', s.progress == null ? '—' : C.fmtNum(s.progress) + '건', s.progress == null ? '진행상태 열이 있을 때 보입니다' : '경정청구중 + 재심사 + 심판청구', s.progress == null ? '' : '현재 상태 · 기간 무관', 'rul-progress');
+    var sub = function (h) { return am ? cls(h, 'small') : h; };
+    k += sub(kpi('관세율 0% 결정', C.fmtNum(s.zero) + '건', C.fmtPct(s.zeroRate) + ' (0% 건수 ÷ 결정 건수)' + (s.multiRate ? ' · 복수 세율 ' + s.multiRate + '건 제외' : ''), '계산: 0% 건수 ÷ 결정 건수', 'rul-zero')) +
+      sub(kpi('종전보다 낮아진 건', s.withPrev ? C.fmtNum(s.lowered) + '건' : '—', s.withPrev ? '종전세율이 있는 ' + s.withPrev + '건 중' : '종전세율 열이 있을 때 보입니다', s.withPrev ? '계산: 결정세율 < 종전세율' : '', 'rul-lowered')) +
+      sub(kpi(am ? '절감 추정(참고)' : '절감 추정(연간)', s.saving == null ? '—' : money(s.saving),
+        am ? (s.saving == null ? '금액이 아직 없는 건 중 계산할 수 있는 건이 없습니다' : '금액이 아직 없는 ' + s.savingN + '건만 · 실제 금액과 더하지 않습니다')
+          : s.saving == null ? '종전세율 · 연간 수입액 열이 있을 때 계산합니다' : s.savingN + '건 기준 · 추정치', s.saving == null ? '' : '계산: 연간 수입액 × (종전세율 − 결정세율)', 'rul-saving')) +
+      sub(kpi('최근 시행', s.latest ? s.latest.date : '—', s.latest ? esc(s.latest.item) : '', '', 'rul-latest'));
+
+    if (am) ch += yearChart('연도별 관세절감 impact(파일 전체 · 경정청구는 경정청구일 연도, 유보는 시행일자 연도)', s.yearly,
+      [{ key: 'claim', name: '경정청구', color: COL[0] }, { key: 'reserve', name: '관세유보', color: COL[3] }].concat(s.impactOnlyN || s.yearly.some(function (y) { return y.other; }) ? [{ key: 'other', name: 'impact만', color: COL[4] }] : []),
+      { key: 'cum', name: '누계', color: COL[2] });
     ch += monthChart('월별 결정문 시행 건수', s.months, [{ name: '결정 건수', color: COL[2], values: s.monthly.map(function (m) { return m.n || null; }), fmt: C.fmtNum }], 'bar', 'count');
-    ch += hbar(s.byLabel + '별 결정 건수', s.groups.slice(0, 12).map(function (g) { return { label: g.key, value: g.n }; }), C.fmtNum, COL[2]);
+    ch += hbar(s.byLabel + '별 결정 건수', s.groups.filter(function (g) { return g.n; }).slice(0, 12).map(function (g) { return { label: g.key, value: g.n }; }), C.fmtNum, COL[2]);
+
+    var amH = am ? ['경정청구', '관세유보', 'impact'] : [];
+    var amC = function (o) { return am ? [esc(mo(o.claim)), esc(mo(o.reserve)), esc(mo(o.impact))] : []; };
     tb += '<h3 class="tb-h">' + esc(s.byLabel) + '별</h3>' + ignoredNote(f.ignored) +
-      table([s.byLabel, '결정 건수', '관세율 0%', '0% 비율', '절감 추정'], s.groups.map(function (g) { return { cells: [esc(g.key), n0(g.n), n0(g.zero), esc(C.fmtPct(g.zeroRate)), esc(g.saving == null ? '—' : money(g.saving))] }; }),
-        ['합계', n0(s.n), n0(s.zero), esc(C.fmtPct(s.zeroRate)), esc(s.saving == null ? '—' : money(s.saving))], 'ruling-by');
+      table([s.byLabel, '결정 건수', '관세율 0%', '0% 비율', am ? '절감 추정(금액 없는 건)' : '절감 추정'].concat(amH), s.groups.map(function (g) { return { cells: [esc(g.key), n0(g.n), n0(g.zero), esc(C.fmtPct(g.zeroRate)), esc(g.saving == null ? '—' : money(g.saving))].concat(amC(g)) }; }),
+        ['합계', n0(s.n), n0(s.zero), esc(C.fmtPct(s.zeroRate)), esc(s.saving == null ? '—' : money(s.saving))].concat(amC(s)), 'ruling-by');
+    if (am) {
+      tb += '<h3 class="tb-h">완제품별 절감액(impact 큰 순)</h3><p class="sub">' + esc(s.basis) + '</p>' +
+        table(['완제품', '결정 건수', '경정청구', '관세유보', 'impact'], s.byProduct.map(function (g) { return { cells: [esc(g.key), n0(g.n)].concat(amC(g)) }; }), ['합계', n0(s.n)].concat(amC(s)), 'ruling-product-amt');
+      tb += '<h3 class="tb-h">연도별 절감 impact(파일 전체)</h3>' +
+        table(['연도', '경정청구(경정청구일 연도)', '관세유보(시행일자 연도)', '합계', '누계'], s.yearly.map(function (y) { return { cells: [esc(String(y.year)), esc(mo(y.claim)), esc(mo(y.reserve)), esc(mo(y.total)), esc(money(y.cum))] }; }), null, 'ruling-year');
+    }
+    if (s.statuses) tb += '<h3 class="tb-h">진행상태별(현재 상태 · 기간 무관 · 파일 전체)</h3>' +
+      table(['진행상태', '건수', '경정청구', '관세유보', 'impact'], s.statuses.map(function (g) { return { cells: [esc(g.key) + (g.progress ? ' <span class="tag bad-t">진행중</span>' : ''), n0(g.n), esc(mo(g.claim)), esc(mo(g.reserve)), esc(mo(g.impact))] }; }), null, 'ruling-status');
     tb += '<h3 class="tb-h">세율별 분포</h3>' + table(['관세율', '건수'], s.rates.map(function (r) { return { cells: [esc(r.key), n0(r.n)] }; }), null, 'ruling-rates');
-    tb += '<h3 class="tb-h">결정문 목록(최근 시행 순)</h3>' + table(['시행일자', '완제품', '품명', '결정세번', '결정문번호', '관세율', '관세사'], s.list.map(function (r) {
-      return { cells: [esc(r.date), esc(r.product), esc(r.item), esc(r.hs), esc(r.docNo || ''), esc(r.rate == null ? '—' : (r.rateCode ? r.rateCode + ' ' : '') + r.rate + '%'), esc(r.broker || '')] };
-    }), null, 'ruling-list') + '<p class="sub">관세율은 올린 파일의 값을 그대로 보입니다. 물품설명서 초안에는 세율을 싣지 않는 규칙이 그대로입니다.</p>';
+    if (s.rateChanges.length) tb += '<h3 class="tb-h">세율 인하 분포(종전세율 → 결정세율)</h3>' +
+      table(['종전 → 결정', '건수', '낮아짐'], s.rateChanges.map(function (c) { return { cells: [esc(c.key), n0(c.n), c.lowered == null ? '—' : c.lowered ? '예' : '아니오'] }; }), null, 'ruling-change');
+    var head = ['시행일자', '완제품', '품명', '결정세번', '결정문번호', '관세율', '관세사'].concat(ext ? ['경정청구', '관세유보', 'impact', '경정청구일', '진행상태'] : []);
+    tb += '<h3 class="tb-h">결정문 목록(' + (s.sort === 'impact' ? 'impact 큰 순' : '최근 시행 순') + ')</h3>' + table(head, s.list.map(function (r) {
+      var c = [esc(r.date), esc(r.product), esc(r.item), esc(r.hs), esc(r.docNo || ''), esc(r.rateText || '—'), esc(r.broker || '')];
+      if (ext) c = c.concat([esc(mo(r.claim)), esc(mo(r.reserve)), esc(mo(r.impactRow)), esc(r.claimDate || '—'), esc(r.status || '—')]);
+      return { cls: r.outside ? 'outside' : '', cells: c };
+    }), null, 'ruling-list') + (s.claimOutsideN ? '<p class="sub">「기간 밖 결정문」은 시행일자는 기간 밖이지만 경정청구일이 기간 안이라 경정청구 금액이 들어간 건입니다.</p>' : '') +
+      '<p class="sub">관세율은 올린 파일의 값을 그대로 보입니다. 물품설명서 초안에는 세율을 싣지 않는 규칙이 그대로입니다.</p>';
     $('kpi-ruling').innerHTML = k; $('ch-ruling').innerHTML = ch; $('tb-ruling').innerHTML = tb;
   }
   var RENDER = { trade: renderTrade, fta: renderFta, refund: renderRefund, errors: renderErrors, ruling: renderRuling };
@@ -406,7 +488,7 @@
       data[k] = { file: m.files.map(function (p) { return p.file; }).join(' + '), period: m.period, records: m.records, map: m.map, skipped: m.skipped,
         files: m.files.map(function (p) { return { file: p.file, uploadedAt: p.uploadedAt, period: p.period, n: p.norm.records.length, skipped: p.norm.skipped.length }; }) };
     });
-    var book = C.exportBook({ range: state.range, filter: state.filter, unit: state.unit, data: data });
+    var book = C.exportBook({ range: state.range, rulingRange: state.rrange, filter: state.filter, unit: state.unit, data: data });
     var wb = XLSX.utils.book_new();
     book.forEach(function (sh) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sh.aoa), sh.name); });
     XLSX.writeFile(wb, '수출입통관_집계_' + state.range.from.replace('-', '') + '-' + state.range.to.replace('-', '') + '.xlsx');
@@ -419,7 +501,7 @@
   drop.addEventListener('drop', function (e) { readFiles(e.dataTransfer.files); });
   $('d-file').addEventListener('change', function () { readFiles(this.files); this.value = ''; });
   $('btn-dash-sample').addEventListener('click', loadSample);
-  $('btn-dash-clear').addEventListener('click', function () { localStorage.removeItem(LS.data); localStorage.removeItem(LS.kinds); state.sets = {}; state.pending = []; state.open = {}; state.range = null; renderSets(); msg('이 브라우저에 기억한 데이터를 지웠습니다.', 'ok'); });
+  $('btn-dash-clear').addEventListener('click', function () { localStorage.removeItem(LS.data); localStorage.removeItem(LS.kinds); state.sets = {}; state.pending = []; state.open = {}; state.range = null; state.rrange = null; renderSets(); msg('이 브라우저에 기억한 데이터를 지웠습니다.', 'ok'); });
   $('d-remember').addEventListener('change', function () { if (this.checked) save(); else localStorage.removeItem(LS.data); });
   $('d-sets').addEventListener('change', function (e) {
     var t = e.target;
@@ -438,15 +520,15 @@
     else if (t.dataset.dropFile) dropFile(t.dataset.dropFile, +t.dataset.i);
     else if (t.dataset.dropPending != null) { state.pending.splice(+t.dataset.dropPending, 1); renderSets(); }
   });
-  $('f-from').addEventListener('change', function () { state.range.from = this.value; if (state.range.to < this.value) state.range.to = this.value; renderFilter(); renderTab(); });
-  $('f-to').addEventListener('change', function () { state.range.to = this.value; if (state.range.from > this.value) state.range.from = this.value; renderFilter(); renderTab(); });
+  $('f-from').addEventListener('change', function () { var r = curRange(); r.from = this.value; if (r.to < this.value) r.to = this.value; renderFilter(); renderTab(); });
+  $('f-to').addEventListener('change', function () { var r = curRange(); r.to = this.value; if (r.from > this.value) r.from = this.value; renderFilter(); renderTab(); });
   $('f-hq').addEventListener('change', function () { state.filter.hq = this.value; renderTab(); });
   $('f-country').addEventListener('change', function () { state.filter.country = this.value; renderTab(); });
   $('f-unit').addEventListener('change', function () { state.unit = this.value; localStorage.setItem(LS.unit, this.value); renderFilter(); renderTab(); });
-  $('btn-f-reset').addEventListener('click', function () { state.range = C.defaultRange(state.period); state.filter = {}; renderFilter(); renderTab(); });
+  $('btn-f-reset').addEventListener('click', function () { state.range = C.defaultRange(state.period); state.rrange = C.rulingDefaultRange(state.rperiod); state.filter = {}; renderFilter(); renderTab(); });
   $('btn-dash-xlsx').addEventListener('click', exportXlsx);
-  document.querySelector('.tabs').addEventListener('click', function (e) { var b = e.target.closest('.tab'); if (b) { state.tab = b.dataset.tab; renderTab(); } });
-  ['by-trade', 'top-trade', 'by-fta', 'by-ruling'].forEach(function (id) { $(id).addEventListener('change', renderTab); });
+  document.querySelector('.tabs').addEventListener('click', function (e) { var b = e.target.closest('.tab'); if (b) { state.tab = b.dataset.tab; renderFilter(); renderTab(); } });
+  ['by-trade', 'top-trade', 'by-fta', 'by-ruling', 'sort-ruling'].forEach(function (id) { $(id).addEventListener('change', renderTab); });
 
   if (location.hash === '#example') loadSample();
   else if (restore()) { var rn = rebuild(true); msg('이 브라우저에 기억한 데이터를 불러왔습니다. 오늘 엑셀을 올리면 같은 종류 파일에 더합니다(이름이 같은 파일은 바꿉니다).' + rn, rn ? 'warn' : 'note'); }

@@ -762,7 +762,118 @@ var v146 = passed + failed;
     eq(XL.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' }), f.aoa, 'v1.5.0 samples/시험용/ ' + f.name + ' = 예제 정의');
   });
 })();
-console.log('v1.5.0 ' + (passed + failed - v146) + '개 검사');
+var v150 = passed + failed;
+
+// v1.6.0 결정문 고정비 절감 금액 — 항목마다 기간을 거는 날짜가 다르다
+(function () {
+  function load(f) { var m = C.mapColumns(f.aoa[0].map(String), 'ruling'); return { m: m, n: C.normalize(C.aoaToRows(f.aoa), 'ruling', m.map) }; }
+  var Y26 = { from: '2026-01', to: '2026-12' };
+  // 확인용 가 · 나 (요청서의 「확인」 그대로)
+  var K = C.sampleRulingCheck(), k = load(K);
+  ok(/\(가상\)\.xlsx$/.test(K.name) && JSON.stringify(K.aoa).indexOf('(가상)') > 0, 'v1.6.0 확인용 예제 「가상」 표기');
+  eq(C.detectKind(K.aoa[0], K.name).kind, 'ruling', 'v1.6.0 금액 열이 있어도 결정문으로 알아본다');
+  eq(C.detectKind(K.aoa[0]).kind, 'ruling', 'v1.6.0 이름 없이도 결정문');
+  eq([k.m.missing, k.m.map.claim, k.m.map.reserve, k.m.map.impact, k.m.map.claimDate, k.m.map.status, k.m.map.note, k.m.map.prevRate, k.m.map.goods],
+    [[], '경정청구 금액', '관세유보금액', '관세절감 impact', '경정청구일', '진행상태', '비고', '종전세율', '연간 수입액'], 'v1.6.0 새 열 8개를 모두 짝짓는다');
+  eq(k.m.map.date, '시행일자', 'v1.6.0 경정청구일이 있어도 날짜는 시행일자');
+  eq(k.n.records.length, 2, 'v1.6.0 경정청구일이 빈 줄도 빼지 않는다');
+  eq([k.n.records[0].claimDate, k.n.records[0].claimDateMonth, k.n.records[0].claimDateYear, k.n.records[1].claimDate], ['2026-02-10', '2026-02', 2026, null], 'v1.6.0 경정청구일 읽기');
+  var s = C.rulingStats(k.n.records, Y26, 'product');
+  eq(s.n, 1, 'v1.6.0 확인 — 결정문 건수 1건(나만)');
+  eq(s.claim, 3000000, 'v1.6.0 확인 — 경정청구 금액 300만원(가: 기간 밖 결정문이지만 경정청구일이 기간 안)');
+  eq(s.reserve, 1000000, 'v1.6.0 확인 — 관세유보금액 100만원(나만, 가의 유보는 2025년 귀속)');
+  eq(s.impact, 4000000, 'v1.6.0 확인 — 관세절감 impact 400만원');
+  eq([s.claimOutside, s.claimOutsideN], [3000000, 1], 'v1.6.0 확인 — 경정청구 금액 중 300만원은 기간 밖 결정문 건');
+  eq(C.fmtShort(s.claimOutside, '원'), '300만원', 'v1.6.0 화면 표기 300만원');
+  eq(s.basis, '건수와 유보액은 시행일자, 경정청구 금액은 경정청구일 기준', 'v1.6.0 기준 문구');
+  eq(s.list.map(function (r) { return [r.seq, r.outside]; }), [['나', false], ['가', true]], 'v1.6.0 목록에 기간 밖 결정문(가)도 「기간 밖」으로');
+  eq(s.mismatchN, 0, 'v1.6.0 impact 칸 = 경정청구 + 유보');
+  eq(s.progress, 1, 'v1.6.0 진행중 1건(나 경정청구중)');
+  var s25 = C.rulingStats(k.n.records, { from: '2025-01', to: '2025-12' }, 'product');
+  eq([s25.n, s25.claim, s25.reserve, s25.impact, s25.claimOutsideN], [1, 0, 2000000, 2000000, 0], 'v1.6.0 2025년 — 가의 유보 200만만, 경정청구는 2026년 귀속이라 0');
+  eq(s.yearly.map(function (y) { return [y.year, y.claim, y.reserve, y.total, y.cum]; }), [[2025, null, 2000000, 2000000, 2000000], [2026, 3000000, 1000000, 4000000, 6000000]], 'v1.6.0 연도별 — 경정청구는 경정청구일 연도, 유보는 시행일자 연도 · 누계');
+  // 14건 예제
+  var A = C.sampleRulingAmounts(), a = load(A), recs = a.n.records;
+  eq([recs.length, a.m.missing], [14, []], 'v1.6.0 14건 예제 읽기');
+  ok(a.n.issues.some(function (t) { return /여러 개\(예: 0, 8\)인 칸 1개/.test(t); }) && !a.n.issues.some(function (t) { return /관세율 값 .*읽지 못했습니다/.test(t); }), 'v1.6.0 복수 세율은 「읽지 못함」이 아니라 따로 알린다');
+  var r4 = recs.filter(function (r) { return r.seq === '4'; })[0];
+  eq([r4.rate, r4.rateMulti], [null, '0, 8'], 'v1.6.0 복수 세율 0, 8 — rate 비우고 원래 값 보관');
+  eq(C.parseRate('0, 8'), { multi: true, rates: ['0', '8'], text: '0, 8' }, 'v1.6.0 parseRate 복수 세율');
+  eq(C.parseRate('0%/8%').text, '0, 8', 'v1.6.0 「0%/8%」도 복수 세율');
+  eq(C.parseRate('면세'), undefined, 'v1.6.0 못 읽는 관세율은 그대로 undefined');
+  var t = C.rulingStats(recs, Y26, 'product');
+  eq([t.n, t.claim, t.reserve, t.impact], [8, 16200000, 11000000, 27200000], 'v1.6.0 14건 — 2026년 건수 · 경정청구 · 유보 · impact');
+  eq([t.claimOutside, t.claimOutsideN], [14400000, 2], 'v1.6.0 기간 밖 결정문(2015 · 2025 결정)의 경정청구');
+  eq([t.noDate, t.noDateN], [1600000, 1], 'v1.6.0 경정청구일이 빈 경정청구 금액은 빼고 알린다');
+  eq(t.progress, 4, 'v1.6.0 진행중 = 경정청구중 + 재심사 + 심판청구(파일 전체 · 기간 무관)');
+  eq(C.rulingStats(recs, { from: '2026-07', to: '2026-08' }, 'product').progress, 4, 'v1.6.0 진행중은 기간을 바꿔도 같다');
+  eq([C.isProgress({ status: '경정청구 중' }), C.isProgress({ status: '재 심사' }), C.isProgress({ status: '환급완료' })], [true, true, false], 'v1.6.0 진행상태 띄어쓰기 무시');
+  eq([t.saving, t.savingN, t.actualN], [6600000, 3, 5], 'v1.6.0 절감 추정은 금액이 없는 건에만(12 · 13 · 14번), 실제 금액과 더하지 않는다');
+  eq(t.impact, t.claim + t.reserve, 'v1.6.0 impact 에 추정이 섞이지 않는다(경정청구 + 유보)');
+  eq(t.rateChanges.map(function (c) { return [c.key, c.n]; }), [['8% → 0%', 4], ['6.5% → 0%', 1], ['8% → 3%', 1], ['8% → 8%', 1], ['8% → FCN 0%', 1]], 'v1.6.0 세율 인하 분포');
+  var tAll = C.rulingStats(recs, { from: '2015-01', to: '2026-12' }, 'product');
+  ok(tAll.rates.some(function (r) { return r.key === '0, 8%' && r.n === 1; }), 'v1.6.0 세율 분포에 복수 세율 「0, 8%」 칸');
+  eq(tAll.multiRate, 1, 'v1.6.0 복수 세율 건수');
+  eq(tAll.zero, 11, 'v1.6.0 복수 세율은 0% 건수에서 뺀다(14건 − 복수 1 − 3% 1 − 8% 1)');
+  eq(t.yearly.map(function (y) { return [y.year, y.claim, y.reserve, y.cum]; }), [[2024, 3200000, 1500000, 4700000], [2025, 1950000, 6500000, 13150000], [2026, 16200000, 11000000, 40350000]], 'v1.6.0 연도별 · 누계(파일 전체)');
+  eq(t.groups.map(function (g) { return [g.key, g.n, g.claim, g.reserve, g.impact]; }), [['EXCAVATOR', 4, 14400000, 7500000, 21900000], ['천공기', 2, 0, 0, 0], ['Wheel Loader', 2, 1800000, 3500000, 5300000]], 'v1.6.0 완제품별 — 경정청구는 경정청구일, 유보는 시행일자');
+  eq(t.byProduct.map(function (g) { return g.key; }), ['EXCAVATOR', 'Wheel Loader', '천공기'], 'v1.6.0 완제품별 절감액은 impact 큰 순');
+  var tS = C.rulingStats(recs, Y26, 'status');
+  eq(tS.groups.filter(function (g) { return g.key === '환급완료'; }).map(function (g) { return [g.n, g.claim]; })[0], [2, 16200000], 'v1.6.0 묶는 기준 진행상태');
+  eq(tS.statuses.slice(0, 3).map(function (g) { return g.progress; }), [true, true, true], 'v1.6.0 진행상태별 표는 진행중이 먼저');
+  eq(tS.statuses.filter(function (g) { return g.key === '경정청구중'; })[0].n, 2, 'v1.6.0 진행상태별 건수(파일 전체)');
+  var tY = C.rulingStats(recs, { from: '2015-01', to: '2026-12' }, 'year');
+  eq(tY.groups.map(function (g) { return [g.key, g.n]; }), [['2015', 1], ['2024', 2], ['2025', 3], ['2026', 8]], 'v1.6.0 묶는 기준 결정연도(시행일자 연도)');
+  var tI = C.rulingStats(recs, Y26, 'product', 'impact');
+  eq(tI.list.slice(0, 3).map(function (r) { return r.seq; }), ['1', '5', '10'], 'v1.6.0 목록 impact 큰 순');
+  eq(tI.list.slice(-3).map(function (r) { return r.impactRow; }), [null, null, null], 'v1.6.0 금액 없는 건은 맨 뒤');
+  eq(t.list[0].seq, '14', 'v1.6.0 기본은 최근 시행 순');
+  // impact 열이 없을 때 · 한쪽만 있을 때 · 아무 금액 열도 없을 때
+  function strip(cols) { var h = A.aoa[0], keep = h.map(function (x, i) { return cols.indexOf(x) < 0 ? i : -1; }).filter(function (i) { return i >= 0; }); return { name: 'x', aoa: A.aoa.map(function (r) { return keep.map(function (i) { return r[i]; }); }) }; }
+  var nI = load(strip(['관세절감 impact'])), sI = C.rulingStats(nI.n.records, Y26, 'product');
+  eq([nI.m.map.impact, sI.impact, sI.claim, sI.reserve], [undefined, 27200000, 16200000, 11000000], 'v1.6.0 impact 열이 없으면 경정청구 + 유보로 계산');
+  eq(C.rowImpact({ claim: 3, reserve: null }), 3, 'v1.6.0 한 행 impact — 한쪽만 있으면 그 값');
+  var nR = load(strip(['관세절감 impact', '경정청구 금액', '경정청구일'])), sR = C.rulingStats(nR.n.records, Y26, 'product');
+  eq([sR.claim, sR.reserve, sR.impact], [null, 11000000, 11000000], 'v1.6.0 유보 열만 있으면 impact = 유보, 경정청구는 「—」');
+  var nN = load(strip(['관세절감 impact', '경정청구 금액', '관세유보금액', '경정청구일', '진행상태', '비고'])), sN = C.rulingStats(nN.n.records, Y26, 'product');
+  eq([sN.amounts, sN.claim, sN.reserve, sN.impact, sN.progress, sN.yearly, sN.byProduct, sN.statuses], [false, null, null, null, null, [], [], null], 'v1.6.0 금액 열이 없으면 모두 「—」(지어내지 않는다)');
+  eq([sN.saving, sN.savingN], [25300000, 8], 'v1.6.0 금액 열이 없으면 지금처럼 추정을 모든 건에(2026년 8건)');
+  // impact 값만 있는 행 · 맞지 않는 행
+  var odd = C.rulingStats([
+    { month: '2026-02', date: '2026-02-01', year: 2026, claim: null, reserve: null, impact: 500, claimDate: null },
+    { month: '2026-03', date: '2026-03-01', year: 2026, claim: 100, reserve: 50, impact: 999, claimDate: '2026-04-01', claimDateMonth: '2026-04', claimDateYear: 2026 }
+  ], Y26, 'product');
+  eq([odd.impactOnly, odd.impactOnlyN, odd.mismatchN, odd.impact], [500, 1, 1, 100 + 50 + 500], 'v1.6.0 impact 값만 있는 행은 시행일자 기준으로 넣고, 맞지 않는 행은 세어 알린다');
+  // 결정문 탭 기간
+  var per = C.rulingPeriod(recs);
+  eq(per, { from: '2015-06', to: '2026-08' }, 'v1.6.0 결정문 기간 = 시행일자 · 경정청구일 모두');
+  eq(C.rulingDefaultRange(per), { from: '2026-01', to: '2026-08' }, 'v1.6.0 기본 기간은 2026-01 부터(2015년 결정문이 있어도)');
+  eq(C.rulingDefaultRange(C.rulingPeriod(k.n.records)), { from: '2026-01', to: '2026-03' }, 'v1.6.0 가 · 나 기본 기간');
+  eq(C.rulingMonths(C.rulingPeriod(k.n.records)).slice(-1)[0], '2026-12', 'v1.6.0 마지막 해 12월까지 고를 수 있다');
+  eq(C.rulingDefaultRange({ from: '2024-02', to: '2025-06' }), { from: '2025-01', to: '2025-06' }, 'v1.6.0 자료가 모두 2026년 이전이면 다른 탭과 같은 규칙');
+  eq(C.RULING_BASE_FROM, '2026-01', 'v1.6.0 기본 시작 상수');
+  // 기존 예제(금액 열 없음) 그대로
+  var old = C.sampleFiles()[4], o = load(old), so = C.rulingStats(o.n.records, { from: '2025-01', to: '2025-12' }, 'product');
+  eq([so.amounts, so.impact, so.progress, so.has.claimDate], [false, null, null, false], 'v1.6.0 기존 예제 — 금액 칸은 「—」');
+  eq(Object.keys(o.m.map).sort(), ['broker', 'date', 'docNo', 'goods', 'hs', 'item', 'prevRate', 'product', 'rate', 'seq'], 'v1.6.0 기존 예제 열 짝짓기 그대로');
+  // 엑셀 내보내기
+  var bk = C.exportBook({ range: { from: '2025-01', to: '2026-12' }, rulingRange: Y26, filter: {}, unit: '원', data: { ruling: { file: A.name, uploadedAt: '', period: a.n.period, records: recs, map: a.m.map, skipped: [] } } });
+  eq(bk.map(function (b) { return b.name; }), ['안내', '결정문_완제품', '결정문_관세사', '결정문_HS4단위', '결정문_목록', '결정문_연도별', '결정문_진행상태', '결정문_세율인하'], 'v1.6.0 금액 열이 있으면 시트 3개 더');
+  var tot = bk[1].aoa[bk[1].aoa.length - 1];
+  eq(tot, ['합계', 8, 6, 75, 6600000, 16200000, 11000000, 27200000], 'v1.6.0 엑셀 합계 줄 — 결정문 기간(2026) · 금액 칸');
+  ok(bk[0].aoa.some(function (r) { return r[0] === '결정문 조회 기간' && /2026\.01 ~ 2026\.12 — 건수와 유보액은 시행일자/.test(r[1]); }), 'v1.6.0 엑셀 안내에 결정문 기간 · 기준');
+  var lh = bk[4].aoa[0], lr = bk[4].aoa.filter(function (r) { return r[0] === '2015-06-12'; })[0];
+  eq([lr[lh.indexOf('경정청구 금액')], lr[lh.indexOf('기간 밖 결정문')], lr[lh.indexOf('관세율')]], [9600000, 'Y', '0'], 'v1.6.0 엑셀 목록 — 기간 밖 결정문 표시');
+  ok(bk[5].aoa.length === 4 && bk[5].aoa[3][5] === 40350000, 'v1.6.0 엑셀 연도별 누계');
+  // samples/시험용/ = 예제 정의
+  var XL = require('../lib/xlsx.full.min.js');
+  [K, A].forEach(function (f) {
+    var wb = XL.read(require('fs').readFileSync(require('path').join(__dirname, '..', 'samples', '시험용', f.name)), { type: 'buffer' });
+    eq(XL.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' }), f.aoa, 'v1.6.0 samples/시험용/ ' + f.name + ' = 예제 정의');
+  });
+})();
+console.log('v1.6.0 ' + (passed + failed - v150) + '개 검사');
+console.log('v1.5.0 ' + (v150 - v146) + '개 검사');
 console.log('v1.4.6 ' + (v146 - v145) + '개 검사');
 console.log('v1.4.5 ' + (v145 - v14) + '개 검사');
 console.log('v1.4 ' + (v14 - v13) + '개 검사');

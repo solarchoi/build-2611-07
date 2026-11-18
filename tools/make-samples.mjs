@@ -42,3 +42,11 @@ for (const f of C.sampleRefundMonths()) {
   writeFileSync(join(dir, '시험용', f.name), XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', compression: true }));
   console.log('썼습니다: 시험용/' + f.name, f.cols + '열 ' + f.rows + '줄 + 합계 줄');
 }
+// (v1.6.0) 시험용 — 결정문 현황 + 고정비 절감 금액 열. 확인용 2건(가 · 나)과 여러 해 14건.
+for (const f of [C.sampleRulingCheck(), C.sampleRulingAmounts()]) {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(f.aoa), '데이터');
+  wb.Props = { Title: '시험용 예제(가짜 데이터)', CreatedDate: new Date(Date.UTC(2026, 10, 18)) };
+  writeFileSync(join(dir, '시험용', f.name), XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', compression: true }));
+  console.log('썼습니다: 시험용/' + f.name, (f.aoa.length - 1) + '줄');
+}

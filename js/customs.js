@@ -87,9 +87,21 @@
       { key: 'rate', label: '관세율', type: 'rate', aliases: ['결정세율', '결정관세율', '세율', '기본세율', 'rate'] },
       { key: 'broker', label: '관세사', type: 'text', aliases: ['관세법인', '대리인', '신청대리인', '신청인'] },
       { key: 'prevRate', label: '종전세율', type: 'rate', aliases: ['기존세율', '종전관세율', '변경전세율', '이전세율', '신청전세율'] },
-      { key: 'goods', label: '연간 수입액', type: 'num', aliases: ['물자대', '수입금액', '연간물자대', '과세가격', '수입액', '연간수입액'] }
+      { key: 'goods', label: '연간 수입액', type: 'num', aliases: ['물자대', '수입금액', '연간물자대', '과세가격', '수입액', '연간수입액'] },
+      // (v1.6.0) 고정비 절감 금액 — 모두 선택 열. 관세절감 impact = 경정청구 금액 + 관세유보금액.
+      // 경정청구 금액은 경정청구일 연도, 관세유보금액은 시행일자(결정문 접수일) 연도에 귀속된다(rulingStats).
+      { key: 'claim', label: '경정청구 금액', type: 'num', aliases: ['경정청구액', '경정청구환급액', '경정환급액', '경정청구환급금액'] },
+      { key: 'reserve', label: '관세유보금액', type: 'num', aliases: ['관세유보액', '유보금액', '유보액', '관세유보'] },
+      { key: 'impact', label: '관세절감 impact', type: 'num', aliases: ['관세절감임팩트', '절감impact', '절감임팩트', 'impact', '관세절감효과'] },
+      { key: 'claimDate', label: '경정청구일', type: 'date', opt: true, aliases: ['경정청구일자', '경정청구환급일', '경정환급일', '청구일자'] },
+      { key: 'status', label: '진행상태', type: 'text', aliases: ['진행현황', '진행상황', '상태', 'status'] },
+      { key: 'note', label: '비고', type: 'text', keepBlank: true, aliases: ['메모', '참고', 'note', 'remark'] }
     ]
   };
+  // (v1.6.0) 결정문 탭의 기본 조회 시작 — 고정비 절감 과제를 이 달부터 누적 관리한다(사용자가 바꿀 수 있다).
+  var RULING_BASE_FROM = '2026-01';
+  // 진행중 = 이 상태들(띄어쓰기 무시)
+  var RULING_PROGRESS = ['경정청구중', '재심사', '심판청구'];
   var KINDS = ['import', 'export', 'refund', 'errors', 'ruling'];
   function fieldsOf(kind) { return DATASETS[kind].fields; }
   function hasField(kind, key) { return fieldsOf(kind).some(function (f) { return f.key === key; }); }
@@ -188,8 +200,13 @@
     if (typeof v === 'number') return isFinite(v) ? { rate: v, code: '' } : undefined;
     var s = clean(v); if (!s || /^[-–—]$/.test(s)) return null;
     var m = s.match(/^([A-Za-z]{0,6})\s*(\d+(?:\.\d+)?)\s*%?$/);
-    if (!m) return undefined;
-    return { rate: Number(m[2]), code: m[1].toUpperCase() };
+    if (m) return { rate: Number(m[2]), code: m[1].toUpperCase() };
+    // (v1.6.0) 「0, 8」·「0/8」·「0%, 8%」 = 복수 세율 → { multi: true, rates, text }. 0% 건수 · 절감 추정에서는 빼고 목록에는 그대로 보인다.
+    var parts = s.split(/\s*[,/;·]\s*/);
+    if (parts.length < 2) return undefined;
+    var got = parts.map(function (p) { var q = p.match(/^([A-Za-z]{0,6})\s*(\d+(?:\.\d+)?)\s*%?$/); return q ? (q[1] ? q[1].toUpperCase() + ' ' : '') + q[2] : null; });
+    if (got.some(function (g) { return g == null; })) return undefined;
+    return { multi: true, rates: got, text: got.join(', ') };
   }
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
   function mkDate(y, m, d) {
@@ -235,7 +252,7 @@
   // row 번호는 엑셀 줄 번호(머리글 1줄 + 1부터)다.
   // offset = 머리글 위에 있던 줄 수(제목 줄 등) — 엑셀 줄 번호를 맞추려고 쓴다.
   function normalize(rows, kind, map, offset) {
-    var fields = fieldsOf(kind), recs = [], skipped = [], blanks = {}, bad = {}, badRows = {}, unknownCodes = {};
+    var fields = fieldsOf(kind), recs = [], skipped = [], blanks = {}, bad = {}, badRows = {}, unknownCodes = {}, multi = {};
     (rows || []).forEach(function (r, i) {
       var row = i + 2 + (offset || 0), vals = fields.map(function (f) { return map[f.key] ? r[map[f.key]] : undefined; });
       if (vals.every(function (x) { return clean(x) === ''; })) return;                       // 완전히 빈 줄
@@ -247,7 +264,12 @@
       fields.forEach(function (f) {
         if (!map[f.key]) return;
         var raw = r[map[f.key]];
-        if (f.type === 'date') {
+        if (f.type === 'date' && f.opt) {
+          // (v1.6.0) 선택 날짜 열(경정청구일): 비어도 줄을 빼지 않는다. 읽지 못하면 비운 채 알린다.
+          var od = parseDate(raw);
+          if (od) { rec[f.key] = od.date || od.month; rec[f.key + 'Month'] = od.month; rec[f.key + 'Year'] = od.y; }
+          else { rec[f.key] = null; if (clean(raw)) { bad[f.label] = (bad[f.label] || 0) + 1; (badRows[f.label] = badRows[f.label] || []).push(row); } }
+        } else if (f.type === 'date') {
           var d = parseDate(raw);
           if (!d) { ok = false; skipped.push({ row: row, reason: clean(raw) ? f.label + '을(를) 날짜로 읽지 못함: ' + clean(raw) : f.label + ' 빈칸' }); return; }
           rec.date = d.date; rec.month = d.month; rec.year = d.y;
@@ -260,6 +282,7 @@
           var rt = parseRate(raw);
           if (rt === undefined) { bad[f.label] = (bad[f.label] || 0) + 1; (badRows[f.label] = badRows[f.label] || []).push(row); rec[f.key] = null; }
           else if (rt === null) { blanks[f.label] = (blanks[f.label] || 0) + 1; rec[f.key] = null; }
+          else if (rt.multi) { multi[f.label] = (multi[f.label] || 0) + 1; rec[f.key] = null; rec[f.key + 'Multi'] = rt.text; }
           else { rec[f.key] = rt.rate; if (rt.code) rec[f.key + 'Code'] = rt.code; }
         } else if (f.type === 'hs') {
           rec.hs = clean(raw); rec.hs4 = hs4(raw) || '(HS 미상)';
@@ -272,7 +295,7 @@
             if (f.codes[code]) rec[f.key] = f.codes[code];
             else { rec[f.key] = '미등록(' + code + ')'; (unknownCodes[code] = unknownCodes[code] || []).push(row); }
           } else rec[f.key] = cv || '(미기재)';
-        } else rec[f.key] = clean(raw) || '(미기재)';
+        } else rec[f.key] = clean(raw) || (f.keepBlank ? null : '(미기재)');
       });
       if (ok) recs.push(rec);
     });
@@ -280,6 +303,7 @@
     Object.keys(bad).forEach(function (k) {
       issues.push(k + ' 값 ' + bad[k] + '칸을 읽지 못했습니다' + (badRows[k] ? '(엑셀 ' + badRows[k].slice(0, 5).join('·') + '행' + (badRows[k].length > 5 ? ' 외' : '') + ')' : '') + ' — 집계에서 뺍니다.');
     });
+    Object.keys(multi).forEach(function (k) { issues.push(k + ' 값이 여러 개(예: 0, 8)인 칸 ' + multi[k] + '개 — 「복수 세율」로 따로 두고, 0% 건수 · 절감 추정에서는 뺍니다. 목록에는 그대로 보입니다.'); });
     // 필수 금액 칸의 빈칸만 알린다. FTA·절감액 같은 선택 칸은 비어 있는 것이 보통이다(FTA 미적용).
     fields.forEach(function (f) { if (f.req && blanks[f.label]) issues.push(f.label + ' 빈칸 ' + blanks[f.label] + '칸 — 0 으로 채우지 않고 비워 둔 채 더합니다.'); });
     var unk = Object.keys(unknownCodes).sort();
@@ -383,6 +407,20 @@
     if (!period) return null;
     var from = period.to.slice(0, 4) + '-01';
     return { from: from < period.from ? period.from : from, to: period.to };
+  }
+  // (v1.6.0) 결정문 탭은 기간을 따로 가진다. 고를 수 있는 달 = 시행일자 · 경정청구일 모두 + 마지막 해 12월까지.
+  function rulingPeriod(recs) {
+    var ms = [];
+    (recs || []).forEach(function (r) { if (r.month) ms.push(r.month); if (r.claimDateMonth) ms.push(r.claimDateMonth); });
+    ms.sort();
+    return ms.length ? { from: ms[0], to: ms[ms.length - 1] } : null;
+  }
+  function rulingMonths(period) { return period ? monthsBetween(period.from, period.to.slice(0, 4) + '-12') : []; }
+  // 기본 = RULING_BASE_FROM(2026-01) ~ 자료 마지막 달. 자료가 모두 그보다 앞서면 다른 탭과 같은 규칙.
+  function rulingDefaultRange(period) {
+    if (!period) return null;
+    if (period.to < RULING_BASE_FROM) return defaultRange(period);
+    return { from: RULING_BASE_FROM < period.from ? period.from : RULING_BASE_FROM, to: period.to };
   }
   // 전년 동기 = 같은 달 수만큼 12개월 앞. 12개월을 넘게 고르면 두 기간이 겹친다(overlap).
   function prevRange(range) {
@@ -543,32 +581,131 @@
   }
   // (v1.2) 결정문: 건수 · 관세율 0 결정 건수와 비율 · 종전보다 낮아진 건 · 절감 추정(연간 수입액 × (종전세율 − 결정세율), 세 값이 다 있을 때만)
   // · 묶음별(완제품·관세사·HS 4단위) · 월별 시행 건수 · 세율별 분포 · 목록(최근 시행 순)
-  var RULING_BY = { product: '완제품', broker: '관세사', hs4: 'HS 4단위' };
-  function rulingStats(recs, range, by) {
+  // (v1.6.0) 고정비 절감 금액 — 항목마다 기간을 거는 날짜가 다르다(RULING_BASIS).
+  //   시행일자 기준: 결정문 건수 · 세율 분포 · 묶음별 건수 · 월별 그래프 · 관세유보금액
+  //   경정청구일 기준: 경정청구 금액(시행일자가 기간 밖이어도 경정청구일이 기간 안이면 넣는다 → claimOutside 로 따로 보인다)
+  //   경정청구일이 빈 경정청구 금액은 빼고 noDate 로 알린다(파일 전체).
+  //   impact = 걸러낸 경정청구 + 걸러낸 유보 (+ impact 값만 있고 경정청구·유보가 빈 행은 시행일자 기준 — impactOnly).
+  //   진행중 · 진행상태별 · 연도별은 기간과 관계없이 파일 전체(지금 상태 · 누계).
+  //   절감 추정은 실제 금액이 하나도 없는 건에만 계산하고 실제 금액과 더하지 않는다.
+  var RULING_BY = { product: '완제품', broker: '관세사', hs4: 'HS 4단위', status: '진행상태', year: '결정연도' };
+  var RULING_BASIS = '건수와 유보액은 시행일자, 경정청구 금액은 경정청구일 기준';
+  function statusKey(s) { return clean(s).replace(/\s/g, ''); }
+  function isProgress(r) { return r.status != null && RULING_PROGRESS.indexOf(statusKey(r.status)) >= 0; }
+  // 관세율 표기: 「8%」·「FCN 0%」·복수 세율 「0, 8%」. 없으면 null.
+  function rateText(r, key) { return r[key] != null ? (r[key + 'Code'] ? r[key + 'Code'] + ' ' : '') + r[key] + '%' : r[key + 'Multi'] ? r[key + 'Multi'] + '%' : null; }
+  function hasActual(r) { return r.claim != null || r.reserve != null || r.impact != null; }
+  // 한 행의 impact: impact 칸이 있으면 그 값, 없으면 경정청구 + 유보(둘 다 비면 null)
+  function rowImpact(r) { return r.impact != null ? r.impact : r.claim == null && r.reserve == null ? null : (r.claim || 0) + (r.reserve || 0); }
+  function rowEstimate(r) { return !hasActual(r) && r.goods != null && r.rate != null && r.prevRate != null ? r.goods * (r.prevRate - r.rate) / 100 : null; }
+  function impactOnlyRow(r) { return r.impact != null && r.claim == null && r.reserve == null; }
+  function addTo(o, k, v) { if (v != null && isFinite(v)) o[k] = (o[k] || 0) + v; }
+  function byDateDesc(a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : 0; }
+  // sort: 'date'(최근 시행 순, 기본) | 'impact'(impact 큰 순)
+  function rulingStats(recs, range, by, sort) {
     by = RULING_BY[by] ? by : 'product';
-    var cur = inRange(recs, range), months = monthsBetween(range.from, range.to);
+    recs = recs || [];
+    function inR(m) { return !!m && m >= range.from && m <= range.to; }
+    var has = {};
+    ['claim', 'reserve', 'impact', 'claimDate', 'status', 'note'].forEach(function (k) { has[k] = recs.some(function (r) { return r[k] !== undefined; }); });
+    var amounts = has.claim || has.reserve || has.impact;
+    var cur = recs.filter(function (r) { return inR(r.month); }), months = monthsBetween(range.from, range.to);
+    var claimRows = recs.filter(function (r) { return r.claim != null && inR(r.claimDateMonth); });
+    var claimOut = claimRows.filter(function (r) { return !inR(r.month); });
+    var noDate = recs.filter(function (r) { return r.claim != null && !r.claimDateMonth; });
+    var impactOnly = cur.filter(impactOnlyRow);
+    var mismatch = recs.filter(function (r) { return r.impact != null && (r.claim != null || r.reserve != null) && Math.abs(r.impact - (r.claim || 0) - (r.reserve || 0)) > 0.5; });
+    var claim = has.claim ? sum(claimRows, 'claim') || 0 : null;
+    var reserve = has.reserve ? sum(cur, 'reserve') || 0 : null;
+    var impactOnlySum = sum(impactOnly, 'impact');
+    var impact = amounts ? (claim || 0) + (reserve || 0) + (impactOnlySum || 0) : null;
+
     var zero = cur.filter(function (r) { return r.rate === 0; }).length;
     var withPrev = cur.filter(function (r) { return r.rate != null && r.prevRate != null; });
     var lowered = withPrev.filter(function (r) { return r.rate < r.prevRate; }).length;
-    var canSave = withPrev.filter(function (r) { return r.goods != null; });
-    var saving = canSave.length ? canSave.reduce(function (t, r) { return t + r.goods * (r.prevRate - r.rate) / 100; }, 0) : null;
-    var g = {};
-    cur.forEach(function (r) {
-      var k = r[by] == null ? '(미기재)' : r[by], o = g[k] || (g[k] = { key: k, n: 0, zero: 0, saving: null });
-      o.n++; if (r.rate === 0) o.zero++;
-      if (r.goods != null && r.rate != null && r.prevRate != null) o.saving = (o.saving || 0) + r.goods * (r.prevRate - r.rate) / 100;
-    });
-    var groups = Object.keys(g).map(function (k) { var o = g[k]; o.zeroRate = ratio(o.zero, o.n); return o; })
-      .sort(function (a, b) { return b.n - a.n || String(a.key).localeCompare(String(b.key), 'ko'); });
+    var canSave = withPrev.filter(function (r) { return rowEstimate(r) != null; });
+    var saving = canSave.length ? canSave.reduce(function (t, r) { return t + rowEstimate(r); }, 0) : null;
+
+    function keyOf(r, b) { var v = b === 'year' ? r.year : r[b]; return v == null || v === '' ? '(미기재)' : String(v); }
+    function groupBy(b, order) {
+      var g = {};
+      function get(r) { var k = keyOf(r, b); return g[k] || (g[k] = { key: k, n: 0, zero: 0, saving: null, claim: null, reserve: null, impact: null }); }
+      cur.forEach(function (r) {
+        var o = get(r); o.n++; if (r.rate === 0) o.zero++;
+        addTo(o, 'saving', rowEstimate(r)); addTo(o, 'reserve', r.reserve); if (impactOnlyRow(r)) addTo(o, '_io', r.impact);
+      });
+      claimRows.forEach(function (r) { addTo(get(r), 'claim', r.claim); });
+      return Object.keys(g).map(function (k) {
+        var o = g[k]; o.zeroRate = ratio(o.zero, o.n);
+        if (has.claim && o.claim == null) o.claim = 0;
+        if (has.reserve && o.reserve == null) o.reserve = 0;
+        o.impact = amounts ? (o.claim || 0) + (o.reserve || 0) + (o._io || 0) : null; delete o._io;
+        return o;
+      }).sort(order === 'impact' ? function (a, b) { return (b.impact || 0) - (a.impact || 0) || b.n - a.n || String(a.key).localeCompare(String(b.key), 'ko'); }
+        : b === 'year' ? function (a, c) { return String(a.key).localeCompare(String(c.key)); }
+        : function (a, c) { return c.n - a.n || String(a.key).localeCompare(String(c.key), 'ko'); });
+    }
+
     var rates = {};
-    cur.forEach(function (r) { var k = r.rate == null ? '(미기재)' : (r.rateCode ? r.rateCode + ' ' : '') + r.rate + '%'; rates[k] = (rates[k] || 0) + 1; });
-    var list = cur.slice().sort(function (a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : 0; });
+    cur.forEach(function (r) { var k = rateText(r, 'rate') || '(미기재)'; rates[k] = (rates[k] || 0) + 1; });
+    var changes = {};
+    cur.forEach(function (r) {
+      var a = rateText(r, 'prevRate'), b = rateText(r, 'rate'); if (!a || !b) return;
+      var k = a + ' → ' + b, o = changes[k] || (changes[k] = { key: k, from: a, to: b, n: 0, lowered: r.rate != null && r.prevRate != null ? r.rate < r.prevRate : null });
+      o.n++;
+    });
+
+    // 진행상태별 — 파일 전체(지금 상태)
+    var stat = null, progress = null;
+    if (has.status) {
+      var sg = {};
+      recs.forEach(function (r) {
+        var k = r.status == null || r.status === '' ? '(미기재)' : r.status, o = sg[k] || (sg[k] = { key: k, n: 0, claim: null, reserve: null, impact: null, progress: isProgress(r) });
+        o.n++; addTo(o, 'claim', r.claim); addTo(o, 'reserve', r.reserve); addTo(o, 'impact', rowImpact(r));
+      });
+      stat = Object.keys(sg).map(function (k) { return sg[k]; }).sort(function (a, b) { return (b.progress ? 1 : 0) - (a.progress ? 1 : 0) || b.n - a.n || String(a.key).localeCompare(String(b.key), 'ko'); });
+      progress = recs.filter(isProgress).length;
+    }
+    // 연도별 — 파일 전체. 경정청구는 경정청구일 연도, 유보(와 impact 값만 있는 행)는 시행일자 연도.
+    var yearly = [];
+    if (amounts) {
+      var ys = {};
+      var Y = function (y) { return ys[y] || (ys[y] = { year: y, claim: null, reserve: null, other: null }); };
+      recs.forEach(function (r) {
+        if (r.claim != null && r.claimDateYear) addTo(Y(r.claimDateYear), 'claim', r.claim);
+        if (r.reserve != null) addTo(Y(r.year), 'reserve', r.reserve);
+        if (impactOnlyRow(r)) addTo(Y(r.year), 'other', r.impact);
+      });
+      var yk = Object.keys(ys).map(Number).sort(function (a, b) { return a - b; }), cum = 0;
+      for (var y = yk[0]; yk.length && y <= yk[yk.length - 1]; y++) {
+        var o = ys[y] || { year: y, claim: null, reserve: null, other: null };
+        o.total = o.claim == null && o.reserve == null && o.other == null ? null : (o.claim || 0) + (o.reserve || 0) + (o.other || 0);
+        cum += o.total || 0; o.cum = cum; yearly.push(o);
+      }
+    }
+
+    var list = cur.concat(claimOut).map(function (r) {
+      return Object.assign({}, r, { outside: !inR(r.month), impactRow: rowImpact(r), estimate: rowEstimate(r), rateText: rateText(r, 'rate'), prevRateText: rateText(r, 'prevRate') });
+    });
+    list.sort(sort === 'impact' ? function (a, b) {
+      var x = a.impactRow == null ? -Infinity : a.impactRow, z = b.impactRow == null ? -Infinity : b.impactRow;
+      return z - x || byDateDesc(a, b);
+    } : byDateDesc);
+    var latest = cur.slice().sort(byDateDesc)[0] || null;
     return {
-      range: range, months: months, by: by, byLabel: RULING_BY[by], n: cur.length, zero: zero, zeroRate: ratio(zero, cur.length),
-      withPrev: withPrev.length, lowered: lowered, saving: saving, savingN: canSave.length,
+      range: range, months: months, by: by, byLabel: RULING_BY[by], sort: sort === 'impact' ? 'impact' : 'date', basis: RULING_BASIS, has: has, amounts: amounts,
+      n: cur.length, zero: zero, zeroRate: ratio(zero, cur.length), multiRate: cur.filter(function (r) { return r.rateMulti; }).length,
+      withPrev: withPrev.length, lowered: lowered, saving: saving, savingN: canSave.length, actualN: cur.filter(hasActual).length,
+      claim: claim, reserve: reserve, impact: impact, claimN: claimRows.length,
+      claimOutside: has.claim ? sum(claimOut, 'claim') || 0 : null, claimOutsideN: claimOut.length,
+      noDate: has.claim ? sum(noDate, 'claim') || 0 : null, noDateN: noDate.length,
+      impactOnly: impactOnlySum, impactOnlyN: impactOnly.length, mismatchN: mismatch.length,
+      progress: progress, statuses: stat, yearly: yearly,
       products: valuesOf(cur, 'product').length, brokers: valuesOf(cur, 'broker').length,
-      latest: list.length ? list[0] : null, groups: groups, monthly: byMonth(cur, months, []),
-      rates: Object.keys(rates).map(function (k) { return { key: k, n: rates[k] }; }).sort(function (a, b) { return b.n - a.n; }), list: list
+      latest: latest, groups: groupBy(by), byProduct: amounts ? groupBy('product', 'impact') : [], monthly: byMonth(cur, months, []),
+      rates: Object.keys(rates).map(function (k) { return { key: k, n: rates[k] }; }).sort(function (a, b) { return b.n - a.n; }),
+      rateChanges: Object.keys(changes).map(function (k) { return changes[k]; }).sort(function (a, b) { return b.n - a.n || a.key.localeCompare(b.key); }),
+      list: list
     };
   }
   function topN(groups, n) {
@@ -630,6 +767,11 @@
     info.push([], ['계산식', '관세부담율 = 관세 ÷ 물자대 · FTA 활용률 = 물자대_FTA ÷ 물자대 · 오류 비율 = 오류건수 ÷ 신고건수 · 증감률 = (올해 − 전년 동기) ÷ 전년 동기'],
       ['', '나누는 값이 0 이거나 비면 비워 둡니다. 빈 금액은 0 으로 더하지 않습니다.'],
       ['', '관세환급 건수 = 「건수」 열이 있으면 그 열의 합, 없으면 읽은 행 수(신청 1건 = 1줄, 합계 줄 제외, 환급액이 빈 줄 포함)']);
+    if (d.ruling) {
+      var rrg = ctx.rulingRange || range;
+      info.push(['결정문 조회 기간', monthLabel(rrg.from) + ' ~ ' + monthLabel(rrg.to) + ' — ' + RULING_BASIS],
+        ['', '관세절감 impact = 경정청구 금액 + 관세유보금액. 경정청구일이 빈 경정청구 금액은 뺍니다. 절감 추정은 금액이 아직 없는 건에만 참고로 계산하고 실제 금액과 더하지 않습니다.']);
+    }
     out.push({ name: '안내', aoa: info });
     function f(rec, k) { return rec && rec[k] != null && isFinite(rec[k]) ? rec[k] : ''; }
     function pct(v) { return v == null ? '' : Math.round(v * 10000) / 100; }
@@ -662,14 +804,24 @@
       out.push({ name: '오류_구분', aoa: [['구분', '신고건수', '오류건수', '오류 비율(%)', '오류점수']].concat(er.groups.map(function (g) { return [g.key, f(g, 'decl'), f(g, 'err'), pct(g.rate), f(g, 'score')]; })) });
     }
     if (d.ruling) {
+      // (v1.6.0) 결정문은 자기 기간(ctx.rulingRange). 금액 열이 있을 때만 금액 칸 · 연도별 · 진행상태 · 세율 인하 시트를 더한다.
+      var rr = ctx.rulingRange || range, rl = rulingStats(filt('ruling'), rr, 'product'), am = rl.amounts;
+      var amHead = am ? ['경정청구 금액(경정청구일 기준)', '관세유보금액(시행일자 기준)', '관세절감 impact'] : [];
+      var amCells = function (o) { return am ? [f(o, 'claim'), f(o, 'reserve'), f(o, 'impact')] : []; };
       ['product', 'broker', 'hs4'].forEach(function (by) {
-        var rs = rulingStats(filt('ruling'), range, by);
-        out.push({ name: '결정문_' + RULING_BY[by].replace(/\s/g, ''), aoa: [[RULING_BY[by], '결정 건수', '관세율 0% 건수', '0% 비율(%)', '절감 추정']].concat(rs.groups.map(function (g) { return [g.key, g.n, g.zero, pct(g.zeroRate), f(g, 'saving')]; }), [['합계', rs.n, rs.zero, pct(rs.zeroRate), f(rs, 'saving')]]) });
+        var rs = rulingStats(filt('ruling'), rr, by);
+        out.push({ name: '결정문_' + RULING_BY[by].replace(/\s/g, ''), aoa: [[RULING_BY[by], '결정 건수', '관세율 0% 건수', '0% 비율(%)', am ? '절감 추정(금액 없는 건)' : '절감 추정'].concat(amHead)].concat(rs.groups.map(function (g) { return [g.key, g.n, g.zero, pct(g.zeroRate), f(g, 'saving')].concat(amCells(g)); }), [['합계', rs.n, rs.zero, pct(rs.zeroRate), f(rs, 'saving')].concat(amCells(rs))]) });
       });
-      var rl = rulingStats(filt('ruling'), range, 'product');
-      out.push({ name: '결정문_목록', aoa: [['시행일자', '완제품', '품명', '결정세번', '결정문번호', '관세율', '종전세율', '관세사', '연간 수입액', '절감 추정']].concat(rl.list.map(function (r) {
-        return [r.date, r.product, r.item, r.hs, r.docNo || '', r.rate == null ? '' : (r.rateCode ? r.rateCode + ' ' : '') + r.rate, r.prevRate == null ? '' : r.prevRate, r.broker || '', f(r, 'goods'), r.goods != null && r.rate != null && r.prevRate != null ? r.goods * (r.prevRate - r.rate) / 100 : ''];
+      var ext = am || rl.has.status || rl.has.claimDate || rl.has.note;
+      out.push({ name: '결정문_목록', aoa: [['시행일자', '완제품', '품명', '결정세번', '결정문번호', '관세율', '종전세율', '관세사', '연간 수입액', '절감 추정'].concat(ext ? ['경정청구 금액', '관세유보금액', '관세절감 impact', '경정청구일', '진행상태', '비고', '기간 밖 결정문'] : [])].concat(rl.list.map(function (r) {
+        var row = [r.date, r.product, r.item, r.hs, r.docNo || '', r.rate == null ? (r.rateMulti || '') : (r.rateCode ? r.rateCode + ' ' : '') + r.rate, r.prevRate == null ? (r.prevRateMulti || '') : r.prevRate, r.broker || '', f(r, 'goods'), r.estimate == null ? '' : r.estimate];
+        return ext ? row.concat([f(r, 'claim'), f(r, 'reserve'), f(r, 'impactRow'), r.claimDate || '', r.status || '', r.note || '', r.outside ? 'Y' : '']) : row;
       })) });
+      if (am) {
+        out.push({ name: '결정문_연도별', aoa: [['연도', '경정청구(경정청구일 연도)', '관세유보(시행일자 연도)', 'impact 값만 있는 건(시행일자 연도)', '합계', '누계']].concat(rl.yearly.map(function (y) { return [y.year, f(y, 'claim'), f(y, 'reserve'), f(y, 'other'), f(y, 'total'), f(y, 'cum')]; })) });
+        if (rl.statuses) out.push({ name: '결정문_진행상태', aoa: [['진행상태(파일 전체 · 지금 상태)', '건수', '경정청구 금액', '관세유보금액', '관세절감 impact', '진행중']].concat(rl.statuses.map(function (s) { return [s.key, s.n, f(s, 'claim'), f(s, 'reserve'), f(s, 'impact'), s.progress ? 'Y' : '']; })) });
+        out.push({ name: '결정문_세율인하', aoa: [['종전세율 → 결정세율', '건수', '낮아짐']].concat(rl.rateChanges.map(function (c) { return [c.key, c.n, c.lowered == null ? '' : c.lowered ? 'Y' : 'N']; })) });
+      }
     }
     return out;
   }
@@ -849,6 +1001,34 @@
     }
     return [make(1, 12, true), make(2, 10, false)];
   }
+  // (v1.6.0) 결정문 현황 + 고정비 절감 금액 열 — 가짜 데이터. 예제 5종(sampleFiles)에는 넣지 않는다(금액 열 없는 파일도 계속 시험).
+  var RULING_AMT_HEAD = ['연번', '완제품', '품명', '결정세번', '품목분류사전심사결정문번호', '시행일자', '관세율', '관세사', '종전세율', '연간 수입액', '경정청구 금액', '관세유보금액', '관세절감 impact', '경정청구일', '진행상태', '비고'];
+  // 확인용 2건: 가) 2025-10 결정 · 2026-02 경정청구 300만 · 유보 200만 / 나) 2026-03 결정 · 경정청구 없음 · 유보 100만
+  function sampleRulingCheck() {
+    return { name: '예제_결정문금액_확인2건(가상).xlsx', kind: 'ruling', aoa: [RULING_AMT_HEAD,
+      ['가', 'EXCAVATOR', 'PIN(가상)', '8431.49-9000', '품목분류4과-1001(가상)', '2025-10-15', '0', '가상관세법인 A', '8', 50000000, 3000000, 2000000, 5000000, '2026-02-10', '환급완료', '확인 가(가상)'],
+      ['나', 'Wheel Loader', 'HORN(가상)', '8512.30-0000', '품목분류3과-1002(가상)', '2026-03-05', '0', '가상관세법인 B', '8', 12500000, '', 1000000, 1000000, '', '경정청구중', '확인 나(가상)']] };
+  }
+  // 여러 해 · 여러 상태 14건. 2015년 결정문 · 복수 세율(0, 8) · 경정청구일이 빈 경정청구 금액 1건 · 금액이 아직 없는 건(추정 대상)을 일부러 넣었다.
+  function sampleRulingAmounts() {
+    var rows = [
+      [1, 'EXCAVATOR', 'BLOCK ASSY(가상)', '8431.49-9000', '품목분류4과-2001(가상)', '2015-06-12', '0', '가상관세법인 A', '8', 120000000, 9600000, '', 9600000, '2026-01-20', '환급완료', '2015년 결정 → 2026년 경정청구(가상)'],
+      [2, 'EXCAVATOR', 'WIPER ARM(가상)', '8479.89-9099', '품목분류2과-2002(가상)', '2024-03-04', '0', '가상관세법인 B', '8', 40000000, 3200000, '', 3200000, '2024-09-10', '환급완료', ''],
+      [3, 'Wheel Loader', 'BELT,SEAT(가상)', '8431.43-0000', '품목분류4과-2003(가상)', '2024-11-18', '0', '가상관세법인 A', '6.5', 30000000, 1950000, 1500000, 3450000, '2025-04-02', '환급완료', ''],
+      [4, '천공기', 'HORN(가상)', '8512.30-0000', '품목분류3과-2004(가상)', '2025-02-07', '0, 8', '가상관세법인 B', '8', 25000000, '', 1000000, 1000000, '', '재심사', '세율 두 개(가상)'],
+      [5, 'EXCAVATOR', 'DRUM UPPER(가상)', '7304.31-0000', '품목분류1과-2005(가상)', '2025-08-21', '0', '가상관세법인 A', '8', 80000000, 4800000, 3000000, 7800000, '2026-03-15', '환급완료', ''],
+      [6, 'EXCAVATOR', 'PIPE(가상)', '7326.90-9000', '품목분류1과-2006(가상)', '2025-12-03', '0', '가상관세법인 B', '8', 60000000, '', 2500000, 2500000, '', '경정청구중', ''],
+      [7, 'Wheel Loader', 'SPLIT FLANGE(가상)', '9401.99-1000', '품목분류2과-2007(가상)', '2026-01-14', 'FCN0', '가상관세법인 A', '8', 45000000, 1800000, 2000000, 3800000, '2026-05-08', '환급완료', ''],
+      [8, 'EXCAVATOR', 'PARKING BRAKE(가상)', '8481.20-1000', '품목분류2과-2008(가상)', '2026-02-11', '3', '가상관세법인 B', '8', 70000000, '', 3500000, 3500000, '', '유보', ''],
+      [9, '천공기', 'PEDAL ASSY(가상)', '8431.43-0000', '품목분류4과-2009(가상)', '2026-03-25', '0', '가상관세법인 A', '8', 20000000, 1600000, '', 1600000, '', '환급완료', '경정청구일 빈칸(가상)'],
+      [10, 'EXCAVATOR', 'PIN(가상)', '8431.49-9000', '품목분류4과-2010(가상)', '2026-04-09', '0', '가상관세법인 B', '8', 90000000, '', 4000000, 4000000, '', '심판청구', ''],
+      [11, 'Wheel Loader', 'BRACKET(가상)', '8479.89-9099', '품목분류2과-2011(가상)', '2026-05-19', '0', '가상관세법인 A', '8', 35000000, '', 1500000, 1500000, '', '경정청구중', ''],
+      [12, 'EXCAVATOR', 'COVER(가상)', '7326.90-9000', '품목분류1과-2012(가상)', '2026-06-02', '0', '가상관세법인 B', '8', 50000000, '', '', '', '', '접수', '금액 아직 없음(가상)'],
+      [13, '천공기', 'BLOCK ASSY(가상)', '8431.49-9000', '품목분류4과-2013(가상)', '2026-07-16', '0', '가상관세법인 A', '6.5', 40000000, '', '', '', '', '접수', '금액 아직 없음(가상)'],
+      [14, 'EXCAVATOR', 'HORN(가상)', '8512.30-0000', '품목분류3과-2014(가상)', '2026-08-27', '8', '가상관세법인 B', '8', 15000000, '', '', '', '', '종결', '세율 그대로(가상)']
+    ];
+    return { name: '예제_결정문금액_14건(가상).xlsx', kind: 'ruling', aoa: [RULING_AMT_HEAD].concat(rows) };
+  }
   // 표(첫 줄 머리글) → sheet_to_json 과 같은 객체 배열
   function aoaToRows(aoa) {
     var head = aoa[0].map(function (h, i) { return clean(h) || ('열' + (i + 1)); });
@@ -863,7 +1043,9 @@
     periodOf: periodOf, unionPeriod: unionPeriod, shiftMonth: shiftMonth, monthsBetween: monthsBetween, defaultRange: defaultRange, prevRange: prevRange,
     applyFilter: applyFilter, valuesOf: valuesOf, sum: sum, ratio: ratio, change: change, group: group, byMonth: byMonth, topN: topN,
     importStats: importStats, exportStats: exportStats, ftaStats: ftaStats, refundStats: refundStats, refundCountBasis: refundCountBasis, errorStats: errorStats,
-    parseRate: parseRate, rulingStats: rulingStats, RULING_BY: RULING_BY,
+    parseRate: parseRate, rulingStats: rulingStats, RULING_BY: RULING_BY, RULING_BASIS: RULING_BASIS, RULING_BASE_FROM: RULING_BASE_FROM, RULING_PROGRESS: RULING_PROGRESS,
+    isProgress: isProgress, rowImpact: rowImpact, rulingPeriod: rulingPeriod, rulingMonths: rulingMonths, rulingDefaultRange: rulingDefaultRange,
+    sampleRulingCheck: sampleRulingCheck, sampleRulingAmounts: sampleRulingAmounts,
     fmtNum: fmtNum, fmtPct: fmtPct, fmtSigned: fmtSigned, fmtSignedPct: fmtSignedPct, fmtShort: fmtShort, monthLabel: monthLabel,
     exportBook: exportBook,
     libValidate: libValidate, libAdd: libAdd, libRemove: libRemove, libSearch: libSearch, libCounts: libCounts, libToAoa: libToAoa,
