@@ -15,6 +15,7 @@
 - 시험: v1.8.0 31개 추가(`node test/logic.test.js` 통과 677 · 실패 0). 이 PC에 playwright 없음 — Edge headless 로 22개 확인
 - 사용법(guide.html) · README
 - 개발일지: `Dev_md/2026-11-18_v1.8.0_GN시트기간.md`
+- (2026-11-18) 워드 기획서 v1.8.0 — `docs/기획서/build-2611-07_최창섭_수출입통관통합관리DashBoard_기획서_v1.8.0.docx`(v1.7.0 판 짜임에 v1.8.0 내용: 요약 · 목표 · 요구사항 3 · 기능 2 · 규칙 4 · 검증 · 제한 2 · 다음 단계 · 판 이력 · 개발일지). `docs/plan.json` · `docs/기획서.md` · `plan.html`(판 목록 · 개발일지) 도 v1.8.0 으로
 
 ## v1.7.0 — 2026-11-18
 
