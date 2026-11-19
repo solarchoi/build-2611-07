@@ -52,7 +52,11 @@
   }
   function renderCards() {
     var S = state.summary, c = S.totalCum, over = S.quarters.filter(function (q) { return q.over; }), last = S.months[S.months.length - 1];
-    $('e-cards').innerHTML = '<div class="stats">' + stat(last + '월 인천 오류점수', n(S.total[last].인천.score)) + stat(last + '월 울산 오류점수', n(S.total[last].울산.score)) + stat('누적 인천', n(c.인천.score)) + stat('누적 울산', n(c.울산.score)) + stat('경계 이상 분기·범위', over.length) + '</div>';
+    // (v1.10.1) 전사 = 수출입 합계 — 분모는 수입 + 수출 현황목록 총신고건(한쪽이 없으면 「자료 없음」). 계산은 errscore.js summarize(total.종합)
+    var T = S.total[last].종합;
+    $('e-cards').innerHTML = '<div class="stats" data-k="corp">' + stat(last + '월 전사 오류점수', n(T.score)) + stat(last + '월 전사 총신고건', T.decl == null ? '자료 없음' : n(T.decl)) + stat(last + '월 전사 오류비율', rt(T.rate)) + '</div>' +
+      '<p class="sub" data-k="corp-note">전사 = 수출입 합계(수입 + 수출 현황목록 총신고건). 수입 · 수출 중 한쪽 현황목록이 없는 달은 전사 오류비율을 「자료 없음」으로 둡니다.</p>' +
+      '<div class="stats">' + stat(last + '월 인천 오류점수', n(S.total[last].인천.score)) + stat(last + '월 울산 오류점수', n(S.total[last].울산.score)) + stat('누적 인천', n(c.인천.score)) + stat('누적 울산', n(c.울산.score)) + stat('경계 이상 분기·범위', over.length) + '</div>';
   }
   function renderTable() {
     var S = state.summary, rows = [];

@@ -1281,4 +1281,12 @@ function v1100() {
   ok(html.indexOf('<script src="js/filerules.js">') > html.indexOf('<script src="js/customs.js">') && html.indexOf('id="d-viewbar"') > 0 && eh.indexOf('<script src="js/filerules.js">') < eh.indexOf('<script src="js/errscore.js">'), 'v1.10.0 두 화면에 filerules.js');
   var dj = fsx.readFileSync(__dirname + '/../js/dash.js', 'utf8'), ej = fsx.readFileSync(__dirname + '/../js/errors.js', 'utf8');
   ok(/'자료 없음'/.test(dj) && /'자료 없음'/.test(ej), 'v1.10.0 오류 비율 분모 없으면 「자료 없음」');
+  // (v1.10.1) 전사 오류비율 = 수출입 합계(기획자 결정 2026-11-19) — 분모 = 수입 + 수출 현황목록 총신고건
+  var corpEx = ES2.readWorkbook([{ name: '귀책사유자별오류현황목록', aoa: [SH, [1, '(가상)', '(가상)', '012', '세관', 2234, 69, 3]] }], '2026-10_수출오류_현황목록(가상).xlsx');
+  // 점수는 상세목록(가짜 60점), 분모는 현황목록 — 수출 2,234 + 수입 1,740 = 3,974
+  var SC = ES2.summarize([corpEx, dtl, impSt, imp], {}, {});
+  eq([SC.total[10].종합.decl, SC.total[10].종합.score, SC.total[10].종합.rate], [3974, 60, 1.51], 'v1.10.1 전사 = 수출입 합계(3,974건 · 60점 · 1.51%)');
+  var half = ES2.summarize([corpEx, dtl], {}, {});
+  eq([half.total[10].종합.decl, half.total[10].종합.rate, half.kinds.수출.months[10].종합.rate], [null, null, 2.69], 'v1.10.1 수입 현황목록이 없으면 전사 비율 자료 없음(수출 줄은 2.69%)');
+  ok(/전사 오류비율/.test(ej) && /수출입 합계/.test(ej), 'v1.10.1 오류점수 화면에 전사(수출입 합계) 카드');
 }

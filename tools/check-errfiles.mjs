@@ -39,10 +39,10 @@ books.forEach((b) => {
 const S = E.summarize(books, E.countsFromBooks(books), {});
 const f1 = (v) => (v == null ? '—' : Number(v).toLocaleString('en-US'));
 const pct = (v) => (v == null ? '자료 없음' : v.toFixed(2) + '%');
-console.log('\n[월별 오류점수 — 분모는 현황목록 총신고건]');
+console.log('\n[월별 오류점수 — 분모는 현황목록 총신고건 · 전사 = 수출입 합계(한쪽 현황목록이 없으면 자료 없음)]');
 S.months.forEach((m) => {
-  [['수입', S.kinds.수입.months[m]], ['수출', S.kinds.수출.months[m]], ['수출입', S.total[m]]].forEach(([k, x]) => {
-    console.log('  ' + String(m).padStart(2) + '월 ' + k.padEnd(3) + ' 오류점수 ' + f1(x.종합.score).padStart(5) + '점 · 총신고건 ' + f1(x.종합.decl).padStart(6) + '건 · 오류비율 ' + pct(x.종합.rate).padStart(8) +
+  [['수입', S.kinds.수입.months[m]], ['수출', S.kinds.수출.months[m]], ['전사(수출입)', S.total[m]]].forEach(([k, x]) => {
+    console.log('  ' + String(m).padStart(2) + '월 ' + k.padEnd(8) + ' 오류점수 ' + f1(x.종합.score).padStart(5) + '점 · 총신고건 ' + f1(x.종합.decl).padStart(6) + '건 · 오류비율 ' + pct(x.종합.rate).padStart(8) +
       ' · 오류건수(신고번호) ' + x.종합.err + ' | 인천 ' + f1(x.인천.score) + '점 · 울산 ' + f1(x.울산.score) + '점');
   });
 });
