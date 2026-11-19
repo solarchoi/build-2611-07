@@ -2,8 +2,9 @@
 (function () {
   'use strict';
   var $ = function (id) { return document.getElementById(id); };
-  var C = window.Customs;
-  var LS = { data: 'b2611-07.dash', unit: 'b2611-07.dash.unit', kinds: 'b2611-07.dash.kinds', settings: 'b2611-07.dash.settings' };
+  var C = window.Customs, FR = window.FileRules;
+  // (v1.10.0) files = 올린 파일 목록(이름 · 종류 · 기간 · 행 수) — 원본 행과 따로, 늘 저장한다(작다)
+  var LS = { data: 'b2611-07.dash', unit: 'b2611-07.dash.unit', kinds: 'b2611-07.dash.kinds', settings: 'b2611-07.dash.settings', files: 'b2611-07.dash.files' };
   // (v1.7.0) 수출 설정(Plant → 본부 표 · GN 제외) — 이 브라우저에만 둔다. 값 정리는 customs.js(exportSettings).
   function loadSettings() { try { return C.exportSettings(JSON.parse(localStorage.getItem(LS.settings) || 'null')); } catch (e) { return C.exportSettings(null); } }
   function saveSettings(raw) { state.settings = C.exportSettings(raw); try { localStorage.setItem(LS.settings, JSON.stringify(raw)); } catch (e) { /* 기억 못 해도 이번 화면에는 반영 */ } }
@@ -15,6 +16,9 @@
   // 같은 종류 파일은 모두 더한다. 이름이 같은 파일은 그 파일만 바꾼다. 합치는 규칙은 customs.js(upsertFile · mergeFiles).
   var state = { sets: {}, pending: [], filter: {}, range: null, tab: 'trade', unit: localStorage.getItem(LS.unit) || '원', open: {}, settings: null };
   state.settings = loadSettings();
+  // (v1.10.0) 조회 모드: view = true 이면 sets 는 조회용 파일만(저장 안 함), saved 는 가려 둔 확정 데이터. held = FTA 파일(다음 단계 — 합계에 안 넣음)
+  state.view = false; state.saved = null; state.held = []; state.lostFiles = [];
+  state.base = function () { return state.view ? (state.saved || {}) : state.sets; };
   function openKey(k, f) { return k + '|' + C.fileKey(f); }
   function label(k) { return C.DATASETS[k].label; }
 
@@ -70,8 +74,36 @@
     }).filter(function (s) { return s.aoa.length > 1; });
   }
   // 파일 묶음 → 종류별로 넣는다. 따로 올리든 함께 올리든 같은 종류는 모두 더한다(머리글이 달라도). 이름이 같은 파일은 그 파일만 바꾼다.
+  // (v1.10.0) 파일 하나의 월 목록 — 파일 이름 기간이 있으면 그것, 없으면 지난번 계산한 데이터 기간
+  function monthsOfFile(k, f) {
+    if (f.meta && f.meta.period) return f.meta.period.months;
+    var s = state.base()[k], i = s ? s.files.indexOf(f) : -1, p = i >= 0 && s.m && s.m.files[i] ? s.m.files[i].period : null;
+    return p ? FR.monthsBetween(p.from, p.to) : [];
+  }
+  function rowsOfItem(item) { return (item.parts || [{ aoa: item.aoa }]).reduce(function (t, pt) { return t + Math.max(0, (pt.aoa || []).length - 1); }, 0); }
+  function rowsOfOld(k, f) { var s = state.base()[k], i = s.files.indexOf(f), p = s.m && s.m.files[i]; return p && p.norm ? p.norm.records.length : rowsOfItem(f); }
+  // (v1.10.0) 확정본: 같은 종류 · 겹치는 기간(또는 같은 이름) 파일이 있으면 「교체할까요?」 — 조용히 둘 다 더하지 않는다.
+  //   → true(넣음) / false(사용자가 취소 — 새 파일을 올리지 않음)
+  function placeConfirmed(k, item, sets) {
+    var s = sets[k], months = item.meta && item.meta.period ? item.meta.period.months : null;
+    var clash = !s ? [] : s.files.filter(function (f) {
+      if (C.fileKey(f) === C.fileKey(item)) return true;
+      if (!months) return false;
+      var om = monthsOfFile(k, f); return om.some(function (m) { return months.indexOf(m) >= 0; });
+    });
+    if (clash.length) {
+      var lines = clash.map(function (f) { return '  · ' + f.file + ' — 올린 시각 ' + (f.uploadedAt || '?') + ' · ' + C.fmtNum(rowsOfOld(k, f)) + '행' + (f.meta && f.meta.period ? ' · ' + f.meta.period.text : ''); });
+      var ok = window.confirm('「' + item.file + '」(' + C.fmtNum(rowsOfItem(item)) + '행)과 기간이 겹치는 ' + label(k) + ' 파일이 있습니다.\n\n이전 파일:\n' + lines.join('\n') +
+        '\n\n이전 파일을 교체할까요?\n[확인] 이전 파일을 빼고 새 파일로 교체  ·  [취소] 새 파일을 올리지 않음\n\n같은 월인데 행 수가 다르면 늦게 계상된 신고가 있다는 뜻입니다.');
+      if (!ok) return false;
+      s.files = s.files.filter(function (f) { return clash.indexOf(f) < 0; });
+      item.replaced = clash.map(function (f) { return { file: f.file, uploadedAt: f.uploadedAt, rows: rowsOfOld(k, f) }; });
+    }
+    var t = sets[k] || (sets[k] = { files: [] }); t.files.push(item);
+    return true;
+  }
   function addFiles(list) {
-    var notes = [], warn = false, names = {};
+    var notes = [], warn = false, names = {}, views = [], confirmedN = 0;
     list.forEach(function (f) {
       var sheets = sheetsOf(f.wb);
       if (!sheets.length) { notes.push(esc(f.name) + ' — 읽을 표가 없습니다.'); warn = true; return; }
@@ -80,17 +112,54 @@
       var item = { name: f.name, file: f.name + (use.length === 1 && sheets.length > 1 ? ' · ' + best.s.name : ''), uploadedAt: now(), headers: C.uniqueHeaders(best.s.aoa[0]), aoa: best.s.aoa, offset: best.s.offset, override: {} };
       if (use.length > 1) item.parts = use.map(function (s) { return { sheet: s.name, aoa: s.aoa, offset: s.offset }; });
       if (pk.skipped.length) item.skippedSheets = pk.skipped;
-      // 사람이 전에 같은 머리글의 파일 종류를 바꿔 준 적이 있으면 그 종류가 앞선다
-      var pref = kindPrefs()[item.headers.join('|')];
-      if (pref && C.DATASETS[pref]) best.d = { kind: pref, reason: '전에 직접 고른 종류' };
-      if (!best.d.kind) { state.pending.push(item); notes.push(esc(f.name) + ' — 어떤 자료인지 알아보지 못했습니다. 아래에서 종류를 골라 주세요.'); warn = true; return; }
-      item.reason = best.d.reason;
-      notes.push(putFile(best.d.kind, item));
-      names[best.d.kind] = names[best.d.kind] || {}; names[best.d.kind][item.file] = 1;
+      // (v1.10.0) 파일 이름으로 종류 · 기간 · 확정본/조회용 · 월 귀속을 먼저 정한다(규칙은 filerules.js). 이름으로 못 정하면 내용 판별.
+      var info = FR.describe(f.name, best.d);
+      if (info.group === 'errscore' && info.part) { notes.push(esc(f.name) + ' — 유니패스 오류점수 ' + esc(info.part) + '목록으로 인식했습니다. <a href="errors.html">오류점수 화면</a>에서 올려 주세요(대시보드 합계에는 넣지 않음).'); warn = true; return; }
+      if (info.group === 'fta') { state.held.push({ file: f.name, label: info.label, rows: rowsOfItem(item), uploadedAt: item.uploadedAt, warnings: info.warnings }); notes.push(esc(f.name) + ' — ' + esc(info.label) + ' 파일로 인식했습니다. FTA 집계는 다음 단계라 목록에만 올리고 합계에는 넣지 않습니다(물자대가 두 번 잡히지 않게).'); warn = true; return; }
+      // 사람이 전에 같은 머리글의 파일 종류를 바꿔 준 적이 있으면 — 파일 이름으로 정하지 못한 경우에만 그 종류가 앞선다
+      var byName = info.dataset && info.how.indexOf('파일 이름') === 0, pref = kindPrefs()[item.headers.join('|')];
+      var kind = byName ? info.dataset : pref && C.DATASETS[pref] ? pref : best.d.kind;
+      var reason = byName ? info.how : pref && C.DATASETS[pref] ? '전에 직접 고른 종류' : best.d.reason;
+      item.meta = info;
+      if (!kind) { state.pending.push(item); notes.push(esc(f.name) + ' — 어떤 자료인지 알아보지 못했습니다. 아래에서 종류를 골라 주세요.'); warn = true; return; }
+      info.dataset = kind; item.reason = reason;
+      info.warnings.forEach(function (w) { notes.push(esc(f.name) + ' — <b>' + esc(w) + '</b>'); warn = true; });
+      if (info.mode === 'view') { views.push({ kind: kind, item: item }); return; }
+      if (!placeConfirmed(kind, item, state.base())) { notes.push(esc(item.file) + ' — 올리지 않았습니다(이전 파일 그대로).'); warn = true; return; }
+      confirmedN++;
+      notes.push(esc(item.file) + (item.replaced ? ' — 이전 파일(' + esc(item.replaced.map(function (r) { return r.file + ' · ' + r.uploadedAt + ' · ' + C.fmtNum(r.rows) + '행'; }).join(', ')) + ')을 교체했습니다' : ' 파일을 더했습니다') + ' — ' + esc(label(kind)) + ' · ' + esc(info.modeWhy));
+      names[kind] = names[kind] || {}; names[kind][item.file] = 1;
     });
+    // 확정본을 올리면 조회 모드를 끝낸다(확정 데이터 화면으로). 조회용이 함께 있으면 그것만 조회 모드로 다시 연다.
+    if (confirmedN && state.view) endView(true);
+    if (views.length) {
+      if (!state.view) { state.saved = state.sets; state.sets = {}; state.view = true; }
+      views.forEach(function (v) { putFile(v.kind, v.item); });
+      notes.push('<b>조회 모드</b> — ' + esc(views.map(function (v) { return v.item.file; }).join(', ')) + ' 은(는) 저장하지 않고 화면에만 보입니다. 저장된 확정 데이터는 그대로입니다.');
+    }
     var note = rebuild(true);
     Object.keys(names).forEach(function (k) { overlapNotes(k, names[k]).forEach(function (t) { notes.push(t); warn = true; }); });
     msg(notes.join('<br>') + note, warn || state.pending.length || note ? 'warn' : 'ok');
+  }
+  // (v1.10.0) 조회 모드 끝내기 — 저장된 확정 데이터 화면으로 돌아간다(조회 데이터는 버림)
+  function endView(silent) {
+    if (!state.view) return;
+    state.sets = state.saved || {}; state.saved = null; state.view = false; state.open = {};
+    if (!silent) { var note = rebuild(true); msg('조회 모드를 끝냈습니다. 저장된 확정 데이터를 보입니다.' + note, note ? 'warn' : 'ok'); }
+  }
+  // (v1.10.0) 「이 결과를 저장」 — 누를 때만 조회 데이터를 확정 데이터에 넣는다(겹치면 교체할지 묻는다)
+  function keepView() {
+    if (!state.view) return;
+    var views = state.sets, base = state.saved || {}, done = [], skip = [];
+    Object.keys(views).forEach(function (k) {
+      views[k].files.forEach(function (f) {
+        f.meta = f.meta || {}; f.meta.mode = 'confirmed'; f.meta.modeWhy = '조회 결과를 저장함(' + now() + ')'; f.meta.savedFromView = true;
+        if (placeConfirmed(k, f, base)) done.push(f.file); else skip.push(f.file);
+      });
+    });
+    state.sets = base; state.saved = null; state.view = false;
+    var note = rebuild(true);
+    msg((done.length ? esc(done.join(', ')) + ' — 조회 결과를 저장했습니다.' : '') + (skip.length ? ' ' + esc(skip.join(', ')) + ' — 저장하지 않았습니다(이전 파일 그대로).' : '') + note, skip.length || note ? 'warn' : 'ok');
   }
   function readFiles(files) {
     var list = [], left = files.length;
@@ -106,7 +175,7 @@
     });
   }
   function loadSample() {
-    state.sets = {}; state.pending = []; state.open = {};
+    state.sets = {}; state.pending = []; state.open = {}; state.view = false; state.saved = null; state.held = [];
     addFiles(C.sampleFiles().map(function (f) {
       var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(f.aoa), '데이터');
       return { name: f.name, wb: wb };
@@ -136,37 +205,90 @@
   function save() {
     if (!$('d-remember').checked) return '';
     var keep = {};
-    Object.keys(state.sets).forEach(function (k) {
-      keep[k] = { files: state.sets[k].files.map(function (f) {
+    // (v1.10.0) 조회 모드의 파일은 절대 저장하지 않는다 — 가려 둔 확정 데이터(base)만
+    var base = state.base(), list = [];
+    Object.keys(base).forEach(function (k) {
+      keep[k] = { files: base[k].files.map(function (f, i) {
         // (v1.8.0) 여러 시트면 parts 만 기억한다(aoa 는 첫 시트와 같아 비워 둔다 — 되읽을 때 채움)
         var o = { name: f.name, file: f.file, uploadedAt: f.uploadedAt, headers: f.headers, aoa: f.parts ? [] : f.aoa, offset: f.offset, override: f.override, reason: f.reason };
         if (f.parts) o.parts = f.parts;
         if (f.skippedSheets) o.skippedSheets = f.skippedSheets;
+        if (f.meta) o.meta = f.meta;
+        var p = base[k].m && base[k].m.files[i];
+        list.push({ file: f.file, kind: k, uploadedAt: f.uploadedAt, rows: p && p.norm ? p.norm.records.length : null, period: f.meta && f.meta.period ? f.meta.period.text : p && p.period ? p.period.from + '~' + p.period.to : null, rule: f.meta ? f.meta.rule : null });
         return o;
       }) };
     });
+    // 파일 목록(작다)은 원본 행과 따로 늘 저장 — 원본이 커서 못 남겨도 무엇을 올렸는지는 남는다
+    try { localStorage.setItem(LS.files, JSON.stringify({ v: 1, files: list })); } catch (e0) { /* 목록도 못 남기면 그대로 */ }
     try { localStorage.setItem(LS.data, JSON.stringify({ v: 2, sets: keep })); return ''; }
     catch (e) {
       // 남겨 두면 다음에 열 때 지금과 다른 옛 자료가 보인다 → 지운다
       try { localStorage.removeItem(LS.data); } catch (e2) { /* 지우지 못해도 화면은 계속 */ }
-      return '<br><b>데이터가 커서 이 브라우저에 기억하지 못했습니다.</b> 이전에 기억한 데이터도 지웠습니다. 다음에 열 때 다시 올려 주세요.';
+      return '<br><b>데이터가 커서 이 브라우저에 원본 행을 기억하지 못했습니다.</b> 파일 목록(이름 · 종류 · 기간 · 행 수)만 남겼습니다. 다음에 열 때 다시 올려 주세요.';
     }
   }
   function restore() {
     try {
       var j = C.migrateSaved(JSON.parse(localStorage.getItem(LS.data) || 'null'));
       Object.keys(j.sets).forEach(function (k) { j.sets[k].files.forEach(function (f) { f.headers = C.uniqueHeaders(f.headers); }); state.sets[k] = j.sets[k]; });
-      return Object.keys(state.sets).length > 0;
-    } catch (e) { state.sets = {}; return false; }
+    } catch (e) { state.sets = {}; }
+    // (v1.10.0) 목록에는 있는데 원본 행이 없는 파일 = 용량 때문에 기억하지 못한 파일 → 다시 올려 달라고 알린다
+    try {
+      var fl = JSON.parse(localStorage.getItem(LS.files) || 'null'), have = {};
+      Object.keys(state.sets).forEach(function (k) { state.sets[k].files.forEach(function (f) { have[k + '|' + f.file] = 1; }); });
+      state.lostFiles = fl && Array.isArray(fl.files) ? fl.files.filter(function (x) { return x && x.file && !have[x.kind + '|' + x.file]; }) : [];
+    } catch (e3) { state.lostFiles = []; }
+    return Object.keys(state.sets).length > 0;
   }
 
   /* ---------- 올린 데이터 표 · 열 짝짓기 ---------- */
   var REASON = function (sc) { return sc === 'user' ? '직접 고름' : sc === 'user-none' ? '없음으로 고름' : sc === 1 ? '같은 이름' : sc >= 0.95 ? '같은 뜻 낱말' : sc ? '이름 일부 포함' : ''; };
   function example(f, h) { var c = f.headers.indexOf(h); for (var i = 1; c >= 0 && i < f.aoa.length && i <= 50; i++) { var v = f.aoa[i][c]; if (v != null && String(v).trim()) return String(v); } return ''; }
   function plabel(p) { return p ? C.monthLabel(p.from) + ' ~ ' + C.monthLabel(p.to) : '—'; }
+  // (v1.10.0) 파일 하나의 판별 정보(종류 · 기간 · 확정본/조회용 · 월 귀속) · 경고 — 규칙은 filerules.js, 날짜 사정은 customs.js(fileDates)
+  function fileInfo(k, f, p) {
+    var mt = f.meta, d = p.dates || {}, w = [], info = [];
+    if (!mt) return '';
+    info.push('인식: ' + label(k) + ' (' + (mt.how || '내용') + ')');
+    info.push('기간: ' + (mt.period ? mt.period.text + (mt.period.promoted ? '(한 달 전체)' : '') : p.period ? plabel(p.period) + ' (데이터)' : '—'));
+    info.push(mt.mode === 'view' ? '조회용 — 저장 안 함' : '확정본');
+    info.push('월 귀속: ' + mt.rule + ' ' + (mt.ruleText || ''));
+    if (d.noDate) info.push('날짜 빈 행 ' + C.fmtNum(d.noDate) + '건은 ' + mt.forceMonth + '로 넣음');
+    if (f.replaced) info.push('교체한 이전 파일: ' + f.replaced.map(function (r) { return r.file + '(' + r.uploadedAt + ' · ' + C.fmtNum(r.rows) + '행)'; }).join(', '));
+    if (!mt.period && !p.period) w.push('기간을 판별하지 못함');
+    if (!d.dateHeader) w.push('날짜 열을 찾지 못함' + (FR.DATE_COL[k] ? ' — 「' + FR.DATE_COL[k] + '」' : ''));
+    if (d.dateBlank) w.push('월 미지정 행 ' + C.fmtNum(d.dateBlank) + '건 (날짜 빈칸 — 실적 합계에서 빠짐)');
+    if (d.outside) w.push('파일명 기간을 벗어난 행 ' + C.fmtNum(d.outside) + '건' + (mt.forceMonth ? ' (파일 이름 월로 넣음)' : ''));
+    (mt.warnings || []).forEach(function (x) { w.push(x); });
+    return '<br><small class="sub" data-k="finfo">' + esc(info.join(' · ')) + '</small>' + w.map(function (x) { return ' <span class="tag bad-t" data-k="fwarn">' + esc(x) + '</span>'; }).join('');
+  }
+  // (v1.10.0) 조회 모드 띠 — 「조회 모드 · 기간 · 저장되지 않습니다」 + 보관 안내 + [이 결과를 저장] · [조회 모드 끝내기]
+  function renderViewBar() {
+    var bar = $('d-viewbar'), top = $('d-viewtop'); if (!bar) return;
+    if (!state.view) { bar.hidden = true; bar.innerHTML = ''; if (top) { top.hidden = true; top.innerHTML = ''; } return; }
+    var lines = [], first = null;
+    Object.keys(state.sets).forEach(function (k) {
+      var s = state.sets[k]; s.files.forEach(function (f, i) {
+        var p = s.m && s.m.files[i], d = p && p.dates || {}; first = first || f.meta;
+        lines.push(FR.viewBanner(f.meta || {}, { from: d.from, to: d.to, rows: d.rows }) + ' — ' + f.file);
+      });
+    });
+    bar.hidden = false;
+    bar.innerHTML = '<div class="warn viewbar" data-k="viewbar"><b>' + esc(lines.join(' / ')) + '</b>' +
+      '<p class="sub">' + esc(FR.keepHint(first)) + ' · ' + esc(FR.BASIS_TEXT) + '</p>' +
+      '<p class="sub">같은 EXPORT 파일을 여러 번 받으면 Windows 가 「EXPORT-수입 (1).XLSX」처럼 괄호를 붙입니다. 보관할 파일은 표준 파일명(2026-10_수입실적.xlsx)으로 바꿔 올려 주세요.</p>' +
+      '<div class="btnrow"><button class="btn primary" type="button" data-view-keep>이 결과를 저장</button><button class="btn" type="button" data-view-end>조회 모드 끝내기</button></div></div>';
+    if (top) { top.hidden = false; top.innerHTML = '<div class="warn viewbar" data-k="viewtop"><b>' + esc(lines.join(' / ')) + '</b> <button class="x" type="button" data-view-keep>이 결과를 저장</button> <button class="x" type="button" data-view-end>조회 모드 끝내기</button></div>'; }
+  }
   function renderSets() {
     var ks = C.KINDS.filter(function (k) { return state.sets[k]; });
     var h = '';
+    renderViewBar();
+    // (v1.10.0) 용량 때문에 원본 행을 기억하지 못한 파일 · FTA(다음 단계) 파일
+    var lost = state.lostFiles.filter(function (x) { return !(state.base()[x.kind] && state.base()[x.kind].files.some(function (f) { return f.file === x.file; })); });
+    if (lost.length) h += '<div class="warn" data-k="lost"><b>지난번 올린 파일 중 원본 행을 기억하지 못한 파일 ' + lost.length + '개</b> — 다시 올려 주세요: ' + esc(lost.map(function (x) { return x.file + (x.period ? '(' + x.period + ')' : '') + (x.rows != null ? ' ' + C.fmtNum(x.rows) + '행' : ''); }).join(', ')) + '</div>';
+    if (state.held.length) h += '<div class="note" data-k="held"><b>FTA 파일 — 다음 단계에서 집계(합계에 넣지 않음)</b><ul>' + state.held.map(function (x, i) { return '<li>' + esc(x.file) + ' — ' + esc(x.label) + ' · ' + C.fmtNum(x.rows) + '행' + (x.warnings && x.warnings.length ? ' · <span class="tag bad-t">' + esc(x.warnings.join(' / ')) + '</span>' : '') + ' <button class="x" type="button" data-drop-held="' + i + '">빼기</button></li>'; }).join('') + '</ul></div>';
     if (state.pending.length) {
       h += '<div class="warn"><b>종류를 골라 주세요</b><ul>' + state.pending.map(function (p, i) {
         return '<li>' + esc(p.file) + ' — 열: ' + esc(p.headers.slice(0, 8).join(', ')) + ' <select data-pending="' + i + '"><option value="">종류 고르기</option>' +
@@ -187,6 +309,7 @@
             // (v1.8.0) 어느 시트를 몇 줄씩 읽었는지 · 건너뛴 시트
             (p.sheets ? '<br><small class="sub" data-k="sheets">시트 ' + p.sheets.length + '장 합침 — ' + esc(p.sheets.map(function (x) { return x.sheet + ' ' + C.fmtNum(x.n) + '줄'; }).join(' · ')) + '</small>' : '') +
             (p.skippedSheets && p.skippedSheets.length ? '<br><small class="sub" data-k="skipped-sheets">건너뛴 시트: ' + esc(p.skippedSheets.map(function (x) { return x.name + '(' + x.why + ')'; }).join(', ')) + '</small>' : '') +
+            fileInfo(k, f, p) +
             '</td><td data-k="asof" title="올린 시각 ' + esc(f.uploadedAt) + '">' + esc(String(f.uploadedAt || '').slice(0, 10) || '—') + '</td><td>' + plabel(n && n.period) + '</td>' +
             '<td class="num">' + (n ? C.fmtNum(n.records.length) : '—') + '</td><td class="num">' + (n ? C.fmtNum(n.skipped.length) : '—') + '</td>' +
             '<td>' + (miss.length ? '<span class="tag bad-t">못 찾은 열 ' + miss.length + '</span>' : '<span class="tag ok-t">필수 열 모두 찾음</span>') +
@@ -214,6 +337,7 @@
           (part.length ? '<br><small class="sub">' + esc(part.join(' / ')) + '</small>' : '') + '</td></tr>';
       });
       h += '</tbody></table></div><p class="sub" style="margin-top:8px">같은 종류의 엑셀은 따로 올리든 함께 올리든 모두 더해 계산합니다(머리글이 달라도 파일마다 열을 짝지어 합칩니다). 이름이 같은 파일을 다시 올리면 더하지 않고 그 파일만 바꿉니다. 데이터 기간이 겹치는 파일은 중복 집계일 수 있어 알려 드립니다. 필요 없는 파일은 「이 파일 빼기」로 뺍니다.</p>' +
+        '<p class="sub" data-k="basis-note" style="margin-top:4px">월 귀속: <b>' + esc(FR.BASIS_TEXT) + '</b>(수입 Declaration date desired 는 희망일이라 쓰지 않음). 파일 이름이 단일 월(2026-09_수입실적)이면 파일 전체를 그 월로, 범위 · 연(2026-01~10 · 2026)이면 행 날짜로 넣습니다.</p>' +
         '<p class="sub" data-k="erp-note" style="margin-top:4px">자료 기준일 = 파일을 올린 날입니다. <b>ERP 는 월 마감 뒤에도 신고가 더해지므로 같은 달 파일을 다시 올리면 숫자가 바뀔 수 있습니다.</b></p>';
     }
     $('d-sets').innerHTML = h;
@@ -573,12 +697,14 @@
         ['합계'].concat(s.monthly.map(function (m) { return n0(m.amount); }), [n0(s.amount), n0(s.count)]), 'refund-pivot');
     $('kpi-refund').innerHTML = k; $('ch-refund').innerHTML = ch; $('tb-refund').innerHTML = tb;
   }
+  // (v1.10.0) 오류 비율은 분자 · 분모가 모두 있을 때만 — 그 달 오류점수 자료가 없으면 0% 가 아니라 「자료 없음」(미집계)
+  function errRate(v) { return v == null ? '자료 없음' : C.fmtPct(v, 2); }
   function renderErrors() {
     var f = filtered('errors'), k = '', ch = '', tb = '';
     if (!f) { $('kpi-errors').innerHTML = empty('errors'); $('ch-errors').innerHTML = ''; $('tb-errors').innerHTML = ''; return; }
     var s = C.errorStats(f.recs, state.range, 'kind');
     k += kpi('신고건수', C.fmtNum(s.decl), '', '합계', 'err-decl') + kpi('오류건수', C.fmtNum(s.err), '', '합계', 'err-err') +
-      kpi('오류 비율', C.fmtPct(s.rate, 2), '', '계산: 오류건수 ÷ 신고건수', 'err-rate') + kpi('오류점수', C.fmtNum(s.score), '', '합계', 'err-score');
+      kpi('오류 비율', errRate(s.rate), '', '계산: 오류건수 ÷ 신고건수', 'err-rate') + kpi('오류점수', C.fmtNum(s.score), '', '합계', 'err-score');
     var months = C.monthsBetween(state.range.from, state.range.to), byKind = C.valuesOf(f.recs, 'kind');
     var lines = byKind.length > 1 && byKind.length <= 4 ? byKind.map(function (kd, i) {
       var st = C.errorStats(f.recs.filter(function (r) { return r.kind === kd; }), state.range, 'kind');
@@ -586,9 +712,9 @@
     }) : [{ name: '오류 비율', color: COL[4], values: s.monthly.map(function (m) { return m.rate; }), fmt: function (v) { return C.fmtPct(v, 2); } }];
     ch += monthChart('월별 오류 비율', months, lines, 'line', 'pct');
     ch += monthChart('월별 오류건수 · 오류점수', months, [{ name: '오류건수', color: COL[4], values: s.monthly.map(function (m) { return m.err; }), fmt: C.fmtNum }, { name: '오류점수', color: COL[3], values: s.monthly.map(function (m) { return m.score; }), fmt: C.fmtNum }], 'bar', 'count');
-    tb += '<h3 class="tb-h">구분별</h3>' + ignoredNote(f.ignored) + table(['구분', '신고건수', '오류건수', '오류 비율', '오류점수'], s.groups.map(function (g) { return { cells: [esc(g.key), n0(g.decl), n0(g.err), esc(C.fmtPct(g.rate, 2)), n0(g.score)] }; }),
-      ['합계', n0(s.decl), n0(s.err), esc(C.fmtPct(s.rate, 2)), n0(s.score)], 'err-kind');
-    tb += '<h3 class="tb-h">월별</h3>' + table(['월', '신고건수', '오류건수', '오류 비율', '오류점수'], s.monthly.map(function (m) { return { cells: [esc(C.monthLabel(m.month)), n0(m.decl), n0(m.err), esc(C.fmtPct(m.rate, 2)), n0(m.score)] }; }), null, 'err-month');
+    tb += '<h3 class="tb-h">구분별</h3>' + ignoredNote(f.ignored) + table(['구분', '신고건수', '오류건수', '오류 비율', '오류점수'], s.groups.map(function (g) { return { cells: [esc(g.key), n0(g.decl), n0(g.err), esc(errRate(g.rate)), n0(g.score)] }; }),
+      ['합계', n0(s.decl), n0(s.err), esc(errRate(s.rate)), n0(s.score)], 'err-kind');
+    tb += '<h3 class="tb-h">월별</h3>' + table(['월', '신고건수', '오류건수', '오류 비율', '오류점수'], s.monthly.map(function (m) { return { cells: [esc(C.monthLabel(m.month)), n0(m.decl), n0(m.err), esc(errRate(m.rate)), n0(m.score)] }; }), null, 'err-month');
     $('kpi-errors').innerHTML = k; $('ch-errors').innerHTML = ch; $('tb-errors').innerHTML = tb;
   }
   // (v1.6.0) 연도별 쌓은 막대 + 누계 선. rows = [{year, ...}], stacks = [{key, name, color}], line = {key, name, color}
@@ -710,7 +836,13 @@
   drop.addEventListener('drop', function (e) { readFiles(e.dataTransfer.files); });
   $('d-file').addEventListener('change', function () { readFiles(this.files); this.value = ''; });
   $('btn-dash-sample').addEventListener('click', loadSample);
-  $('btn-dash-clear').addEventListener('click', function () { localStorage.removeItem(LS.data); localStorage.removeItem(LS.kinds); state.sets = {}; state.pending = []; state.open = {}; state.range = null; state.rrange = null; renderSets(); msg('이 브라우저에 기억한 데이터를 지웠습니다.', 'ok'); });
+  $('btn-dash-clear').addEventListener('click', function () { localStorage.removeItem(LS.data); localStorage.removeItem(LS.kinds); localStorage.removeItem(LS.files); state.sets = {}; state.pending = []; state.open = {}; state.range = null; state.rrange = null; state.view = false; state.saved = null; state.held = []; state.lostFiles = []; renderSets(); msg('이 브라우저에 기억한 데이터를 지웠습니다.', 'ok'); });
+  // (v1.10.0) 조회 모드 띠의 버튼
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('[data-view-keep]')) keepView();
+    else if (e.target.closest('[data-view-end]')) endView(false);
+    else { var hb = e.target.closest('[data-drop-held]'); if (hb) { state.held.splice(+hb.dataset.dropHeld, 1); renderSets(); } }
+  });
   $('d-remember').addEventListener('change', function () { if (this.checked) save(); else localStorage.removeItem(LS.data); });
   $('d-sets').addEventListener('change', function (e) {
     var t = e.target;

@@ -102,11 +102,13 @@
     <summary>설정 — Plant → 본부 표(수입 · 수출) · 결제방법 GN(무환) 제외(수입 · 수출)</summary>
     <div id="d-settings-body"></div>
   </details>
+  <div id="d-viewbar" hidden></div>
   <div id="d-msg"></div>
   <div id="d-sets"></div>
 </section>
 
 <section id="d-view" class="card" hidden>
+  <div id="d-viewtop" hidden></div>
   <div class="dfilter" id="d-filter">
     <label>기간 <select id="f-from"></select> ~ <select id="f-to"></select></label>
     <label>본부 <select id="f-hq"></select></label>
@@ -202,6 +204,7 @@
 
 <script src="lib/xlsx.full.min.js"></script>
 <script src="js/customs.js"></script>
+<script src="js/filerules.js"></script>
 <script src="js/tariff.js"></script>
 <script src="js/dash.js"></script>
 <script>

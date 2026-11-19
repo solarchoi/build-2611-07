@@ -8,6 +8,8 @@
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function n(v) { return v == null ? '—' : Number(v).toLocaleString('ko-KR'); }
   function pc(v) { return v == null ? '—' : v + '%'; }
+  // (v1.10.0) 오류비율은 분자(오류점수)와 분모(총신고건)가 모두 있을 때만 — 없으면 0% 가 아니라 「자료 없음」
+  function rt(v) { return v == null ? '자료 없음' : v + '%'; }
   function stat(k, v) { return '<div class="stat"><b>' + v + '</b>' + esc(k) + '</div>'; }
   function table(head, rows, cls) { return '<div class="tablewrap"><table class="' + (cls || '') + '"><thead><tr>' + head.map(function (h, i) { return '<th' + (i > 1 ? ' class="num"' : '') + '>' + esc(h) + '</th>'; }).join('') + '</tr></thead><tbody>' + rows.join('') + '</tbody></table></div>'; }
 
@@ -19,12 +21,26 @@
     fillMonths();
     render();
   }
+  // (v1.10.0) 올린 파일 목록 — 파일명 / 인식된 종류 / 기간 / 월 귀속 기준 / 읽은 행 수 / 경고. 현황 · 상세가 둘 다 있으면 오류점수 합계를 맞춰 보고 차액을 보인다.
+  function fileRow(b) {
+    var part = b.hasDetail && b.hasStatus ? '현황 + 상세' : b.hasDetail ? '상세목록' : b.hasStatus ? '현황목록' : '—';
+    var period = b.fileMonth ? (b.fileYear ? b.fileYear + '-' : '') + (b.fileMonth < 10 ? '0' : '') + b.fileMonth : '';
+    var ms = b.months.concat(Object.keys(b.status).map(Number)).filter(function (m, i, a) { return a.indexOf(m) === i; }).sort(function (x, y) { return x - y; });
+    if (!b.fileMonth) period = ms.length ? ms.join(', ') + '월(시트 이름)' : '판별 못 함';
+    var basis = b.fileMonth ? 'A 파일 이름' : ms.length ? 'C 시트 이름' : 'D 월 미지정';
+    var warn = b.notes.slice(); if (!b.kind) warn.unshift('종류(수입 · 수출)를 판별하지 못함'); if (!ms.length && !b.noMonth) warn.push('기간을 판별하지 못함');
+    if (b.skipped) warn.push('읽지 못한 줄 ' + b.skipped);
+    var nrows = b.rows.length + (b.hasStatus ? ' (현황 ' + Object.keys(b.status).length + '줄)' : '') + (b.totalRows ? ' · 합계 줄 ' + b.totalRows + ' 제외' : '');
+    return '<tr><td>' + esc(b.fileName) + '</td><td>' + esc((b.kind || '구분 모름') + ' 오류점수 · ' + part) + '</td><td>' + esc(period) + '</td><td>' + esc(basis) + '</td><td class="num">' + esc(nrows) + '</td><td>' + (warn.length ? '<span class="bad">' + esc(warn.join(' / ')) + '</span>' : '—') + '</td></tr>';
+  }
   function setBooks(raw) {
     state.books = raw.map(function (b) { return E.readWorkbook(b.sheets, b.name, state.rule); });
     state.counts = E.countsFromBooks(state.books);
-    var msg = state.books.map(function (b) { return esc(b.fileName) + ' — ' + esc(b.kind || '구분 모름') + ' · 정정 줄 ' + b.rows.length + ' · ' + b.months.join(',') + '월' + (b.skipped ? ' · 건너뛴 줄 ' + b.skipped : '') + (b.notes.length ? ' · ' + esc(b.notes.join(' / ')) : ''); }).join('<br>');
-    var ok = state.books.some(function (b) { return b.rows.length; });
-    $('e-msg').innerHTML = '<div class="' + (ok ? 'ok' : 'warn') + '">' + msg + '</div>';
+    var chk = E.statusCheck(state.books), diff = chk.filter(function (c) { return c.diff !== 0; });
+    var list = table(['파일명', '인식된 종류', '기간', '월 귀속 기준', '읽은 행 수', '경고'], state.books.map(fileRow), 'e-files');
+    var chkTxt = chk.length ? '<p class="sub">현황목록 총 오류점수 ↔ 상세목록 오류점수 합계: ' + chk.map(function (c) { return esc(c.month + '월 ' + c.kind + ' ' + n(c.status) + '점 ↔ ' + n(c.detail) + '점' + (c.diff ? ' (차액 ' + (c.diff > 0 ? '+' : '') + c.diff + '점)' : ' (같음)')); }).join(' · ') + '</p>' : '';
+    var ok = state.books.some(function (b) { return b.rows.length || b.hasStatus; });
+    $('e-msg').innerHTML = '<div class="' + (ok && !diff.length ? 'ok' : 'warn') + '">' + list + chkTxt + (diff.length ? '<p><b>현황목록과 상세목록의 오류점수가 다릅니다</b> — 위 차액을 확인해 주세요.</p>' : '') + '</div>';
     ['e-rule', 'e-view', 'e-ledger', 'e-mail'].forEach(function (id) { $(id).hidden = !ok; });
     if (ok) recompute();
   }
@@ -42,7 +58,7 @@
     var S = state.summary, rows = [];
     S.months.slice().reverse().forEach(function (m) {
       [['수출입', S.total[m]], ['수입', S.kinds.수입.months[m]], ['수출', S.kinds.수출.months[m]]].forEach(function (p) {
-        ['종합', '인천', '울산'].forEach(function (cp) { var x = p[1][cp]; rows.push('<tr' + (cp === '종합' ? ' class="sum"' : '') + '><td>' + m + '월 ' + p[0] + '</td><td>' + cp + '</td><td class="num">' + n(x.decl) + '</td><td class="num">' + n(x.err) + '</td><td class="num">' + n(x.score) + '</td><td class="num">' + pc(x.rate) + '</td></tr>'); });
+        ['종합', '인천', '울산'].forEach(function (cp) { var x = p[1][cp]; rows.push('<tr' + (cp === '종합' ? ' class="sum"' : '') + '><td>' + m + '월 ' + p[0] + '</td><td>' + cp + '</td><td class="num">' + n(x.decl) + '</td><td class="num">' + n(x.err) + '</td><td class="num">' + n(x.score) + '</td><td class="num">' + rt(x.rate) + '</td></tr>'); });
       });
     });
     $('e-table').innerHTML = table(['월 · 구분', '캠퍼스', '신고건수', '오류건수', '오류점수', '비율'], rows, 'err-months');

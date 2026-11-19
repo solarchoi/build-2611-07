@@ -1162,6 +1162,7 @@ var v190 = passed + failed;
   finish();
 })().catch(function (e) { console.log('  X v1.9.1 예외 ' + (e && e.stack)); failed++; finish(); });
 function finish() {
+var v191 = passed + failed; v1100(); console.log('v1.10.0 ' + (passed + failed - v191) + '개 검사');
 console.log('v1.9.0 ' + (v190 - v180) + '개 검사');
 console.log('v1.8.0 ' + (v180 - v170) + '개 검사');
 console.log('v1.7.0 ' + (v170 - v160) + '개 검사');
@@ -1174,4 +1175,110 @@ console.log('v1.3 ' + (v13 - v12) + '개 검사');
 console.log('v1.0 ' + v10 + ' · v1.1 ' + (v11 - v10) + ' · v1.2 ' + (v12 - v11) + '개 검사');
 console.log('\n통과 ' + passed + ' · 실패 ' + failed);
 process.exit(failed ? 1 : 0);
+}
+// ---------- v1.10.0 올린 파일 판별(js/filerules.js) · 오류점수 신고번호 · 현황목록 ----------
+function v1100() {
+  var FR = require('../js/filerules.js'), ES2 = require('../js/errscore.js'), C2 = require('../js/customs.js');
+  function d(n, k) { return FR.describe(n, k ? { kind: k } : null); }
+  function brief(x) { return [x.label, x.dataset, x.period ? x.period.type : null, x.period ? x.period.text : null, x.mode, x.rule, x.forceMonth]; }
+  // [1] 표준 파일명 — 종류 · 기간 · 확정본 · 월 귀속
+  eq(brief(d('2026-09_수입오류_현황목록.xlsx')), ['수입오류점수 현황목록', null, 6, '2026-09', 'confirmed', 'A', '2026-09'], 'v1.10.0 2026-09_수입오류_현황목록');
+  eq(brief(d('2026-09_수입오류_상세목록.xlsx')), ['수입오류점수 상세목록', null, 6, '2026-09', 'confirmed', 'A', '2026-09'], 'v1.10.0 2026-09_수입오류_상세목록');
+  eq(brief(d('2026-09_수출오류_현황목록.xlsx')).slice(0, 2), ['수출오류점수 현황목록', null], 'v1.10.0 2026-09_수출오류_현황목록');
+  eq(brief(d('2026-09_수출오류_상세목록.xlsx')).slice(0, 2), ['수출오류점수 상세목록', null], 'v1.10.0 2026-09_수출오류_상세목록');
+  eq(brief(d('2026-09_수입실적.xlsx')), ['수입 실적', 'import', 6, '2026-09', 'confirmed', 'A', '2026-09'], 'v1.10.0 2026-09_수입실적 = 월 확정본 · A');
+  eq(brief(d('2026_수입실적.xlsx')), ['수입 실적', 'import', 7, '2026', 'confirmed', 'B', null], 'v1.10.0 2026_수입실적 = 연 확정본 · B');
+  eq(brief(d('2026-01~10_수입실적.xlsx')), ['수입 실적', 'import', 5, '2026-01~10', 'confirmed', 'B', null], 'v1.10.0 2026-01~10_수입실적 = 월 범위 확정본 · B');
+  eq(brief(d('2026_품목분류결정문.xlsx')), ['품목분류 결정문', 'ruling', 7, '2026', 'confirmed', 'B', null], 'v1.10.0 2026_품목분류결정문');
+  eq(d('2026-10_관세환급.xlsx').dataset, 'refund', 'v1.10.0 2026-10_관세환급');
+  // 순서 — 「수입FTA」에도 「수입」 · 「실적」이 들어 있다. 「오류」가 맨 앞
+  eq([d('2026-10_수입FTA.xlsx').group, d('2026-10_수입FTA실적.xlsx').group, d('2026-10_수입오류_FTA.xlsx').group, d('2026-10_환급실적.xlsx').group, d('2026_결정문실적.xlsx').group], ['fta', 'fta', 'errscore', 'refund', 'ruling'], 'v1.10.0 이름 검사 순서 오류 → FTA → 환급 → 결정문 → 실적');
+  eq([d('2026-10_수입FTA.xlsx').dataset, d('2026-10_수입FTA.xlsx').label], [null, '수입 FTA'], 'v1.10.0 FTA 는 실적 합계에 넣지 않음(다음 단계)');
+  eq([d('2026-10_수출입실적.xlsx').io, d('2026-10_수출입실적.xlsx', 'export').dataset], [null, 'export'], 'v1.10.0 「수출입」은 이름으로 가르지 않고 내용으로');
+  // 6) 이름에 아무것도 없으면 내용 판별(이름을 바꾸지 않은 옛 파일)
+  eq([d('예제_통관(가상).xlsx', 'import').dataset, d('예제_통관(가상).xlsx', 'import').how, d('예제_통관(가상).xlsx', 'import').mode], ['import', '내용', 'confirmed'], 'v1.10.0 이름 규칙에 안 걸리면 내용 판별 · 확정본');
+  eq(d('예제_통관(가상).xlsx', null).warnings, ['종류를 판별하지 못함'], 'v1.10.0 이름 · 내용 모두 모르면 경고');
+  // [2] 일곱 형태 — 긴 것부터
+  function pt(n) { var p = FR.periodOfName(n); return p ? [p.type, p.text, p.from, p.to, p.months.length, p.confirmed] : null; }
+  eq(pt('2026-10-25~2026-11-05_수입실적'), [1, '2026-10-25~2026-11-05', '2026-10-25', '2026-11-05', 2, false], 'v1.10.0 (1) 일자~일자 = 조회용');
+  eq(pt('2026-11-01~18_수입실적'), [2, '2026-11-01~18', '2026-11-01', '2026-11-18', 1, false], 'v1.10.0 (2) 「2026-11-01~18」이 (3) · (6)에 먼저 걸리지 않음');
+  eq(pt('2026-11-18_수입실적'), [3, '2026-11-18', '2026-11-18', '2026-11-18', 1, false], 'v1.10.0 (3) 일자 = 조회용');
+  eq(pt('2026-11~2027-02_수입실적'), [4, '2026-11~2027-02', '2026-11-01', '2027-02-28', 4, true], 'v1.10.0 (4) 월~월(해 넘김)');
+  eq(pt('2026-01~10_수입실적'), [5, '2026-01~10', '2026-01-01', '2026-10-31', 10, true], 'v1.10.0 (5) 월~월');
+  eq(pt('2026-10_수입실적'), [6, '2026-10', '2026-10-01', '2026-10-31', 1, true], 'v1.10.0 (6) 월');
+  eq(pt('2026_수입실적'), [7, '2026', '2026-01-01', '2026-12-31', 12, true], 'v1.10.0 (7) 연');
+  eq([pt('수입실적'), pt('EXPORT-수입 (1)'), pt('EXPORT-수입 (12)')], [null, null, null], 'v1.10.0 기간 없음 · 「(1)」은 기간이 아님');
+  // 한 달 전체를 덮는 일자 범위 → 확정본(말일은 연월로 계산, 윤년)
+  var P = function (n) { var p = FR.periodOfName(n); return [p.confirmed, p.single, p.promoted]; };
+  eq([P('2026-11-01~30_수입실적'), P('2026-11-01~29_수입실적')], [[true, '2026-11', true], [false, null, false]], 'v1.10.0 2026-11-01~30 = 11월 확정본 · ~29 = 조회용');
+  eq([P('2026-02-01~28_수입실적')[0], P('2028-02-01~28_수입실적')[0], P('2028-02-01~29_수입실적')[0]], [true, false, true], 'v1.10.0 2월 말일 — 2026 은 28일, 2028(윤년)은 29일');
+  eq([FR.lastDay(2026, 2), FR.lastDay(2028, 2), FR.lastDay(2100, 2), FR.lastDay(2000, 2)], [28, 29, 28, 29], 'v1.10.0 말일 계산(윤년 규칙)');
+  eq([d('2026-11-01~30_수출실적.xlsx').rule, d('2026-11-01~30_수출실적.xlsx').forceMonth], ['A', '2026-11'], 'v1.10.0 한 달 전체 일자 범위는 단일 월(A)');
+  // 조회용 / 확정본
+  eq([d('2026-11-01~18_수입실적.xlsx').mode, d('2026-11-18_수입실적.xlsx').mode, d('2026-10-25~2026-11-05_수입실적.xlsx').mode], ['view', 'view', 'view'], 'v1.10.0 일자 · 일부 일자 범위 = 조회용');
+  // 환급 · 오류점수 · 결정문은 늘 확정본
+  eq([d('2026-11-01~18_관세환급.xlsx').mode, d('2026-11-18_수입오류_현황목록.xlsx').mode, d('2026-11-18_품목분류결정문.xlsx').mode], ['confirmed', 'confirmed', 'confirmed'], 'v1.10.0 환급 · 오류점수 · 결정문은 조회용 판정 없음');
+  // [2-1] EXPORT
+  var ex = d('EXPORT-수입.XLSX', 'import');
+  eq([ex.mode, ex.dataset, ex.how, ex.period, ex.warnings], ['view', 'import', '내용(ERP 원본 이름)', null, []], 'v1.10.0 EXPORT · 기간 없음 = 조회용 · 종류는 내용');
+  eq(d('EXPORT-수입.XLSX', 'export').warnings, ['파일명은 수입인데 내용은 수출로 보입니다. 확인이 필요합니다.'], 'v1.10.0 EXPORT 이름 수입 · 내용 수출 → 경고');
+  eq([d('EXPORT-수입 (1).XLSX', 'import').mode, d('EXPORT-수입FTA.XLSX', 'import').group, d('EXPORT-수입FTA.XLSX', 'import').mode], ['view', 'fta', 'view'], 'v1.10.0 EXPORT (1) · EXPORT 수입FTA');
+  eq(brief(d('2026-10_수입실적_EXPORT.XLSX')), ['수입 실적', 'import', 6, '2026-10', 'confirmed', 'A', '2026-10'], 'v1.10.0 EXPORT 가 있어도 기간이 있으면 기간 판정(월 확정본)');
+  // 조회 모드 문구
+  eq(FR.viewBanner(d('2026-11-01~18_수입실적.xlsx')), '조회 모드 · 2026-11-01~18 · 저장되지 않습니다', 'v1.10.0 조회 모드 문구(파일 이름 기간)');
+  eq(FR.viewBanner(ex, { from: '2026-11-01', to: '2026-11-18', rows: 1247 }), '조회 모드 · 2026-11-01 ~ 2026-11-18 (데이터 기준) · 1,247행 · 저장되지 않습니다', 'v1.10.0 조회 모드 문구(EXPORT · 데이터 기준)');
+  has(FR.keepHint(ex), '2026-10_수입실적.xlsx 형식으로 이름을 바꿔 다시 올리거나, [이 결과를 저장] 을 누르세요.', 'v1.10.0 보관 안내 문구');
+  // [3] 날짜 열 · 기준 문구
+  eq([FR.DATE_COL.import, FR.DATE_COL.export, FR.BASIS_TEXT], ['Acceptance date', 'Declaration Date', '수입: 수리일자 기준 / 수출: 신고일자 기준'], 'v1.10.0 수입 수리일자 · 수출 신고일자');
+  eq([d('2026-10_수입오류_상세목록.xlsx').rule, d('2026년수입귀책사유자별오류현황및상세목록.xlsx').rule], ['A', 'C'], 'v1.10.0 오류점수 월 = 파일 이름, 없으면 시트 이름');
+  eq([d('2026-10_관세환급.xlsx').rule, d('2026-10_관세환급.xlsx').forceMonth], ['A', null], 'v1.10.0 환급은 파일 이름 월을 표시만(행 날짜 그대로)');
+  // [6] 기간 겹침
+  var a9 = { name: '2026-01~09_수입실적', dataset: 'import', months: FR.periodOfName('2026-01~09').months }, a10 = { name: '2026-01~10_수입실적', dataset: 'import', months: FR.periodOfName('2026-01~10').months };
+  eq([FR.overlapsWith(a10, [a9]).length, FR.overlapsWith(a10, [{ name: 'x', dataset: 'export', months: a9.months }]).length, FR.overlapsWith(a10, [{ name: 'y', dataset: 'import', months: ['2026-11'] }]).length], [1, 0, 0], 'v1.10.0 같은 종류 · 겹치는 월만 겹침');
+
+  // [3] A — 단일 월 파일은 파일 전체를 그 월로(날짜 빈 행 포함), 다른 달 행은 표시
+  var IM = C2.sampleImportErp().aoa, di = IM[0].indexOf('Acceptance date');
+  var blank = IM.map(function (r, i) { return i === 3 ? r.map(function (c, j) { return j === di ? '' : c; }) : r; });
+  var fA = { name: '2026-01_수입실적(가상).xlsx', file: '2026-01_수입실적(가상).xlsx', headers: C2.uniqueHeaders(blank[0]), aoa: blank, offset: 0, override: {}, meta: d('2026-01_수입실적(가상).xlsx') };
+  var mA = C2.mergeFiles('import', [fA], C2.exportSettings(null)), dt = mA.files[0].dates;
+  eq([mA.records.length, mA.records.every(function (r) { return r.month === '2026-01'; }), dt.noDate, dt.outside, dt.dateBlank, dt.dateHeader], [9, true, 1, 4, 0, 'Acceptance date'], 'v1.10.0 A — 2026-01 파일 9줄 모두 1월 · 날짜 빈 행 1 · 2월 날짜 4');
+  var fB = { name: '2026-01~02_수입실적(가상).xlsx', file: 'b', headers: fA.headers, aoa: blank, offset: 0, override: {}, meta: d('2026-01~02_수입실적(가상).xlsx') };
+  var mB = C2.mergeFiles('import', [fB], C2.exportSettings(null)), dB = mB.files[0].dates;
+  eq([mB.records.length, dB.noDate, dB.dateBlank, dB.outside, dB.from, dB.to], [8, 0, 1, 0, '2026-01-08', '2026-02-20'], 'v1.10.0 B — 범위 파일은 행 날짜 · 날짜 빈 행 = 월 미지정 1');
+  var fC = { name: '2025-12_수입실적(가상).xlsx', file: 'c', headers: fA.headers, aoa: IM, offset: 0, override: {}, meta: d('2025-12_수입실적(가상).xlsx') };
+  eq(C2.mergeFiles('import', [fC], C2.exportSettings(null)).files[0].dates.outside, 9, 'v1.10.0 파일명 기간(2025-12)을 벗어난 행 9');
+  var fN = { name: 'n', file: 'n', headers: fA.headers, aoa: blank, offset: 0, override: {} };
+  eq(C2.mergeFiles('import', [fN], C2.exportSettings(null)).records.length, 8, 'v1.10.0 판별 정보가 없으면 예전처럼(날짜 빈 줄은 건너뜀)');
+  eq(C2.migrateSaved({ sets: { import: { files: [fA] } } }).sets.import.files[0].meta.rule, 'A', 'v1.10.0 기억한 파일에 판별 정보 보관');
+
+  // [4] 영문 섞인 신고번호
+  var p1 = ES2.parseDeclNo('2235626B17742M');
+  eq([p1.no, p1.broker, p1.year, p1.seq, p1.kind], ['2235626B17742M', '22356', 2026, 'B17742', '수입'], 'v1.10.0 2235626B17742M 읽음(일련번호 B17742)');
+  eq([ES2.parseDeclNo('22356-26-A06211-X').no, ES2.parseDeclNo('22356-26-A06211-X').kind, ES2.parseDeclNo(' 2235626b17742m ').no], ['2235626A06211X', '수출', '2235626B17742M'], 'v1.10.0 공백 · 하이픈만 지우고 대문자 — 영문 그대로');
+  eq([ES2.parseDeclNo('2235626B17742B').kind, ES2.parseDeclNo('2235626B17742B').bonded], ['수입', true], 'v1.10.0 끝 글자 B = 보세공장(수입)');
+  eq([ES2.parseDeclNo('4390826000001M').seq, ES2.parseDeclNo('43908260000012').seq, ES2.parseDeclNo('12345'), ES2.parseDeclNo('2235626B17742M').no === ES2.parseDeclNo('2235626017742M').no], ['000001', '0000012', null, false], 'v1.10.0 숫자 번호는 그대로 · 영문 번호가 숫자 번호와 섞이지 않음');
+  // [5] 현황목록만 / 상세목록만 / 둘 다 — 월은 파일 이름(정정일자 아님)
+  var SH = ['No', '귀책사유자부호', '귀책사유자상호', '관할지세관부호', '관할지세관', '총신고건', '오류점수', '비율'];
+  var DH = ['No', '귀책사유자부호', '신고번호', '란번호', '정정일자 및 시간', '수리구분', '정정구분', '항목코드', '항목명', '오류점수', '변경 후 오류점수', '정정전내역', '정정후내역'];
+  var st = ES2.readWorkbook([{ name: '귀책사유자별오류현황목록', aoa: [SH, [1, '(가상)', '(가상)(주)', '012', '세관', 2234, 69, 3]] }], '2026-10_수출오류_현황목록(가상).xlsx');
+  eq([st.kind, st.rows.length, st.hasStatus, st.status[10].total, st.status[10].score, st.fileMonth], ['수출', 0, true, 2234, 69, 10], 'v1.10.0 현황목록만 있어도 받음(총신고건 · 총 오류점수)');
+  has(st.notes.join(' '), '현황목록(총신고건 · 총 오류점수)만 읽었습니다', 'v1.10.0 현황목록만 — 알림');
+  var dtl = ES2.readWorkbook([{ name: '귀책사유자별오류상세목록', aoa: [DH, [1, '(가상)', '4390826A00001X', 0, '2026-09-30  10:00:00', '수리후', '정정', 'A1', '(가상)', 40, 40, '', ''], [2, '(가상)', '1111126000002X', 0, '2026-09-30  11:00:00', '수리후', '정정', 'A1', '(가상)', 20, 20, '', ''], ['', '', '', '', '', '', '', '', '', 60, 60, '', '']] }], '2026-10_수출오류_상세목록(가상).xlsx');
+  eq([dtl.rows.length, dtl.totalRows, dtl.skipped, dtl.months, dtl.rows[0].month, dtl.rows[0].campus], [2, 1, 0, [10], 10, '울산'], 'v1.10.0 상세 — 월은 파일 이름(정정일자 9월이 아니라 10월) · 합계 줄 제외');
+  var imp = ES2.readWorkbook([{ name: '귀책사유자별오류상세목록', aoa: [DH, [1, '(가상)', '2235626B17742M', 0, '2026-10-01  13:54:31', '수리전', '정정', 'A801', '(가상)', 0, 0, '', '']] }], '2026-10_수입오류_상세목록(가상).xlsx');
+  eq([imp.kind, imp.rows.length, imp.rows[0].declNo, imp.skipped], ['수입', 1, '2235626B17742M', 0], 'v1.10.0 2235626B17742M 이 집계에 들어감');
+  var impSt = ES2.readWorkbook([{ name: '귀책사유자별오류현황목록', aoa: [SH, [1, '(가상)', '(가상)', '012', '세관', 1740, 0, 0]] }], '2026-10_수입오류_현황목록(가상).xlsx');
+  var books = [st, dtl, imp, impSt], S = ES2.summarize(books, ES2.countsFromBooks(books), {});
+  eq([S.kinds.수출.months[10].종합.decl, S.kinds.수출.months[10].종합.score, S.kinds.수출.months[10].종합.rate, S.kinds.수입.months[10].종합.err, S.total[10].종합.decl], [2234, 60, 2.69, 1, 3974], 'v1.10.0 현황(분모) + 상세(점수)를 다른 파일에서 함께 씀');
+  eq(ES2.statusCheck(books), [{ kind: '수입', month: 10, detail: 0, status: 0, diff: 0 }, { kind: '수출', month: 10, detail: 60, status: 69, diff: -9 }], 'v1.10.0 현황 총 오류점수 ↔ 상세 합계 차액(수출 -9)');
+  var nm = ES2.readWorkbook([{ name: '귀책사유자별오류상세목록', aoa: [DH, [1, '(가상)', '4390826A00001X', 0, '2026-09-30  10:00:00', '', '', '', '', 5, 5, '', '']] }], '수출오류_상세(가상).xlsx');
+  eq([nm.rows[0].month, nm.noMonth], [null, 1], 'v1.10.0 파일 이름 · 시트 이름에 월이 없으면 월 미지정(정정일자로 짐작하지 않음)');
+  has(nm.notes.join(' '), '월 미지정 1줄', 'v1.10.0 월 미지정 알림');
+  // [10] 분모가 없으면 비율 null(화면 「자료 없음」)
+  eq([S.kinds.수출.months[10].인천.rate, S.kinds.수출.months[10].울산.rate], [null, null], 'v1.10.0 분모 없으면 비율 없음');
+  // 화면 연결
+  var html = fsx.readFileSync(__dirname + '/../dashboard.html', 'utf8'), eh = fsx.readFileSync(__dirname + '/../errors.html', 'utf8');
+  ok(html.indexOf('<script src="js/filerules.js">') > html.indexOf('<script src="js/customs.js">') && html.indexOf('id="d-viewbar"') > 0 && eh.indexOf('<script src="js/filerules.js">') < eh.indexOf('<script src="js/errscore.js">'), 'v1.10.0 두 화면에 filerules.js');
+  var dj = fsx.readFileSync(__dirname + '/../js/dash.js', 'utf8'), ej = fsx.readFileSync(__dirname + '/../js/errors.js', 'utf8');
+  ok(/'자료 없음'/.test(dj) && /'자료 없음'/.test(ej), 'v1.10.0 오류 비율 분모 없으면 「자료 없음」');
 }

@@ -367,9 +367,12 @@
           if (od) { rec[f.key] = od.date || od.month; rec[f.key + 'Month'] = od.month; rec[f.key + 'Year'] = od.y; }
           else { rec[f.key] = null; if (clean(raw)) { bad[f.label] = (bad[f.label] || 0) + 1; (badRows[f.label] = badRows[f.label] || []).push(row); } }
         } else if (f.type === 'date') {
-          var d = parseDate(raw);
+          var d = parseDate(raw), fm = opts.forceMonth;
+          // (v1.10.0) 파일 이름이 단일 월(2026-09_수입실적)이면 파일 전체를 그 월로 — 날짜가 빈 줄(미수리)도 그 월에 넣고, 다른 달 날짜는 표시만 한다
+          if (!d && fm) { rec.date = null; rec.month = fm; rec.year = +fm.slice(0, 4); rec.noDate = true; return; }
           if (!d) { ok = false; skipped.push({ row: row, reason: clean(raw) ? f.label + '을(를) 날짜로 읽지 못함: ' + clean(raw) : f.label + ' 빈칸' }); return; }
           rec.date = d.date; rec.month = d.month; rec.year = d.y;
+          if (fm && d.month !== fm) { rec.dateMonth = d.month; rec.month = fm; rec.year = +fm.slice(0, 4); rec.outside = true; }
         } else if (f.type === 'num') {
           var n = parseNum(raw);
           if (n === null) { blanks[f.label] = (blanks[f.label] || 0) + 1; rec[f.key] = null; }
@@ -511,20 +514,23 @@
   function mergeFiles(kind, files, opts) {
     var per = (files || []).map(function (f) {
       var res = mapColumns(uniqueHeaders(f.headers || []), kind, f.override), norm = null, sheets = null;
+      // (v1.10.0) 파일 판별(filerules.js describe)이 붙어 있으면 — 실적(수입 · 수출)만 파일 이름 단일 월로 귀속한다
+      var meta = f.meta || null, force = meta && meta.forceMonth && (kind === 'import' || kind === 'export') ? meta.forceMonth : null;
+      var o1 = opts; if (force) { o1 = {}; Object.keys(opts || {}).forEach(function (k) { o1[k] = opts[k]; }); o1.forceMonth = force; }
       if (!res.missing.length) {
         if (f.parts && f.parts.length > 1) {
           // (v1.8.0) 같은 모양의 시트 여러 장 — 줄을 이어 붙이고 시트별 엑셀 줄 번호를 넘긴다
           var rows = [], rowNos = [];
           f.parts.forEach(function (pt) { aoaToRows(pt.aoa || [[]]).forEach(function (r, i) { rows.push(r); rowNos.push({ sheet: pt.sheet, row: i + 2 + (pt.offset || 0) }); }); });
-          var o = {}; Object.keys(opts || {}).forEach(function (k) { o[k] = opts[k]; }); o.rowNos = rowNos;
+          var o = {}; Object.keys(o1 || {}).forEach(function (k) { o[k] = o1[k]; }); o.rowNos = rowNos;
           norm = normalize(rows, kind, res.map, 0, o);
           sheets = f.parts.map(function (pt) { var rs = norm.records.filter(function (r) { return r.sheet === pt.sheet; }); return { sheet: pt.sheet, n: rs.length, period: periodOf(rs) }; });
-        } else norm = normalize(aoaToRows(f.aoa || []), kind, res.map, f.offset, opts);
+        } else norm = normalize(aoaToRows(f.aoa || []), kind, res.map, f.offset, o1);
       }
       return { file: f.file || f.name || '', name: fileKey(f), uploadedAt: f.uploadedAt || '', res: res, norm: norm, ok: !res.missing.length, period: norm ? norm.period : null,
         sheets: sheets, skippedSheets: f.skippedSheets || [],
         excluded: norm ? norm.excluded.n : 0, excludedAmount: norm ? norm.excluded.amount : null, declBad: norm ? norm.declBad.n : 0, unclassified: norm ? norm.unclassified.n : 0, mismatch: norm ? norm.mismatch.n : 0,
-        totalRows: norm ? norm.totalRows.n : 0, bonded: norm ? norm.bonded.n : 0 };
+        totalRows: norm ? norm.totalRows.n : 0, bonded: norm ? norm.bonded.n : 0, dates: fileDates(kind, res, norm, meta, force) };
     });
     var ok = per.length > 0 && per.every(function (p) { return p.ok; });
     var records = [], skipped = [], issues = [], unknown = {}, map = {}, partial = {};
@@ -561,6 +567,22 @@
     }
     return out;
   }
+  // (v1.10.0) 파일 하나의 날짜 사정 — 파일 목록 경고용(집계에는 쓰지 않는다).
+  //   dateHeader = 날짜로 짝지은 머리글(없으면 null → 「날짜 열 없음」), noDate = 날짜 빈 줄을 파일 이름 월로 넣은 수,
+  //   dateBlank = 날짜 빈 줄(월 미지정 — 실적에서 빠짐), outside = 파일 이름 기간을 벗어난 줄, from · to = 데이터의 첫 · 끝 날짜.
+  function fileDates(kind, res, norm, meta, force) {
+    var df = fieldsOf(kind).filter(function (f) { return f.type === 'date' && !f.opt; })[0];
+    var out = { dateHeader: df ? res.map[df.key] || null : null, noDate: 0, dateBlank: 0, outside: 0, from: null, to: null, rows: 0 };
+    if (!norm) return out;
+    var recs = norm.records, ds = recs.map(function (r) { return r.date; }).filter(Boolean).sort();
+    out.rows = recs.length; out.from = ds[0] || null; out.to = ds[ds.length - 1] || null;
+    out.noDate = recs.filter(function (r) { return r.noDate; }).length;
+    out.dateBlank = df ? norm.skipped.filter(function (s) { return s.reason === df.label + ' 빈칸'; }).length : 0;
+    var p = meta && meta.period;
+    if (force) out.outside = recs.filter(function (r) { return r.outside; }).length;
+    else if (p && p.months && p.months.length) { var set = {}; p.months.forEach(function (m) { set[m] = 1; }); out.outside = recs.filter(function (r) { return r.month && !set[r.month]; }).length; }
+    return out;
+  }
   // 이 브라우저에 기억한 자료 → { sets: { kind: { files: [...] } } }. 예전 형식(v1: 종류마다 파일 하나)은 파일 1개짜리 목록으로.
   function migrateSaved(j) {
     var out = { sets: {} };
@@ -575,6 +597,7 @@
         var o = { name: f.name || f.file || '', file: f.file || f.name || '', uploadedAt: f.uploadedAt || '', headers: f.headers, aoa: aoa, offset: f.offset || 0, override: f.override || {}, reason: f.reason };
         if (parts) o.parts = parts;
         if (Array.isArray(f.skippedSheets)) o.skippedSheets = f.skippedSheets;
+        if (f.meta && typeof f.meta === 'object') o.meta = f.meta;           // (v1.10.0) 파일 판별(종류 · 기간 · 확정본 · 월 귀속)
         return o;
       });
       if (list.length) out.sets[k] = { files: list };

@@ -21,7 +21,9 @@
   var THRESHOLD = 300;                                   // 분기 오류점수 경계(실물서류 제출)
   var KINDS = ['수입', '수출'];
   var CAMPUSES = ['인천', '울산'];
-  var LETTER = { M: '수입', X: '수출' };
+  var LETTER = { M: '수입', X: '수출', B: '수입' };          // (v1.10.0) B = 보세공장(완성차) — 수입 쪽
+  // (v1.10.0) 파일 이름 기간(2026-10_수입오류_현황목록) — 규칙은 filerules.js
+  var FR = root.FileRules || (typeof require === 'function' ? require('./filerules.js') : null);
 
   function clean(v) { return String(v == null ? '' : v).replace(/\s+/g, ' ').trim(); }
   function normKey(s) { return String(s == null ? '' : s).replace(/[\s()\[\]·_\-/.]/g, '').toLowerCase(); }
@@ -31,11 +33,13 @@
   function uniq(a) { return a.filter(function (x, i) { return a.indexOf(x) === i; }); }
 
   /* ---------- 신고번호 ---------- */
+  // (v1.10.0) 신고인부호 5자 + 연도 2자 + 일련번호 5~7자(영문 섞일 수 있음 — 특송 관세사 발번 「B17742」) + 구분문자(M · X · B).
+  //   숫자로 분해하지 않는다: 비교용 no 는 대문자로 바꾸고 공백 · 하이픈만 지운 원문, raw 는 받은 그대로.
   function parseDeclNo(v) {
-    var s = clean(v).toUpperCase().replace(/[\s\-]/g, '');
-    var m = s.match(/^(\d{5})(\d{2})(\d{5,7})([MX])?$/);
+    var raw = clean(v), s = raw.toUpperCase().replace(/[\s\-]/g, '');
+    var m = s.match(/^(\d{5})(\d{2})([0-9A-Z]{5,7}?)([MXB])?$/);
     if (!m) return null;
-    return { no: s, broker: m[1], year: 2000 + Number(m[2]), seq: m[3], kind: m[4] ? LETTER[m[4]] : null };
+    return { no: s, raw: raw, broker: m[1], year: 2000 + Number(m[2]), seq: m[3], kind: m[4] ? LETTER[m[4]] : null, bonded: m[4] === 'B' };
   }
   function campusOf(declNo, rule) {
     var p = parseDeclNo(declNo); if (!p) return null;
@@ -103,14 +107,20 @@
     if (hi < 0) return { rows: [], skipped: 0, error: '머리글(신고번호 · 오류점수)을 찾지 못했습니다.' };
     var headers = aoa[hi].map(clean), mh = mapHeaders(headers);
     if (mh.missing.length) return { rows: [], skipped: 0, error: '필요한 열이 없습니다: ' + mh.missing.join(' · ') };
-    var rows = [], skipped = 0, m = mh.map;
+    var rows = [], skipped = 0, totalRows = 0, noMonth = 0, m = mh.map;
     aoa.slice(hi + 1).forEach(function (r) {
       var p = parseDeclNo(r[m.declNo]);
-      if (!p) { if ((r || []).some(function (c) { return clean(c) !== ''; })) skipped++; return; }
+      if (!p) {
+        if (!(r || []).some(function (c) { return clean(c) !== ''; })) return;
+        if (!clean(r[m.declNo]) && toNum(r[m.score]) != null) { totalRows++; return; }   // (v1.10.0) 신고번호 빈 맨 아래 합계 줄
+        skipped++; return;
+      }
       var fixedAt = m.fixedAt != null ? parseDate(r[m.fixedAt]) : null;
-      var month = opts.month || (fixedAt ? +fixedAt.slice(5, 7) : null);
+      // (v1.10.0) 오류점수는 날짜 열(정정일자)로 월을 정하지 않는다 — 파일 이름, 없으면 시트 이름. 둘 다 없으면 월 미지정(알림)
+      var month = opts.month || null;
+      if (!month) noMonth++;
       rows.push({
-        kind: opts.kind || p.kind || null, month: month, year: fixedAt ? +fixedAt.slice(0, 4) : p.year,
+        kind: opts.kind || p.kind || null, month: month, year: opts.year || (fixedAt ? +fixedAt.slice(0, 4) : p.year),
         declNo: p.no, broker: p.broker, campus: campusOf(p.no, opts.rule), lane: m.lane != null ? clean(r[m.lane]) : '',
         fixedAt: fixedAt, fixedRaw: m.fixedAt != null ? clean(r[m.fixedAt]) : '',
         accept: m.accept != null ? clean(r[m.accept]) : '', fixType: m.fixType != null ? clean(r[m.fixType]) : '',
@@ -119,7 +129,7 @@
         before: m.before != null ? clean(r[m.before]) : '', after: m.after != null ? clean(r[m.after]) : ''
       });
     });
-    return { rows: rows, skipped: skipped, headers: headers, map: m };
+    return { rows: rows, skipped: skipped, totalRows: totalRows, noMonth: noMonth, headers: headers, map: m };
   }
   // 현황목록 시트 → { total(총신고건), score, rate } — 귀책사유자 한 줄
   function readStatus(aoa) {
@@ -158,21 +168,53 @@
     if (!details.length && !sm && !statuses.length) { // 시트 이름이 없으면 머리글로 찾는다
       sheets.forEach(function (s) { if (findHeaderRow(s.aoa, ['신고번호', '오류점수']) >= 0) details.push(s); else if (findHeaderRow(s.aoa, ['총신고건']) >= 0) statuses.push(s); });
     }
-    if (!details.length) return { kind: kind, rows: [], status: {}, hand: {}, notes: ['「상세목록」 시트를 찾지 못했습니다(시트 이름에 「상세」 또는 머리글에 신고번호·오류점수).'], skipped: 0, months: [] };
+    // (v1.10.0) 월은 파일 이름(2026-10_…)이 먼저, 없으면 시트 이름(…_10월). 정정일자로는 정하지 않는다.
+    var per = FR ? FR.periodOfName(fileName || '') : null, fileMonth = per && per.single ? +per.single.slice(5, 7) : null, fileYear = per && per.single ? +per.single.slice(0, 4) : null;
+    // (v1.10.0) 현황목록만 있어도 받는다(검증용 — 총신고건 · 총 오류점수). 상세목록만 있어도 받는다(본부 배분용).
+    if (!details.length && !statuses.length && !sm) return { kind: kind, rows: [], status: {}, hand: {}, notes: ['현황목록 · 상세목록 시트를 찾지 못했습니다(시트 이름에 「현황」 · 「상세」 또는 머리글에 총신고건 · 신고번호 · 오류점수).'], skipped: 0, months: [], detailMonths: [], fileMonth: fileMonth, fileName: fileName || '' };
+    var totalRows = 0, noMonth = 0, detailMonths = [];
     details.forEach(function (s) {
-      var d = readDetail(s.aoa, { month: monthOfName(s.name), kind: kind, rule: rule });
+      var mo = fileMonth || monthOfName(s.name);
+      var d = readDetail(s.aoa, { month: mo, year: fileYear, kind: kind, rule: rule });
       if (d.error) { notes.push(s.name + ': ' + d.error); return; }
-      rows = rows.concat(d.rows); skipped += d.skipped;
+      rows = rows.concat(d.rows); skipped += d.skipped; totalRows += d.totalRows || 0; noMonth += d.noMonth || 0;
+      if (mo && detailMonths.indexOf(mo) < 0) detailMonths.push(mo);
     });
+    if (!details.length && statuses.length) notes.push('상세목록 없음 — 현황목록(총신고건 · 총 오류점수)만 읽었습니다.');
+    if (noMonth) notes.push('월 미지정 ' + noMonth + '줄 — 파일 이름(2026-10_…)이나 시트 이름(…_10월)에 월이 없어 월별 집계에 넣지 못했습니다.');
     if (!kind) { // 신고번호 끝 글자 다수결
       var c = {}; rows.forEach(function (r) { var p = parseDeclNo(r.declNo); if (p && p.kind) c[p.kind] = (c[p.kind] || 0) + 1; });
       kind = Object.keys(c).sort(function (a, b) { return c[b] - c[a]; })[0] || null;
       rows.forEach(function (r) { if (!r.kind) r.kind = kind; });
     }
-    statuses.forEach(function (s) { var mo = monthOfName(s.name), st = readStatus(s.aoa); if (mo && st) status[mo] = st; });
-    var months = uniq(rows.map(function (r) { return r.month; }).filter(Boolean)).sort(function (a, b) { return a - b; });
+    statuses.forEach(function (s) {
+      var mo = fileMonth || monthOfName(s.name), st = readStatus(s.aoa);
+      if (st && !mo) notes.push(s.name + ': 현황목록의 월을 알 수 없습니다 — 파일 이름에 2026-10 처럼 넣어 주세요.');
+      if (mo && st) status[mo] = st;
+    });
+    var months = uniq(rows.map(function (r) { return r.month; }).filter(Boolean)).sort(function (a, b) { return a - b; });   // 오류 있는 달(현황목록의 달은 status)
     if (!kind) notes.push('수입인지 수출인지 알 수 없습니다 — 파일 이름에 「수입」 또는 「수출」을 넣어 주세요.');
-    return { kind: kind, rows: rows, status: status, hand: sm ? readHandSummary(sm.aoa) : {}, notes: notes, skipped: skipped, months: months, fileName: fileName || '' };
+    return { kind: kind, rows: rows, status: status, hand: sm ? readHandSummary(sm.aoa) : {}, notes: notes, skipped: skipped, totalRows: totalRows, noMonth: noMonth, months: months, detailMonths: detailMonths,
+      hasDetail: details.length > 0, hasStatus: Object.keys(status).length > 0, fileMonth: fileMonth, fileYear: fileYear, period: per, fileName: fileName || '' };
+  }
+  // (v1.10.0) 현황목록 총 오류점수 ↔ 상세목록 오류점수 합계 — 둘 다 올라온 수입 · 수출 × 월만. 다르면 차액을 숨기지 않고 보인다.
+  function statusCheck(books) {
+    var st = { 수입: {}, 수출: {} }, det = { 수입: {}, 수출: {} };
+    (books || []).forEach(function (b) {
+      if (!b.kind || !st[b.kind]) return;
+      Object.keys(b.status || {}).forEach(function (m) { st[b.kind][m] = b.status[m]; });
+      (b.detailMonths || []).forEach(function (m) { if (det[b.kind][m] == null) det[b.kind][m] = 0; });
+      b.rows.forEach(function (r) { if (r.month) det[b.kind][r.month] = (det[b.kind][r.month] || 0) + (r.score || 0); });
+    });
+    var out = [];
+    KINDS.forEach(function (k) {
+      Object.keys(st[k]).map(Number).sort(function (a, b) { return a - b; }).forEach(function (m) {
+        if (det[k][m] == null || st[k][m].score == null) return;
+        var d = round(det[k][m], 2), s = st[k][m].score;
+        out.push({ kind: k, month: m, detail: d, status: s, diff: round(d - s, 2) });
+      });
+    });
+    return out;
   }
 
   /* ---------- 규칙 다시 적용 · 부호표 · 인천 건수 · 대장 대조 ---------- */
@@ -404,7 +446,7 @@
 
   var api = {
     RULE: RULE, THRESHOLD: THRESHOLD, KINDS: KINDS, CAMPUSES: CAMPUSES, FIELDS: FIELDS, LEDGER_HEAD: LEDGER_HEAD,
-    parseDeclNo: parseDeclNo, campusOf: campusOf, parseDate: parseDate, monthOfName: monthOfName, classifySheet: classifySheet,
+    parseDeclNo: parseDeclNo, statusCheck: statusCheck, campusOf: campusOf, parseDate: parseDate, monthOfName: monthOfName, classifySheet: classifySheet,
     mapHeaders: mapHeaders, findHeaderRow: findHeaderRow, readDetail: readDetail, readStatus: readStatus, readWorkbook: readWorkbook, readHandSummary: readHandSummary, applyRule: applyRule, brokers: brokers, countsFromBooks: countsFromBooks, compare: compare,
     summarize: summarize, quarters: quarters, topItems: topItems, byDecl: byDecl, ledger: ledger, mailDraft: mailDraft,
     summaryAoa: summaryAoa, exportBook: exportBook, sampleBooks: sampleBooks, round: round, toNum: toNum
