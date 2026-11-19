@@ -597,6 +597,7 @@
         var o = { name: f.name || f.file || '', file: f.file || f.name || '', uploadedAt: f.uploadedAt || '', headers: f.headers, aoa: aoa, offset: f.offset || 0, override: f.override || {}, reason: f.reason };
         if (parts) o.parts = parts;
         if (Array.isArray(f.skippedSheets)) o.skippedSheets = f.skippedSheets;
+        if (Array.isArray(f.promotedSheets)) o.promotedSheets = f.promotedSheets;
         if (f.meta && typeof f.meta === 'object') o.meta = f.meta;           // (v1.10.0) 파일 판별(종류 · 기간 · 확정본 · 월 귀속)
         return o;
       });
@@ -1429,29 +1430,50 @@
   // (v1.8.0) 한 파일의 시트들 → 읽을 시트 고르기. sheets = [{ name, aoa(머리글 줄부터), offset }] (빈 시트는 이미 뺀 것).
   //   집계표 이름(SUMMARY_SHEET_RE)은 건너뛰고, 나머지를 머리글이 같은 것끼리 묶어 종류 판단이 가장 잘 되는 묶음을 고른다(같으면 줄이 많은 쪽).
   //   묶음에 들지 않은 시트는 「열 구성이 다름」으로 건너뛴다. 모든 시트가 집계표 이름이면 이름 규칙 없이 고른다.
-  //   → { use: [시트], skipped: [{ name, why }], detect }
+  //   (v1.10.2) 이름은 힌트일 뿐 — 고른 묶음이 종류를 모르거나 그 종류의 필수 열을 다 못 찾으면, 집계표 이름 시트까지 넣어 다시 고른다.
+  //   다시 고른 묶음이 더 나을 때만 바꾸고, 집계표 이름인데 뽑힌 시트는 promoted 에 남긴다(파일 목록에 「열 구성으로 데이터로 읽음」).
+  //   → { use: [시트], skipped: [{ name, why }], detect, promoted: [시트 이름] }
   function pickSheets(sheets, fileName) {
-    var list = (sheets || []).filter(function (sh) { return sh && sh.aoa && sh.aoa.length > 1; }), skipped = [];
+    var list = (sheets || []).filter(function (sh) { return sh && sh.aoa && sh.aoa.length > 1; });
     var named = list.filter(function (sh) { return !SUMMARY_SHEET_RE.test(sh.name || ''); });
-    if (named.length) list.forEach(function (sh) { if (named.indexOf(sh) < 0) skipped.push({ name: sh.name, why: '집계표' }); });
-    else named = list;
-    var groups = {}, order = [];
-    named.forEach(function (sh) {
-      var sig = uniqueHeaders(sh.aoa[0]).map(normKey).join('|');
-      if (!groups[sig]) { groups[sig] = []; order.push(sig); }
-      groups[sig].push(sh);
+    var hinted = named.length > 0;                                   // 이름으로 거른 시트가 있었나
+    if (!hinted) named = list;
+    function better(c, b) { return !b || (!!c.d.kind) - (!!b.d.kind) > 0 || ((!!c.d.kind) === (!!b.d.kind) && (c.d.ratio > b.d.ratio || (c.d.ratio === b.d.ratio && c.rows > b.rows))); }
+    function choose(pool) {
+      var groups = {}, order = [], best = null;
+      pool.forEach(function (sh) {
+        var sig = uniqueHeaders(sh.aoa[0]).map(normKey).join('|');
+        if (!groups[sig]) { groups[sig] = []; order.push(sig); }
+        groups[sig].push(sh);
+      });
+      order.forEach(function (sig) {
+        var g = groups[sig], d = detectKind(g[0].aoa[0].map(String), (fileName || '') + ' ' + g[0].name), rows = g.reduce(function (t, sh) { return t + sh.aoa.length - 1; }, 0);
+        var c = { sheets: g, d: d, rows: rows };
+        if (better(c, best)) best = c;
+      });
+      return best;
+    }
+    var best = choose(named), pool = named;
+    // 필수 열을 다 채웠다 = detectKind 의 ratio(찾은 필수 열 ÷ 필수 열)가 1
+    if (hinted && list.length > named.length && (!best || !best.d.kind || best.d.ratio < 1)) {
+      var all = choose(list);
+      // 종류를 새로 알아냈거나 필수 열을 더 찾았을 때만 바꾼다(줄이 많다는 것만으로는 바꾸지 않음)
+      var gain = all && (!best || (!!all.d.kind) - (!!best.d.kind) > 0 || (!!all.d.kind === !!best.d.kind && all.d.kind && all.d.ratio > best.d.ratio));
+      if (gain) { best = all; pool = list; }
+    }
+    if (!best) return { use: [], skipped: [], detect: { kind: null, ratio: 0, reason: '' }, promoted: [] };
+    var skipped = [], promoted = [];
+    list.forEach(function (sh) {
+      if (best.sheets.indexOf(sh) >= 0) { if (hinted && SUMMARY_SHEET_RE.test(sh.name || '')) promoted.push(sh.name); return; }
+      skipped.push({ name: sh.name, why: pool.indexOf(sh) < 0 ? '집계표' : '열 구성이 다름' });
     });
-    var best = null;
-    order.forEach(function (sig) {
-      var g = groups[sig], d = detectKind(g[0].aoa[0].map(String), (fileName || '') + ' ' + g[0].name), rows = g.reduce(function (t, sh) { return t + sh.aoa.length - 1; }, 0);
-      var c = { sheets: g, d: d, rows: rows };
-      if (!best || (!!c.d.kind) - (!!best.d.kind) > 0 || ((!!c.d.kind) === (!!best.d.kind) && (c.d.ratio > best.d.ratio || (c.d.ratio === best.d.ratio && c.rows > best.rows)))) best = c;
-    });
-    if (!best) return { use: [], skipped: skipped, detect: { kind: null, ratio: 0, reason: '' } };
-    named.forEach(function (sh) { if (best.sheets.indexOf(sh) < 0) skipped.push({ name: sh.name, why: '열 구성이 다름' }); });
-    var idx = function (nm) { return (sheets || []).map(function (sh) { return sh.name; }).indexOf(nm); };
-    skipped.sort(function (a, b) { return idx(a.name) - idx(b.name); });
-    return { use: best.sheets, skipped: skipped, detect: best.d };
+    return { use: best.sheets, skipped: skipped, detect: best.d, promoted: promoted };
+  }
+  // (v1.10.2) 열을 못 찾았을 때 덧붙일 참고 문구 — 집계표 이름으로 건너뛴 시트가 있으면 알린다(없으면 '')
+  function skippedSheetNote(skipped) {
+    var names = (skipped || []).filter(function (s) { return s && s.why === '집계표'; }).map(function (s) { return "'" + s.name + "'"; });
+    if (!names.length) return '';
+    return '(참고: 시트 ' + names.join(', ') + ' 을 집계표로 보고 건너뛰었습니다. 이 시트가 데이터라면 시트 이름을 바꾸거나 아래에서 직접 골라 주세요)';
   }
   // (v1.8.0) 월별 RAW 시트 파일(가짜) — 종합(집계표) · RAW1~RAW3(같은 55열 + Monetary Transaction) · 3월 소계(집계표) · Memo(열이 다름).
   // GN 2줄, 무환구분 불일치 2줄(N 인데 TT · GN 인데 Y), 같은 신고번호 2줄, Plant 빈칸 1줄. 손계산은 test/logic.test.js v1.8.0.
@@ -1561,7 +1583,7 @@
     exportBook: exportBook,
     libValidate: libValidate, libAdd: libAdd, libRemove: libRemove, libSearch: libSearch, libCounts: libCounts, libToAoa: libToAoa,
     libFromRows: libFromRows, libSample: libSample, libLocationKind: libLocationKind,
-    sampleFiles: sampleFiles, aoaToRows: aoaToRows
+    sampleFiles: sampleFiles, aoaToRows: aoaToRows, skippedSheetNote: skippedSheetNote
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Customs = api;

@@ -112,6 +112,7 @@
       var item = { name: f.name, file: f.name + (use.length === 1 && sheets.length > 1 ? ' · ' + best.s.name : ''), uploadedAt: now(), headers: C.uniqueHeaders(best.s.aoa[0]), aoa: best.s.aoa, offset: best.s.offset, override: {} };
       if (use.length > 1) item.parts = use.map(function (s) { return { sheet: s.name, aoa: s.aoa, offset: s.offset }; });
       if (pk.skipped.length) item.skippedSheets = pk.skipped;
+      if (pk.promoted && pk.promoted.length) item.promotedSheets = pk.promoted;   // (v1.10.2) 집계표 이름이지만 열 구성으로 데이터로 읽은 시트
       // (v1.10.0) 파일 이름으로 종류 · 기간 · 확정본/조회용 · 월 귀속을 먼저 정한다(규칙은 filerules.js). 이름으로 못 정하면 내용 판별.
       var info = FR.describe(f.name, best.d);
       if (info.group === 'errscore' && info.part) { notes.push(esc(f.name) + ' — 유니패스 오류점수 ' + esc(info.part) + '목록으로 인식했습니다. <a href="errors.html">오류점수 화면</a>에서 올려 주세요(대시보드 합계에는 넣지 않음).'); warn = true; return; }
@@ -121,7 +122,7 @@
       var kind = byName ? info.dataset : pref && C.DATASETS[pref] ? pref : best.d.kind;
       var reason = byName ? info.how : pref && C.DATASETS[pref] ? '전에 직접 고른 종류' : best.d.reason;
       item.meta = info;
-      if (!kind) { state.pending.push(item); notes.push(esc(f.name) + ' — 어떤 자료인지 알아보지 못했습니다. 아래에서 종류를 골라 주세요.'); warn = true; return; }
+      if (!kind) { state.pending.push(item); notes.push(esc(f.name) + ' — 어떤 자료인지 알아보지 못했습니다. 아래에서 종류를 골라 주세요.' + (C.skippedSheetNote(item.skippedSheets) ? ' ' + esc(C.skippedSheetNote(item.skippedSheets)) : '')); warn = true; return; }
       info.dataset = kind; item.reason = reason;
       info.warnings.forEach(function (w) { notes.push(esc(f.name) + ' — <b>' + esc(w) + '</b>'); warn = true; });
       if (info.mode === 'view') { views.push({ kind: kind, item: item }); return; }
@@ -213,6 +214,7 @@
         var o = { name: f.name, file: f.file, uploadedAt: f.uploadedAt, headers: f.headers, aoa: f.parts ? [] : f.aoa, offset: f.offset, override: f.override, reason: f.reason };
         if (f.parts) o.parts = f.parts;
         if (f.skippedSheets) o.skippedSheets = f.skippedSheets;
+        if (f.promotedSheets) o.promotedSheets = f.promotedSheets;
         if (f.meta) o.meta = f.meta;
         var p = base[k].m && base[k].m.files[i];
         list.push({ file: f.file, kind: k, uploadedAt: f.uploadedAt, rows: p && p.norm ? p.norm.records.length : null, period: f.meta && f.meta.period ? f.meta.period.text : p && p.period ? p.period.from + '~' + p.period.to : null, rule: f.meta ? f.meta.rule : null });
@@ -309,6 +311,7 @@
             // (v1.8.0) 어느 시트를 몇 줄씩 읽었는지 · 건너뛴 시트
             (p.sheets ? '<br><small class="sub" data-k="sheets">시트 ' + p.sheets.length + '장 합침 — ' + esc(p.sheets.map(function (x) { return x.sheet + ' ' + C.fmtNum(x.n) + '줄'; }).join(' · ')) + '</small>' : '') +
             (p.skippedSheets && p.skippedSheets.length ? '<br><small class="sub" data-k="skipped-sheets">건너뛴 시트: ' + esc(p.skippedSheets.map(function (x) { return x.name + '(' + x.why + ')'; }).join(', ')) + '</small>' : '') +
+            (f.promotedSheets && f.promotedSheets.length ? '<br><small class="sub" data-k="promoted-sheets">시트 ' + esc(f.promotedSheets.map(function (x) { return "'" + x + "'"; }).join(', ')) + ' 을(를) 열 구성으로 데이터로 읽었습니다(이름은 집계표처럼 보이지만 필요한 열이 있음)</small>' : '') +
             fileInfo(k, f, p) +
             '</td><td data-k="asof" title="올린 시각 ' + esc(f.uploadedAt) + '">' + esc(String(f.uploadedAt || '').slice(0, 10) || '—') + '</td><td>' + plabel(n && n.period) + '</td>' +
             '<td class="num">' + (n ? C.fmtNum(n.records.length) : '—') + '</td><td class="num">' + (n ? C.fmtNum(n.skipped.length) : '—') + '</td>' +
@@ -345,7 +348,7 @@
   }
   function mapTable(k, i) {
     var f = state.sets[k].files[i], p = state.sets[k].m.files[i], res = p.res, n = p.norm;
-    var h = (res.missing.length ? '<div class="warn">이 열을 찾지 못했습니다: <b>' + esc(res.missing.join(', ')) + '</b>. 아래에서 엑셀의 어느 열인지 골라 주세요. 고르기 전에는 이 종류를 집계하지 않습니다.</div>' : '') +
+    var h = (res.missing.length ? '<div class="warn" data-k="missing">이 열을 찾지 못했습니다: <b>' + esc(res.missing.join(', ')) + '</b>' + (C.skippedSheetNote(f.skippedSheets) ? '<br>' + esc(C.skippedSheetNote(f.skippedSheets)) + '<br>' : '. ') + '아래에서 엑셀의 어느 열인지 골라 주세요. 고르기 전에는 이 종류를 집계하지 않습니다.</div>' : '') +
       '<table class="map"><thead><tr><th>필요한 항목</th><th>엑셀 열</th><th>열 번호</th><th>근거</th><th>예시 값</th></tr></thead><tbody>';
     C.DATASETS[k].fields.forEach(function (fd) {
       var cur = res.map[fd.key] || '', col = cur ? f.headers.indexOf(cur) + 1 : 0;

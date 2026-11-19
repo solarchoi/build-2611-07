@@ -1289,4 +1289,18 @@ function v1100() {
   var half = ES2.summarize([corpEx, dtl], {}, {});
   eq([half.total[10].종합.decl, half.total[10].종합.rate, half.kinds.수출.months[10].종합.rate], [null, null, 2.69], 'v1.10.1 수입 현황목록이 없으면 전사 비율 자료 없음(수출 줄은 2.69%)');
   ok(/전사 오류비율/.test(ej) && /수출입 합계/.test(ej), 'v1.10.1 오류점수 화면에 전사(수출입 합계) 카드');
+  // (v1.10.2) 집계표 이름은 힌트 — 데이터 시트 이름이 우연히 「종합」이어도 열 구성으로 고른다
+  var RUL = C2.sampleFiles().filter(function (f) { return /결정문/.test(f.name); })[0].aoa;
+  var GUIDE = [['안내'], ['이 파일은 (가상) 예제입니다'], ['문의: (가상) 담당자']];
+  var pr = C2.pickSheets([{ name: '종합', aoa: RUL, offset: 0 }, { name: '안내', aoa: GUIDE, offset: 0 }], '2026_품목분류결정문(가상).xlsx');
+  eq([pr.use.map(function (s) { return s.name; }), pr.skipped, pr.detect.kind, pr.promoted], [['종합'], [{ name: '안내', why: '열 구성이 다름' }], 'ruling', ['종합']], 'v1.10.2 결정문 파일(종합 + 안내) — 「종합」을 데이터로, 「안내」는 건너뜀');
+  var pr2 = C2.pickSheets([{ name: '종합', aoa: RUL, offset: 0 }, { name: '결정문목록', aoa: RUL, offset: 0 }], '결정문(가상).xlsx');
+  eq([pr2.use.map(function (s) { return s.name; }), pr2.skipped, pr2.promoted], [['결정문목록'], [{ name: '종합', why: '집계표' }], []], 'v1.10.2 이름이 아닌 시트가 필수 열을 다 갖추면 집계표 이름 시트를 끌어오지 않음');
+  var pr3 = C2.pickSheets([{ name: '종합', aoa: GUIDE, offset: 0 }, { name: '안내', aoa: GUIDE.concat([['(가상)']]), offset: 0 }], 'x(가상).xlsx');
+  eq([pr3.use.map(function (s) { return s.name; }), pr3.skipped, pr3.detect.kind, pr3.promoted], [['안내'], [{ name: '종합', why: '집계표' }], null, []], 'v1.10.2 다시 골라도 나아지지 않으면 처음 결과 그대로');
+  eq(C2.skippedSheetNote(pr3.skipped), "(참고: 시트 '종합' 을 집계표로 보고 건너뛰었습니다. 이 시트가 데이터라면 시트 이름을 바꾸거나 아래에서 직접 골라 주세요)", 'v1.10.2 열을 못 찾을 때 덧붙일 참고 문구');
+  eq([C2.skippedSheetNote(pr.skipped), C2.skippedSheetNote([])], ['', ''], 'v1.10.2 집계표로 건너뛴 시트가 없으면 참고 문구 없음');
+  var mres = C2.mergeFiles('ruling', [{ name: 'r', file: 'r', headers: C2.uniqueHeaders(pr.use[0].aoa[0]), aoa: pr.use[0].aoa, offset: 0, override: {}, skippedSheets: pr.skipped, promotedSheets: pr.promoted }]);
+  eq([mres.ok, mres.records.length > 0, C2.migrateSaved({ sets: { ruling: { files: [{ name: 'r', file: 'r', headers: ['a'], aoa: [['a'], [1]], promotedSheets: ['종합'] }] } } }).sets.ruling.files[0].promotedSheets], [true, true, ['종합']], 'v1.10.2 「종합」 시트로 결정문 집계 · 기억할 때 보관');
+  ok(/C\.skippedSheetNote\(f\.skippedSheets\)/.test(dj) && /C\.skippedSheetNote\(item\.skippedSheets\)/.test(dj) && /data-k="promoted-sheets"/.test(dj), 'v1.10.2 화면 — 열 못 찾음 · 종류 고르기 안내에 참고 문구, 파일 목록에 열 구성으로 읽은 시트');
 }
