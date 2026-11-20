@@ -453,8 +453,9 @@
     list.sort(function (a, b) { return (a.month || 0) - (b.month || 0) || b.score - a.score || (a.declNo < b.declNo ? -1 : 1); });
     return list;
   }
-  var LEDGER_HEAD = ['구분', 'No', '사업부', 'DRAFT NO', '신고번호', '정정일자', '오류점수', '발생사유 및 정정내용', '귀책', '관련부서', '담당자'];
-  // notes[declNo] = { div, draft, reason, blame, dept, owner } — 사람이 채우는 칸. 사유를 안 썼으면 정정 내역(항목 전→후)을 대신 넣는다.
+  // (v1.12.0) AEO 관리대장과 같은 11열 — 「No」 대신 「연번」
+  var LEDGER_HEAD = ['구분', '연번', '사업부', 'DRAFT NO', '신고번호', '정정일자', '오류점수', '발생사유 및 정정내용', '귀책', '관련부서', '담당자'];
+  // (예전 규칙 — 시험 고정용) notes[declNo] — 오류점수가 있는 신고번호만, 사유를 안 썼으면 정정 내역. v1.12.0 화면 · 엑셀은 ledgerRows 를 쓴다.
   function ledger(decls, notes, opts) {
     notes = notes || {}; opts = opts || {};
     var list = opts.all ? decls : decls.filter(function (d) { return d.score > 0; });
@@ -463,6 +464,48 @@
       var n = notes[d.declNo] || {}; cnt[d.kind] = (cnt[d.kind] || 0) + 1;
       return [d.kind || '', cnt[d.kind], n.div || '', n.draft || '', d.declNo, d.fixedAt || '', d.score, n.reason || d.changes.slice(0, 3).join(' / '), n.blame || '', n.dept || '', n.owner || ''];
     });
+  }
+
+  /* ---------- (v1.12.0) 인천 오류건 관리대장 ---------- */
+  // 사업부는 팀 표기처럼 짧게(건기본부 → 건기). 못 정하면 null(화면 「미분류」 — 담당자가 고쳐 적을 수 있음).
+  var DIV_SHORT = { '건기본부': '건기', '엔진본부': '엔진', '부품센터': '부품' };
+  var LEDGER_INPUT = ['draft', 'reason', 'blame', 'dept', 'owner'];      // 담당자가 채우는 다섯 칸(+ 사업부를 못 정했을 때 div)
+  function noteKey(declNo, month) { return declNo + '|' + month; }       // 입력값 열쇠 = 신고번호 + 월(집계 데이터와 따로 저장)
+  // 예전 입력값(열쇠 = 신고번호만)을 그 신고번호가 나온 달의 열쇠로 옮긴다. 옮긴 예전 열쇠는 지우고, 지금 자료에 없는 예전 열쇠는 그대로 둔다.
+  function migrateNotes(notes, decls) {
+    var out = {}, moved = 0; notes = notes || {};
+    Object.keys(notes).forEach(function (k) { out[k] = notes[k]; });
+    (decls || []).forEach(function (d) {
+      var old = out[d.declNo], key = noteKey(d.declNo, d.month);
+      if (old && typeof old === 'object' && d.month && !out[key]) { out[key] = old; delete out[d.declNo]; moved++; }
+    });
+    return { notes: out, moved: moved };
+  }
+  // 대장 줄 — 인천 발생 신고번호만(울산은 세부 자료가 없어 대상 아님), 0점 건 포함. month 가 없으면 전체 월.
+  //   연번 = 월 · 구분(수입 → 수출)마다 정정일자 · 신고번호 순. 화면 정렬(미입력 먼저)이 바뀌어도 번호는 그대로.
+  function ledgerRows(decls, notes, erpSum, opts) {
+    notes = notes || {}; opts = opts || {};
+    var idx = erpSum ? erpSum.index : {}, order = { 수입: 0, 수출: 1 };
+    var list = (decls || []).filter(function (d) { return d.campus === '인천' && d.month && (opts.month == null || d.month === opts.month); });
+    list.sort(function (a, b) { return a.month - b.month || (order[a.kind] || 0) - (order[b.kind] || 0) || String(a.fixedAt || '').localeCompare(String(b.fixedAt || '')) || (a.declNo < b.declNo ? -1 : 1); });
+    var cnt = {};
+    return list.map(function (d) {
+      var key = noteKey(d.declNo, d.month), n = notes[key] || {}, e = idx[declKey(d.declNo)], auto = e ? DIV_SHORT[e.hq] || null : null;
+      var ck = d.month + '|' + d.kind; cnt[ck] = (cnt[ck] || 0) + 1;
+      var row = { key: key, kind: d.kind || '', no: cnt[ck], month: d.month, declNo: d.declNo, date: d.fixedAt ? String(d.fixedAt).slice(0, 10) : '', score: d.score,
+        div: auto || clean(n.div) || '', divAuto: !!auto, hint: d.changes.slice(0, 3).join(' / '), erp: !!e };
+      LEDGER_INPUT.forEach(function (f) { row[f] = n[f] == null ? '' : String(n[f]); });
+      row.missing = !clean(row.draft) || !clean(row.reason);                 // 미입력 = DRAFT NO 나 발생사유가 빈 줄
+      return row;
+    });
+  }
+  function ledgerProgress(rows, month) {
+    var total = rows.length, missing = rows.filter(function (r) { return r.missing; }).length;
+    return { total: total, missing: missing, done: total - missing, text: (month ? month + '월 ' : '') + '인천 발생 ' + total + '건 중 미입력 ' + missing + '건' };
+  }
+  // 엑셀 — AEO 관리대장과 같은 열 순서. 발생사유를 안 썼으면 빈칸(미입력이 입력된 것처럼 보이지 않게). 사업부를 못 정했으면 「미분류」.
+  function ledgerAoa(rows) {
+    return [LEDGER_HEAD].concat((rows || []).map(function (r) { return [r.kind, r.no, r.div || '미분류', r.draft, r.declNo, r.date, r.score, r.reason, r.blame, r.dept, r.owner]; }));
   }
 
   /* ---------- 월별 공유 메일 초안 ---------- */
@@ -523,7 +566,8 @@
   function exportBook(ctx) {
     var s = ctx.summary, out = [];
     out.push({ name: '오류점수요약', aoa: summaryAoa(s) });
-    out.push({ name: '발생사유및정정내용', aoa: [LEDGER_HEAD].concat(ledger(ctx.decls, ctx.notes, { all: ctx.allDecls })) });
+    // (v1.12.0) 관리대장 — 인천 · 0점 포함 · 11열(ctx.ledger 를 넘기면 그것, 아니면 예전 규칙)
+    out.push({ name: '발생사유및정정내용', aoa: ctx.ledger ? ledgerAoa(ctx.ledger) : [LEDGER_HEAD].concat(ledger(ctx.decls, ctx.notes, { all: ctx.allDecls })) });
     out.push({ name: '분기', aoa: [['구분', '캠퍼스', '분기', '월', '오류점수', '경계', '판정']].concat(s.quarters.map(function (q) { return [q.kind, q.campus, q.q + '분기', q.months.join(','), q.score, q.threshold, q.over ? '경계 이상(실물서류 제출 대상)' : q.near ? '경계 80% 이상' : '']; })) });
     out.push({ name: '항목별', aoa: [['항목명', '항목코드', '정정 줄', '신고번호 수', '오류점수', '비중(%)']].concat(topItems(ctx.rows).map(function (t) { return [t.item, t.code, t.n, t.err, t.score, t.share == null ? '' : t.share]; })) });
     out.push({ name: '상세', aoa: [['구분', '월', '캠퍼스', '관세사부호', '신고번호', '란번호', '정정일자', '수리구분', '정정구분', '항목코드', '항목명', '오류점수', '변경 후 오류점수', '정정전내역', '정정후내역']].concat(ctx.rows.map(function (r) { return [r.kind, r.month, r.campus, r.broker, r.declNo, r.lane, r.fixedRaw || r.fixedAt || '', r.accept, r.fixType, r.code, r.item, r.score, r.score2 == null ? '' : r.score2, r.before, r.after]; })) });
@@ -568,6 +612,7 @@
 
   var api = {
     RULE: RULE, THRESHOLD: THRESHOLD, KINDS: KINDS, CAMPUSES: CAMPUSES, FIELDS: FIELDS, LEDGER_HEAD: LEDGER_HEAD,
+    noteKey: noteKey, migrateNotes: migrateNotes, ledgerRows: ledgerRows, ledgerProgress: ledgerProgress, ledgerAoa: ledgerAoa, DIV_SHORT: DIV_SHORT, LEDGER_INPUT: LEDGER_INPUT,
     parseDeclNo: parseDeclNo, statusCheck: statusCheck, campusOf: campusOf, normRule: normRule, UNREGION: UNREGION, erpSummary: erpSummary, hqBreakdown: hqBreakdown, regionChecks: regionChecks, declKey: declKey, HQ_ORDER: HQ_ORDER, parseDate: parseDate, monthOfName: monthOfName, classifySheet: classifySheet,
     mapHeaders: mapHeaders, findHeaderRow: findHeaderRow, readDetail: readDetail, readStatus: readStatus, readWorkbook: readWorkbook, readHandSummary: readHandSummary, applyRule: applyRule, brokers: brokers, countsFromBooks: countsFromBooks, compare: compare,
     summarize: summarize, quarters: quarters, topItems: topItems, byDecl: byDecl, ledger: ledger, mailDraft: mailDraft,

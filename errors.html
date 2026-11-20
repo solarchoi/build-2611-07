@@ -93,9 +93,10 @@
 </section>
 
 <section id="e-ledger" class="card" hidden>
-  <h2 style="margin-top:0">4. 관리대장 — 발생사유 및 정정내용</h2>
-  <p class="sub">오류점수가 있는 신고번호만 보입니다. 사업부 · 사유 · 귀책 · 담당자는 사람이 적습니다. 비워 두면 사유 칸에 정정 내역이 들어갑니다. 적은 내용은 이 브라우저에만 남습니다.</p>
-  <div class="ctrl"><label>월 <select id="e-lmonth"></select></label></div>
+  <h2 style="margin-top:0">4. 관리대장 — 인천 발생 오류건</h2>
+  <p class="sub">유니패스 파일을 올리면 인천에서 발생한 신고번호가 자동으로 줄이 됩니다(0점 건 포함, 울산은 세부 자료가 없어 대상 아님). 구분 · 연번 · 사업부(ERP PLANT) · 신고번호 · 정정일자 · 오류점수는 자동이고, <b>DRAFT NO · 발생사유 및 정정내용 · 귀책 · 관련부서 · 담당자</b> 다섯 칸만 채우면 됩니다. 입력한 내용은 「신고번호 + 월」로 이 브라우저에 따로 저장되어 파일을 다시 올려도 남습니다 — 팀 공유 · 백업은 「대장 엑셀 내보내기」로.</p>
+  <div class="ctrl"><label>월 <select id="e-lmonth"></select></label> <label>내보내기 범위 <select id="e-lscope"><option value="month">고른 달</option><option value="all">전체 월</option></select></label> <button class="btn green" type="button" id="e-lxlsx">대장 엑셀 내보내기</button> <button class="btn" type="button" id="e-lclear">대장 입력값 지우기</button></div>
+  <div id="e-lprog"></div>
   <div id="e-ltable"></div>
 </section>
 

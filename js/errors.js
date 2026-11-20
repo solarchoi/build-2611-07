@@ -6,6 +6,7 @@
   function load(k, d) { try { return JSON.parse(localStorage.getItem(k)) || d; } catch (e) { return d; } }
   // (v1.11.0) rule = 지역 표({ ulsan, incheon } — 예전 { ulsan } 저장값은 새 기본 표로 옮김) · erp = ERP 실적(인천 분모 · 본부 조인, 저장하지 않음) · manual = 직접 넣은 인천 건수
   var state = { books: [], rule: E.normRule(load(LS.rule, null)), notes: load(LS.notes, {}), th: load(LS.th, E.THRESHOLD), counts: { 수입: {}, 수출: {} }, countSrc: { 수입: {}, 수출: {} }, manual: { 수입: {}, 수출: {} }, erp: { 수입: null, 수출: null }, erpSum: null, hq: null, checks: [], summary: null, rows: [], decls: [] };
+  function saveNotes() { try { localStorage.setItem(LS.notes, JSON.stringify(state.notes)); return true; } catch (e) { return false; } }
   function saveRule() { try { localStorage.setItem(LS.rule, JSON.stringify(state.rule)); } catch (e) { /* 기억 못 해도 이번 화면에는 반영 */ } }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function n(v) { return v == null ? '—' : Number(v).toLocaleString('ko-KR'); }
@@ -31,6 +32,7 @@
     state.hq = E.hqBreakdown(state.summary, state.books, state.erp.수입 || state.erp.수출 ? state.erpSum : null);
     state.checks = E.regionChecks(state.summary, state.books, state.erp.수입 || state.erp.수출 ? state.erpSum : null);
     state.decls = E.byDecl(state.rows);
+    var mg = E.migrateNotes(state.notes, state.decls); if (mg.moved) { state.notes = mg.notes; saveNotes(); }
     fillMonths();
     render();
   }
@@ -174,13 +176,36 @@
     var sc = $('e-scope').value, rows = state.rows.filter(function (r) { return sc === '전체' || r.kind === sc || r.campus === sc; });
     $('e-items').innerHTML = table(['항목명', '항목코드', '정정 줄', '신고번호 수', '오류점수', '비중'], E.topItems(rows, 15).map(function (t) { return '<tr><td>' + esc(t.item) + '</td><td>' + esc(t.code) + '</td><td class="num">' + n(t.n) + '</td><td class="num">' + n(t.err) + '</td><td class="num">' + n(t.score) + '</td><td class="num">' + pc(t.share) + '</td></tr>'; }), 'items');
   }
-  var NOTE = [['div', '사업부'], ['reason', '발생사유 및 정정내용'], ['blame', '귀책'], ['owner', '담당자']];
+  // (v1.12.0) 인천 오류건 관리대장 — 자동: 구분 · 연번 · 사업부 · 신고번호 · 정정일자 · 오류점수 / 담당자 입력: DRAFT NO · 발생사유 · 귀책 · 관련부서 · 담당자
+  function ledgerOf(month) { return E.ledgerRows(state.decls, state.notes, state.erp.수입 || state.erp.수출 ? state.erpSum : null, { month: month }); }
+  function inp(r, f, ph, w) { return '<input type="text" data-key="' + esc(r.key) + '" data-note="' + f + '" value="' + esc(r[f]) + '" placeholder="' + esc(ph || '') + '"' + (f === 'blame' ? ' list="e-blames"' : '') + ' style="width:' + (w || 8) + 'em" aria-label="' + esc(r.declNo + ' ' + f) + '">'; }
   function renderLedger() {
-    var m = +$('e-lmonth').value, list = state.decls.filter(function (d) { return d.month === m && d.score > 0; });
-    $('e-ltable').innerHTML = list.length ? table(['구분', '신고번호', '캠퍼스', '정정일자', '오류점수'].concat(NOTE.map(function (x) { return x[1]; })), list.map(function (d) {
-      var note = state.notes[d.declNo] || {};
-      return '<tr><td>' + esc(d.kind) + '</td><td>' + esc(d.declNo) + '</td><td>' + esc(d.campus) + '</td><td>' + esc(d.fixedAt) + '</td><td class="num">' + n(d.score) + '</td>' + NOTE.map(function (x) { return '<td><input type="text" data-note="' + x[0] + '" data-decl="' + esc(d.declNo) + '" value="' + esc(note[x[0]] || '') + '" placeholder="' + (x[0] === 'reason' ? esc(d.changes.slice(0, 2).join(' / ')) : '') + '"></td>'; }).join('') + '</tr>';
-    }), 'ledger') : '<p class="sub">이 달은 오류점수가 있는 신고번호가 없습니다.</p>';
+    var m = +$('e-lmonth').value, rows = ledgerOf(m), pg = E.ledgerProgress(rows, m);
+    // 미입력 줄을 위로, 그 안에서는 점수 큰 순서(연번은 그대로)
+    var view = rows.slice().sort(function (a, b) { return (b.missing - a.missing) || (b.score - a.score) || (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : a.no - b.no); });
+    var noErp = !(state.erp.수입 || state.erp.수출);
+    $('e-lprog').innerHTML = '<div class="' + (pg.missing ? 'warn' : 'ok') + '" data-k="ledger-progress"><b>' + esc(pg.text) + '</b>' + (pg.total ? ' · 입력 완료 ' + pg.done + '건' : '') + (noErp && pg.total ? ' · ERP 실적을 함께 올리면 사업부가 자동으로 채워집니다' : '') + '</div>';
+    $('e-ltable').innerHTML = rows.length ? '<datalist id="e-blames"><option value="화주"><option value="관세사"></datalist>' + table(E.LEDGER_HEAD, view.map(function (r) {
+      var st = r.score > 0 ? ' style="background:#fff4e5"' : ' style="color:var(--sub)"';
+      var div = r.divAuto ? esc(r.div) : inp(r, 'div', '미분류', 4);
+      return '<tr data-k="ledger-row"' + st + (r.missing ? ' class="flag"' : '') + '><td>' + esc(r.kind) + '</td><td class="num">' + r.no + '</td><td>' + div + '</td><td>' + inp(r, 'draft', 'e-mail · SAP 문서번호', 13) + '</td><td>' + esc(r.declNo) + '</td><td>' + esc(r.date) + '</td><td class="num">' + (r.score > 0 ? '<b>' + n(r.score) + '</b>' : '0') + '</td>' +
+        '<td><textarea data-key="' + esc(r.key) + '" data-note="reason" rows="2" style="width:22em;font:inherit" placeholder="' + esc(r.hint || '발생사유 및 정정내용') + '" aria-label="' + esc(r.declNo) + ' 발생사유">' + esc(r.reason) + '</textarea></td><td>' + inp(r, 'blame', '화주 · 관세사', 6) + '</td><td>' + inp(r, 'dept', '', 7) + '</td><td>' + inp(r, 'owner', '', 6) + '</td></tr>';
+    }), 'ledger') : '<p class="sub">이 달은 인천에서 발생한 오류건이 없습니다.</p>';
+  }
+  // 입력할 때마다 바로 저장(입력값이 사라지지 않게) — 진행 상황은 칸을 떠날 때 다시 그림
+  function onNote(e, redraw) {
+    var k = e.target.dataset.key, f = e.target.dataset.note; if (!k || !f) return;
+    (state.notes[k] = state.notes[k] || {})[f] = e.target.value;
+    if (!saveNotes()) $('e-lprog').innerHTML = '<div class="warn"><b>입력값을 이 브라우저에 저장하지 못했습니다</b> — 「대장 엑셀 내보내기」로 지금 내용을 받아 두세요.</div>';
+    else if (redraw) renderLedger();
+  }
+  function exportLedger() {
+    var all = $('e-lscope').value === 'all', m = +$('e-lmonth').value, rows = ledgerOf(all ? null : m);
+    var wb = XLSX.utils.book_new(), ws = XLSX.utils.aoa_to_sheet(E.ledgerAoa(rows));
+    ws['!cols'] = [6, 5, 7, 24, 18, 12, 8, 50, 8, 12, 10].map(function (w) { return { wch: w }; });
+    var yr = state.summary.year || '', tag = all ? '전체' : (yr ? yr + '-' : '') + (m < 10 ? '0' : '') + m;
+    XLSX.utils.book_append_sheet(wb, ws, all ? '관리대장_전체' : '관리대장_' + m + '월');
+    XLSX.writeFile(wb, '인천오류건관리대장_' + tag + '.xlsx');
   }
   function renderMail() {
     var m = +$('e-mmonth').value, d = E.mailDraft(state.summary, m, { top: E.topItems(state.rows.filter(function (r) { return r.month === m; }), 5) });
@@ -202,9 +227,17 @@
   $('e-scope').addEventListener('change', renderItems);
   $('e-lmonth').addEventListener('change', renderLedger);
   $('e-mmonth').addEventListener('change', renderMail);
-  $('e-ltable').addEventListener('change', function (e) { var d = e.target.dataset.decl; if (!d) return; (state.notes[d] = state.notes[d] || {})[e.target.dataset.note] = e.target.value; localStorage.setItem(LS.notes, JSON.stringify(state.notes)); });
+  $('e-ltable').addEventListener('input', function (e) { onNote(e, false); });
+  $('e-ltable').addEventListener('change', function (e) { onNote(e, true); });
+  $('e-lxlsx').addEventListener('click', exportLedger);
+  // 대장 입력값은 다른 「지우기」 · 「비우기」로 지워지지 않는다 — 여기서만, 한 번 더 확인
+  $('e-lclear').addEventListener('click', function () {
+    var n0 = Object.keys(state.notes).length; if (!n0) return;
+    if (!window.confirm('관리대장에 입력한 내용 ' + n0 + '건을 이 브라우저에서 지웁니다. 되돌릴 수 없습니다.\n먼저 「대장 엑셀 내보내기」로 받아 두셨나요?\n\n[확인] 지우기 · [취소] 그대로 두기')) return;
+    state.notes = {}; saveNotes(); renderLedger();
+  });
   $('e-mcopy').addEventListener('click', function () { var b = this; (navigator.clipboard ? navigator.clipboard.writeText($('e-mbody').value) : Promise.resolve()).then(function () { b.textContent = '복사했습니다'; setTimeout(function () { b.textContent = '본문 복사'; }, 1200); }); });
-  $('e-xlsx').addEventListener('click', function () { var wb = XLSX.utils.book_new(); E.exportBook({ summary: state.summary, rows: state.rows, decls: state.decls, notes: state.notes }).forEach(function (s) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s.aoa), s.name); }); XLSX.writeFile(wb, '수출입오류점수_' + new Date().toISOString().slice(0, 10) + '.xlsx'); });
+  $('e-xlsx').addEventListener('click', function () { var wb = XLSX.utils.book_new(); E.exportBook({ summary: state.summary, rows: state.rows, decls: state.decls, notes: state.notes, ledger: ledgerOf(null) }).forEach(function (s) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s.aoa), s.name); }); XLSX.writeFile(wb, '수출입오류점수_' + new Date().toISOString().slice(0, 10) + '.xlsx'); });
   window.__err = { state: state };
   if (location.hash === '#example') $('e-sample').click();
 })();

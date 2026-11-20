@@ -1164,6 +1164,7 @@ var v190 = passed + failed;
 function finish() {
 var v191 = passed + failed; v1100(); console.log('v1.10.0 ' + (passed + failed - v191) + '개 검사');
 var v1103 = passed + failed; v1110(); console.log('v1.11.0 ' + (passed + failed - v1103) + '개 검사');
+var v1110c = passed + failed; v1120(); console.log('v1.12.0 ' + (passed + failed - v1110c) + '개 검사');
 console.log('v1.9.0 ' + (v190 - v180) + '개 검사');
 console.log('v1.8.0 ' + (v180 - v170) + '개 검사');
 console.log('v1.7.0 ' + (v170 - v160) + '개 검사');
@@ -1397,4 +1398,54 @@ function v1110() {
   var eh = fsx.readFileSync(__dirname + '/../errors.html', 'utf8');
   ok(eh.indexOf('<script src="js/customs.js">') > 0 && eh.indexOf('<script src="js/customs.js">') < eh.indexOf('<script src="js/errscore.js">') && /id="e-checks"/.test(eh) && /id="e-hq"/.test(eh), 'v1.11.0 오류점수 화면 — customs.js · 검증 · 본부별 자리');
   ok(/점수 발생 건수/.test(ej) && /지역 미분류/.test(ej) && /H\.ulsanNote/.test(ej) && /setRegion/.test(ej), 'v1.11.0 화면 — 점수 발생 건수 · 지역 미분류 · 울산 표기 · 지역 고치기');
+}
+// ---------- v1.12.0 인천 오류건 관리대장 ----------
+function v1120() {
+  var ES = require('../js/errscore.js');
+  var DH = ['No', '귀책사유자부호', '신고번호', '란번호', '정정일자 및 시간', '수리구분', '정정구분', '항목코드', '항목명', '오류점수', '변경 후 오류점수', '정정전내역', '정정후내역'];
+  function dr(no, decl, score, at, item) { return [no, '(가상)', decl, 0, at, '수리후', '정정', 'A1', item || '(가상)항목', score, score, '10', '20']; }
+  var bx = ES.readWorkbook([{ name: '귀책사유자별오류상세목록_10월', aoa: [DH,
+    dr(1, '2237126813391X', 10, '2026-10-23  09:00:00'), dr(2, '2237126813391X', 6, '2026-10-24  09:00:00'),      // 같은 신고 두 줄 → 16점 · 첫 날짜
+    dr(3, '4215826106228X', 24, '2026-10-20  10:00:00'), dr(4, '4215826106148X', 0, '2026-10-01  11:00:00'),
+    dr(5, '4390826009114X', 21, '2026-10-05  10:00:00'),                                                          // 울산 — 대장 대상 아님
+    dr(6, '9999926000001X', 3, '2026-10-06  10:00:00')] }], '2026년수출(가상).xlsx');                             // 지역 미분류 — 대상 아님
+  var bi = ES.readWorkbook([{ name: '귀책사유자별오류상세목록_10월', aoa: [DH, dr(1, '2235626B17742M', 0, '2026-10-01  13:54:31')] }, { name: '귀책사유자별오류상세목록_9월', aoa: [DH, dr(1, '2235626000099M', 5, '2026-09-11  13:00:00')] }], '2026년수입(가상).xlsx');
+  var books = [bi, bx]; ES.applyRule(books, null);
+  var decls = ES.byDecl([].concat(bi.rows, bx.rows).filter(function (r) { return r.month; }));
+  var es = ES.erpSummary({ 수입: [{ declNo: '2235626B17742M', month: '2026-09', hq: '엔진본부', plant: '1130' }], 수출: [
+    { declNo: '2237126813391X', month: '2026-10', hq: '건기본부', plant: '1000' }, { declNo: '4215826106228X', month: '2026-10', hq: '부품센터', plant: '6000' }, { declNo: '4215826106148X', month: '2026-10', hq: '부품센터', plant: '6000' }] }, 2026);
+  var L = ES.ledgerRows(decls, {}, es, { month: 10 });
+  eq(L.map(function (r) { return [r.kind, r.no, r.div, r.declNo, r.date, r.score]; }), [
+    ['수입', 1, '엔진', '2235626B17742M', '2026-10-01', 0], ['수출', 1, '부품', '4215826106148X', '2026-10-01', 0], ['수출', 2, '부품', '4215826106228X', '2026-10-20', 24], ['수출', 3, '건기', '2237126813391X', '2026-10-23', 16]],
+    'v1.12.0 대장 — 인천만(울산 · 지역 미분류 빼고) · 0점 포함 · 사업부 짧게 · 첫 정정일자 · 신고번호별 점수 합 · 연번(구분마다 정정일자 순)');
+  eq(L.filter(function (r) { return r.kind === '수출'; }).reduce(function (a, r) { return a + r.score; }, 0), 40, 'v1.12.0 수출 대장 합계 40점 = 수출 인천 오류점수');
+  eq(ES.LEDGER_HEAD, ['구분', '연번', '사업부', 'DRAFT NO', '신고번호', '정정일자', '오류점수', '발생사유 및 정정내용', '귀책', '관련부서', '담당자'], 'v1.12.0 AEO 관리대장 11열');
+  // ERP 가 없으면 사업부 미분류(담당자가 고쳐 적음)
+  var L0 = ES.ledgerRows(decls, { '2235626B17742M|10': { div: '엔진(수기)' } }, null, { month: 10 });
+  eq([L0[0].div, L0[0].divAuto, L0[1].div, ES.ledgerAoa(L0)[2][2]], ['엔진(수기)', false, '', '미분류'], 'v1.12.0 사업부를 못 정하면 미분류 — 담당자가 적은 값을 씀');
+  // 입력값 — 열쇠 = 신고번호|월, 미입력 판정 · 진행
+  var notes = { '4215826106228X|10': { draft: '210-M6S0-GR-202610-0016', reason: '단가 오기\n정정 완료', blame: '화주', dept: '(가상)부서', owner: '(가상)' }, '2237126813391X|10': { draft: 'e-mail' } };
+  var L2 = ES.ledgerRows(decls, notes, es, { month: 10 });
+  eq(L2.map(function (r) { return [r.key, r.missing]; }), [['2235626B17742M|10', true], ['4215826106148X|10', true], ['4215826106228X|10', false], ['2237126813391X|10', true]], 'v1.12.0 열쇠 = 신고번호|월 · 미입력 = DRAFT NO 나 발생사유가 빈 줄');
+  eq(ES.ledgerProgress(L2, 10).text, '10월 인천 발생 4건 중 미입력 3건', 'v1.12.0 진행 상황 문구');
+  eq([L2[2].draft, L2[2].reason, L2[3].draft], ['210-M6S0-GR-202610-0016', '단가 오기\n정정 완료', 'e-mail'], 'v1.12.0 DRAFT NO 는 형식 검사 없이(SAP 번호 · e-mail) · 여러 줄 사유');
+  var aoa = ES.ledgerAoa(L2);
+  eq([aoa[3], aoa[1][7]], [['수출', 2, '부품', '210-M6S0-GR-202610-0016', '4215826106228X', '2026-10-20', 24, '단가 오기\n정정 완료', '화주', '(가상)부서', '(가상)'], ''], 'v1.12.0 엑셀 — AEO 열 순서 · 발생사유를 안 썼으면 빈칸');
+  // 파일을 다시 올려도 입력 유지(같은 열쇠) · 월이 다르면 다른 줄
+  var again = ES.readWorkbook([{ name: '귀책사유자별오류상세목록_10월', aoa: [DH, dr(1, '4215826106228X', 24, '2026-10-20  10:00:00')] }], '2026년수출(가상).xlsx'); ES.applyRule([again], null);
+  eq(ES.ledgerRows(ES.byDecl(again.rows), notes, es, { month: 10 })[0].draft, '210-M6S0-GR-202610-0016', 'v1.12.0 유니패스 파일을 다시 올려도 입력값 유지');
+  eq(ES.ledgerRows(decls, {}, es, {}).map(function (r) { return r.month + ' ' + r.kind + ' ' + r.no; }), ['9 수입 1', '10 수입 1', '10 수출 1', '10 수출 2', '10 수출 3'], 'v1.12.0 전체 월 — 월 순서 · 연번은 월 · 구분마다');
+  // 예전 입력값(열쇠 = 신고번호만) 옮기기
+  var mg = ES.migrateNotes({ '4215826106228X': { reason: '예전 사유' }, '1111126000000X': { reason: '지금 자료에 없음' }, '2237126813391X|10': { draft: 'x' } }, decls);
+  eq([mg.moved, mg.notes['4215826106228X|10'].reason, mg.notes['4215826106228X'], mg.notes['1111126000000X'].reason, mg.notes['2237126813391X|10'].draft], [1, '예전 사유', undefined, '지금 자료에 없음', 'x'], 'v1.12.0 예전 입력값을 신고번호|월로 옮김(없는 신고번호는 그대로)');
+  // 지우기 버튼들은 대장 입력값을 건드리지 않는다
+  var dj = fsx.readFileSync(__dirname + '/../js/dash.js', 'utf8'), ej = fsx.readFileSync(__dirname + '/../js/errors.js', 'utf8');
+  var clearDash = dj.slice(dj.indexOf("$('btn-dash-clear')"), dj.indexOf('\n', dj.indexOf("$('btn-dash-clear')")));
+  var clearErr = ej.slice(ej.indexOf("$('e-clear')"), ej.indexOf('\n', ej.indexOf("$('e-clear')")));
+  ok(clearDash.length > 20 && !/err\.notes|LS\.notes/.test(clearDash) && clearErr.length > 20 && !/notes = \{\}|LS\.notes/.test(clearErr), 'v1.12.0 「저장된 데이터 지우기」 · 「비우기」는 대장 입력값을 지우지 않음');
+  ok(/e-lclear/.test(ej) && /window\.confirm\('관리대장에 입력한 내용/.test(ej), 'v1.12.0 대장 입력값은 따로 확인을 받고 지움');
+  var eh = fsx.readFileSync(__dirname + '/../errors.html', 'utf8');
+  ok(/id="e-lxlsx"/.test(eh) && /id="e-lprog"/.test(eh) && /id="e-lscope"/.test(eh) && /list="e-blames"|e-blames/.test(ej), 'v1.12.0 화면 — 진행 상황 · 엑셀 내보내기(고른 달 · 전체 월) · 귀책 고르기');
+  var book = ES.exportBook({ summary: ES.summarize(books, {}, {}), rows: [].concat(bi.rows, bx.rows), decls: decls, notes: notes, ledger: L2 });
+  eq(book.filter(function (x) { return x.name === '발생사유및정정내용'; })[0].aoa.length, 5, 'v1.12.0 전체 엑셀의 대장 시트도 인천 · 0점 포함');
 }
