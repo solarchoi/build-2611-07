@@ -528,14 +528,18 @@
       use.push(r); months[r.month] = 1;
     });
     var ms = Object.keys(months).sort(), month = opts.month && months[opts.month] ? opts.month : ms[ms.length - 1] || null;
+    // (v2.6.0) 상단 조회 기간 — 당월 = 기간의 마지막 달(자료가 없어도), 누적 = 기간 전체. 월별 계열 = 기간의 모든 달(자료 없는 달은 빈칸).
+    var rg = opts.range && opts.range.from && opts.range.to ? opts.range : null;
+    if (rg) month = rg.to;
     var hqs = FTA_HQ_ORDER.slice(); use.forEach(function (r) { if (hqs.indexOf(r.hq) < 0) hqs.push(r.hq); });
     function table(filter) {
       var g = {}, tot = ftaCell(); hqs.forEach(function (h) { g[h] = ftaCell(); });
       use.forEach(function (r) { if (!filter(r)) return; var a = ftaApplied(r.dutyType); ftaAdd(g[r.hq], r, a); ftaAdd(tot, r, a); });
       return hqs.filter(function (h) { return FTA_HQ_ORDER.indexOf(h) >= 0 || g[h].lines; }).map(function (h) { return Object.assign({ hq: h }, ftaFinish(g[h])); }).concat([Object.assign({ hq: '총합계', total: true }, ftaFinish(tot))]);
     }
-    var year = month ? month.slice(0, 4) : null, inCum = function (r) { return month && r.month >= year + '-01' && r.month <= month; };
-    var monthly = ms.map(function (m) { var t = table(function (r) { return r.month === m; }); return Object.assign({ month: m }, t[t.length - 1]); });
+    var year = month ? month.slice(0, 4) : null, cumFrom = rg ? rg.from : year + '-01', inCum = function (r) { return month && r.month >= cumFrom && r.month <= month; };
+    var series = rg ? monthsBetween(rg.from, rg.to) : ms;
+    var monthly = series.map(function (m) { var t = table(function (r) { return r.month === m; }); return Object.assign({ month: m, empty: !months[m] }, t[t.length - 1]); });
     // 협정별 — FTA 적용분을 Duty Type 별로
     function agree(filter) {
       var g = {}; use.forEach(function (r) { if (!filter(r) || !ftaApplied(r.dutyType)) return; var k = clean(r.dutyType).toUpperCase(), o = g[k] || (g[k] = { code: k, name: FTA_AGREEMENTS[k] || '', goods: 0, saving: 0, lines: 0 }); o.goods += r.goods || 0; o.saving += r.saving || 0; o.lines++; });
@@ -587,7 +591,7 @@
     var kpi = null;
     if (month) {
       var ct = cur[cur.length - 1], cu = cum[cum.length - 1], pmo = prevMonthOf(month), prow = monthly.filter(function (q) { return q.month === pmo; })[0] || null;
-      var cms = ms.filter(function (m) { return m >= year + '-01' && m <= month; }).length;
+      var cms = ms.filter(function (m) { return m >= cumFrom && m <= month; }).length;
       kpi = {
         saving: ct.saving, prevMonth: pmo, prevSaving: prow ? prow.saving : null, momPct: prow && prow.saving ? ct.saving / prow.saving - 1 : null,
         cumSaving: cu.saving, cumMonths: cms, avgSaving: cms ? cu.saving / cms : null,
@@ -596,11 +600,11 @@
       };
     }
     return {
-      month: month, months: ms, year: year, basis: FTA_BASIS,
+      month: month, months: ms, series: series, range: rg ? { from: rg.from, to: rg.to } : (month ? { from: cumFrom, to: month } : null), empty: rg ? !ms.some(function (m) { return m >= rg.from && m <= rg.to; }) : !month, year: year, basis: FTA_BASIS,
       current: cur, cumulative: cum, monthly: monthly, kpi: kpi,
       // (v2.2.0) 월별 본부별 절감액(쌓은 막대) · 월별 사후적용 대기 금액(지금도 대기 중인 란을 수리월에)
-      monthlyHq: ms.map(function (m) { return { month: m, rows: table(function (r) { return r.month === m; }).filter(function (q) { return !q.total; }) }; }),
-      pendingMonthly: ms.map(function (m) { var p = pending(function (r) { return r.month === m; }); return { month: m, amount: p.amount, lines: p.lines, decls: p.decls }; }),
+      monthlyHq: series.map(function (m) { return { month: m, rows: table(function (r) { return r.month === m; }).filter(function (q) { return !q.total; }) }; }),
+      pendingMonthly: series.map(function (m) { var p = pending(function (r) { return r.month === m; }); return { month: m, amount: p.amount, lines: p.lines, decls: p.decls }; }),
       agreements: { month: month ? agree(isMonth) : [], cumulative: month ? agree(inCum) : [] },
       pending: { month: month ? pending(isMonth) : null, cumulative: pc },
       reasons: { month: month ? reasons(isMonth) : [], cumulative: month ? reasons(inCum) : [] },
@@ -745,21 +749,25 @@
     ok = ok.slice().sort(function (a, b) { return a.month.localeCompare(b.month) || ho(a.hq) - ho(b.hq); });   // 본부 고정 순서(부품 · 건기 · 엔진)
     ok.forEach(function (f) { ms[f.month] = 1; });
     var months = Object.keys(ms).sort(), month = opts.month && ms[opts.month] ? opts.month : months[months.length - 1] || null;
+    // (v2.6.0) 상단 조회 기간 — 당월 = 기간의 마지막 달, 누적 · 협정 · 국가 · 파일 = 기간 전체. 옛 방식(month)은 그대로.
+    var rg = opts.range && opts.range.from && opts.range.to ? opts.range : null;
+    if (rg) month = rg.to;
     if (!month) return { month: null, months: [], files: ok };
-    var year = month.slice(0, 4), cur = [], cum = [];
-    ok.forEach(function (f) { f.rows.forEach(function (r) { var x = Object.assign({ fileHq: f.hq }, r); if (f.month === month) cur.push(x); if (f.month >= year + '-01' && f.month <= month) cum.push(x); }); });
+    var year = month.slice(0, 4), cumFrom = rg ? rg.from : year + '-01', cur = [], cum = [];
+    ok.forEach(function (f) { f.rows.forEach(function (r) { var x = Object.assign({ fileHq: f.hq }, r); if (f.month === month) cur.push(x); if (f.month >= cumFrom && f.month <= month) cum.push(x); }); });
     function sum(rows) { var a = 0, s = 0; rows.forEach(function (r) { a += r.amount; s += r.saving; }); return { lines: rows.length, amount: a, saving: s, rate: ratio(s, a) }; }
     var hqs = FTA_HQ_ORDER.slice(); ok.forEach(function (f) { if (hqs.indexOf(f.hq) < 0) hqs.push(f.hq); });
-    var monthlyHq = months.map(function (m) { return { month: m, rows: hqs.map(function (h) { var rs = []; ok.forEach(function (f) { if (f.month === m && f.hq === h) rs = rs.concat(f.rows); }); return Object.assign({ hq: h }, sum(rs)); }).filter(function (q) { return q.lines; }) }; });
+    var series = rg ? monthsBetween(rg.from, rg.to) : months;
+    var monthlyHq = series.map(function (m) { return { month: m, rows: hqs.map(function (h) { var rs = []; ok.forEach(function (f) { if (f.month === m && f.hq === h) rs = rs.concat(f.rows); }); return Object.assign({ hq: h }, sum(rs)); }).filter(function (q) { return q.lines; }) }; });
     var calc = opts.rates ? function (rows) { return exftaCalc(rows, opts.rates, month); } : null;
-    var agree = exftaGroup(cur, 'fta'), agreeCum = exftaGroup(cum, 'fta');
-    if (calc) { agree.forEach(function (a) { a.calc = calc(cur.filter(function (r) { return r.fta === a.key; })); }); }
+    var base = rg ? cum : cur, agree = exftaGroup(base, 'fta'), agreeCum = exftaGroup(cum, 'fta');
+    if (calc) { agree.forEach(function (a) { a.calc = calc(base.filter(function (r) { return r.fta === a.key; })); }); }
     return {
-      month: month, months: months, year: year, basis: EXFTA_BASIS,
+      month: month, months: months, series: series, range: { from: cumFrom, to: month }, empty: !cum.length, year: year, basis: EXFTA_BASIS,
       current: Object.assign(sum(cur), { byHq: hqs.map(function (h) { return Object.assign({ hq: h }, sum(cur.filter(function (r) { return r.fileHq === h; }))); }).filter(function (q) { return q.lines; }), calc: calc ? calc(cur) : null }),
-      cumulative: sum(cum), monthlyHq: monthlyHq, agreements: agree, agreementsCum: agreeCum,
-      countries: exftaGroup(cur, 'country').slice(0, 10),
-      files: ok.filter(function (f) { return f.month === month; }), allFiles: files || []
+      cumulative: Object.assign(sum(cum), { calc: calc ? calc(cum) : null }), monthlyHq: monthlyHq, agreements: agree, agreementsCum: agreeCum,
+      countries: exftaGroup(base, 'country').slice(0, 10),
+      files: ok.filter(function (f) { return rg ? f.month >= rg.from && f.month <= rg.to : f.month === month; }), allFiles: files || []
     };
   }
   /* ---------- [8] A단계로 가는 다리 — 분석본에서 세율을 거꾸로 모아 세율표를 키운다(localStorage b2611-07.exfta.rates) ----------

@@ -1165,6 +1165,7 @@ var v210c = passed + failed; v220(); console.log('v2.2.0 ' + (passed + failed - 
 var v220c = passed + failed; v230(); console.log('v2.3.0 ' + (passed + failed - v220c) + '개 검사');
 var v230c = passed + failed; v240(); console.log('v2.4.0 ' + (passed + failed - v230c) + '개 검사');
 var v240c = passed + failed; v250(); console.log('v2.5.0 ' + (passed + failed - v240c) + '개 검사');
+var v250c = passed + failed; v260(); console.log('v2.6.0 ' + (passed + failed - v250c) + '개 검사');
 console.log('v1.9.0 ' + (v190 - v180) + '개 검사');
 console.log('v1.8.0 ' + (v180 - v170) + '개 검사');
 console.log('v1.7.0 ' + (v170 - v160) + '개 검사');
@@ -1806,4 +1807,55 @@ function v250() {
   ok(/C\.fmtUnitNum\(v, state\.unit\); \}; \}/.test(dj) && /if \(!fmtKind \|\| fmtKind === 'money'\) title = UT\(title\);/.test(dj) && /if \(fmt === money\) title = UT\(title\);/.test(dj) && (dj.match(/title = UT\(title\);/g) || []).length === 5, 'v2.5.0 금액 축 = 고른 단위 숫자 · 금액 차트 제목에 (단위: …)');
   ok(!/n0\((?:[a-z]+\.)*(?:goods|duty|dutyExcl|amount|prev|ftaGoods|saving)\)/.test(dj) && /p\.months\.map\(m0\)/.test(dj) && /U\('물자대'\)/.test(dj) && /U\('FOB'\)/.test(dj) && /sp\(g\.diff, ms0\(g\.diff\)\)/.test(dj), 'v2.5.0 실적 · 환급 표 — 금액 칸은 고른 단위(건수는 그대로) · 머리글에 단위');
   ok(dj.indexOf('금액 단위는 올린 파일 그대로') < 0 && /금액은 원화 원본을 고른 단위\(' \+ esc\(state\.unit\) \+ '\)로 나눠 보입니다/.test(dj), 'v2.5.0 조건 줄 문구 — 고른 단위로 나눠 보임');
+}
+// ---------- v2.6.0 수입 FTA · 수출 FTA · 오류점수 탭도 상단 조회 기간(state.range)을 따름 ----------
+function v260() {
+  var CU = require('../js/customs.js'), FRr = require('../js/filerules.js'), ES = require('../js/errscore.js'), E8 = 1e8, e = function (v) { return Math.round(v / 1e4) / 1e4; };
+  // 수입 FTA — 가짜 「(가상)」 9월 · 10월
+  var HD = ['Import declaration number', 'Column sequence number', 'Duty Type', 'Plant', 'Payment method', '(\\)Taxable.Amt', 'Tariff Reductions', 'Acceptance date', 'FTA N/A Code', 'N/A Reason'];
+  function row(d, dt, plant, krw, red, date, na) { return [d, 1, dt, plant, 'TT', krw * E8, red * E8, date, na || '', '']; }
+  var aoa = [HD, row('2235626200001M', 'FCN1', '1000', 10, 1, '2026-09-05'), row('2235626200002M', 'C', '1130', 2, 0, '2026-09-10', '04'),
+    row('2235626200003M', 'FCN1', '1000', 8, 1.2, '2026-10-03'), row('2235626200004M', 'FEU1', '1130', 6, 0.6, '2026-10-04'), row('2235626200005M', 'C', '6000', 4, 0, '2026-10-06', '02')];
+  var name = '2026-09~10_수입FTA(가상).xlsx', info = FRr.describe(name, CU.detectKind(CU.uniqueHeaders(HD), name));
+  var m = CU.mergeFiles('ftaImport', [{ name: name, file: name, headers: CU.uniqueHeaders(HD), aoa: aoa, offset: 0, override: {}, meta: info }], CU.exportSettings(null));
+  var fp = {}; fp[name] = info.period.months;
+  var tot = function (rows) { var t = rows[rows.length - 1]; return [e(t.all), e(t.fta), e(t.saving)]; };
+  var r2 = CU.ftaImportReport(m.records, { range: { from: '2026-09', to: '2026-10' }, filePeriods: fp, today: '2026-11-20' });
+  eq([r2.month, r2.series, tot(r2.current), tot(r2.cumulative), e(r2.kpi.cumSaving), r2.kpi.cumMonths, r2.range, r2.empty, e(r2.pending.cumulative.amount)],
+    ['2026-10', ['2026-09', '2026-10'], [18, 14, 1.8], [30, 24, 2.8], 2.8, 2, { from: '2026-09', to: '2026-10' }, false, 2], 'v2.6.0 수입 FTA — 기간 09~10: 당월 = 마지막 달(10월) · 누적 = 두 달 합 · 대기도 기간');
+  var r1 = CU.ftaImportReport(m.records, { range: { from: '2026-10', to: '2026-10' }, filePeriods: fp });
+  eq([tot(r1.current), tot(r1.cumulative), r1.series, e(r1.pending.cumulative.amount)], [[18, 14, 1.8], [18, 14, 1.8], ['2026-10'], 0], 'v2.6.0 수입 FTA — 한 달(10~10)이면 그 달만');
+  var r3 = CU.ftaImportReport(m.records, { range: { from: '2026-08', to: '2026-10' }, filePeriods: fp });
+  eq([r3.series, r3.monthly.map(function (q) { return q.empty; }), r3.monthlyHq[0].rows.every(function (q) { return !q.lines; }), r3.kpi.cumMonths, tot(r3.cumulative)], [['2026-08', '2026-09', '2026-10'], [true, false, false], true, 2, [30, 24, 2.8]], 'v2.6.0 자료 없는 달은 계열에 빈칸(0 막대 아님 · empty 표시) · 월평균은 자료 있는 달 수로');
+  var r4 = CU.ftaImportReport(m.records, { range: { from: '2026-11', to: '2026-12' }, filePeriods: fp });
+  eq([r4.empty, r4.month, r4.months], [true, '2026-12', ['2026-09', '2026-10']], 'v2.6.0 기간에 자료가 없으면 empty(화면 「선택 기간에 자료가 없습니다」)');
+  var r0 = CU.ftaImportReport(m.records, { month: '2026-10', filePeriods: fp });
+  eq([tot(r0.cumulative), r0.series, r0.range], [[30, 24, 2.8], ['2026-09', '2026-10'], { from: '2026-01', to: '2026-10' }], 'v2.6.0 기간을 주지 않으면 예전 그대로(1월 ~ 그 달)');
+  // 수출 FTA — 9월 엔진 · 10월 건기 · 엔진
+  var H = ['대상FTA', 'Commercial Invoice 번', 'BG', '국가코드', 'HS Code', '판가', 'FTA기본관세율', '적용년도FTA관세율', 'FTA절감관세금액2(판가)'];
+  function xr(fta, bg, c, amt, base, rate) { return [fta, 'CI(가상)', bg, c, '8408900000', amt * E8, base, rate, amt * E8 * (base - rate) / 100]; }
+  var fG = CU.readExportFta([{ name: 'a', aoa: [H, xr('한-EU', 'B110', '벨기에', 10, 4.5, 0)] }], '2026-10_수출FTA_건기(가상).xlsx', '2026-10');
+  var fE = CU.readExportFta([{ name: 'a', aoa: [H, xr('한-중', 'B130', '중국', 3, 5, 1)] }], '2026-10_수출FTA_엔진(가상).xlsx', '2026-10');
+  var f9 = CU.readExportFta([{ name: 'a', aoa: [H, xr('한-EU', 'B130', '독일', 8, 2.7, 0)] }], '2026-09_수출FTA_엔진(가상).xlsx', '2026-09');
+  var x2 = CU.exportFtaReport([fG, fE, f9], { range: { from: '2026-09', to: '2026-10' } });
+  eq([x2.month, e(x2.current.saving), e(x2.cumulative.saving), x2.cumulative.lines, x2.agreements.map(function (a) { return a.key + ':' + e(a.saving); }), x2.files.length, x2.countries[0].key, x2.series],
+    ['2026-10', 0.57, 0.786, 3, ['한-EU:0.666', '한-중:0.12'], 3, '벨기에', ['2026-09', '2026-10']], 'v2.6.0 수출 FTA — 기간 09~10: 당월 = 10월 · 누적 · 협정 · 국가 · 파일 = 기간 합');
+  var x1 = CU.exportFtaReport([fG, fE, f9], { range: { from: '2026-10', to: '2026-10' } }), x0 = CU.exportFtaReport([fG, fE, f9], { month: '2026-10' });
+  eq([e(x1.cumulative.saving), x1.agreements.map(function (a) { return a.key; }), x1.files.length, CU.exportFtaReport([fG], { range: { from: '2026-11', to: '2026-11' } }).empty, e(x0.cumulative.saving), x0.agreements.length], [0.57, ['한-EU', '한-중'], 2, true, 0.786, 2], 'v2.6.0 수출 FTA — 한 달이면 그 달만 · 자료 없는 기간은 empty · 기간을 주지 않으면 예전 그대로');
+  // 오류점수 — 요약에서 기간 안 달만(종합 = 기간 합계)
+  function R(ym, kind, decl, score, err) { return { ym: ym, kind: kind, region: '종합', hq: null, decl: decl, err: err, errScored: err, score: score }; }
+  var sum = { rows: [R('2026-09', '수입', 1764, 38, 3), R('2026-09', '수출', 2227, 124, 20), R('2026-10', '수입', 1740, 0, 0), R('2026-10', '수출', 2234, 69, 14), { ym: '2026-10', kind: '수출', region: '인천', hq: null, decl: 1479, err: 3, errScored: 2, score: 40 }] };
+  var s2 = ES.rangeSummary(sum, { from: '2026-09', to: '2026-10' });
+  eq([s2.total.decl, s2.total.score, s2.total.rate, s2.last.total.decl, s2.last.total.score, s2.last.total.rate, s2.months, s2.empty], [7965, 231, 2.9, 3974, 69, 1.74, ['2026-09', '2026-10'], false], 'v2.6.0 [검증] 오류점수 2026.09~10 종합 = 신고 7,965 · 오류점수 231 · 2.90% · 당월(10월) 3,974 · 69 · 1.74%');
+  var s1 = ES.rangeSummary(sum, { from: '2026-10', to: '2026-10' }), s3 = ES.rangeSummary(sum, { from: '2026-08', to: '2026-10' }), s4 = ES.rangeSummary(sum, { from: '2026-11', to: '2026-11' });
+  eq([s1.total.decl, s1.total.score, s3.months.length, s3.withData, s3.total.decl, !!s3.byMonth['2026-08'], s4.empty, s4.last], [3974, 69, 3, ['2026-09', '2026-10'], 7965, false, true, null], 'v2.6.0 오류점수 — 한 달 · 자료 없는 달은 집계에서 빠지고 추이에만(빈칸) · 자료 없는 기간');
+  var sp = ES.rangeSummary({ rows: [R('2026-09', '수입', 1764, 38, 3), R('2026-10', '수입', 1740, 0, 0), R('2026-10', '수출', 2234, 69, 14)] }, { from: '2026-09', to: '2026-10' });
+  eq([sp.total.decl, sp.total.rate, sp.total.partial, sp.total.score], [null, null, true, 107], 'v2.6.0 한쪽 자료뿐인 달이 있으면 기간 신고건수 · 비율은 「자료 없음」(점수는 합)');
+  // 화면 — 탭 안 월 선택 없앰 · 상단 기간 · 조회 기간 표기
+  var dj = fsx.readFileSync(__dirname + '/../js/dash.js', 'utf8');
+  ok(dj.indexOf('<select id="fta-month">') < 0 && dj.indexOf('<select id="exfta-month">') < 0 && !/state\.ftaMonth|state\.exftaMonth/.test(dj), 'v2.6.0 수입 FTA · 수출 FTA 탭 안 월 선택 없앰(상단 기간을 따름)');
+  ok(/C\.ftaImportReport\(s\.m\.records, \{ range: state\.range,/.test(dj) && /C\.exportFtaReport\(state\.exfta, \{ range: state\.range,/.test(dj) && /ES\.rangeSummary\(sum, state\.range\)/.test(dj), 'v2.6.0 세 탭 렌더가 state.range 를 참조(f-from · f-to 를 바꾸면 renderTab 으로 함께 갱신)');
+  ok(/function extraPeriods\(\)/.test(dj) && /C\.unionPeriod\(\[basePeriod\]\.concat\(extraPeriods\(\)\)\)/.test(dj) && /C\.defaultRange\(basePeriod \|\| period\)/.test(dj), 'v2.6.0 기간 선택지에 수입 FTA · 수출 FTA · 오류점수 달을 더함 · 기본 기간은 실적이 있으면 실적 기준(v2.1.0 기준월 문제 방지)');
+  ok(/수리일자 기준 · 조회 기간 ' \+ esc\(rangeText\(r\.range\)\)/.test(dj) && /판가\(원화\) · 조회 기간 ' \+ esc\(rgT\)/.test(dj) && /data-k="err-basis">조회 기간 ' \+ esc\(rgT\)/.test(dj), 'v2.6.0 세 탭 상단 · 기준에 「조회 기간 …」');
+  ok(/선택 기간\(' \+ esc\(rangeText\(r\.range\)\) \+ '\)에 자료가 없습니다/.test(dj) && /data-k="exfta-empty"/.test(dj) && /data-k="err-empty"/.test(dj) && /function mailCumTitle\(rep\)/.test(dj), 'v2.6.0 기간에 자료가 없으면 「선택 기간에 자료가 없습니다」 · 메일 표 누적 제목은 기간으로');
 }

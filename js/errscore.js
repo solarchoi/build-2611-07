@@ -462,6 +462,21 @@
   // 요약의 갱신 시각(ISO · 세계 표준시) → 이 PC 시각 「YYYY-MM-DD HH:MM」
   function localTime(iso) { var d = new Date(iso); if (isNaN(d)) return String(iso || ''); var p = function (v) { return (v < 10 ? '0' : '') + v; }; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); }
   // 요약 → 월별 종합(수입 + 수출) · 수입 · 수출 — 대시보드가 읽기만 할 때 쓴다(계산은 더하기와 오류점수 ÷ 신고건수뿐)
+  // (v2.6.0) 상단 조회 기간으로 자른 요약 — 기간 안 달만 합산(종합 = 기간 합계), 당월 = 기간의 마지막 달, 자료 없는 달은 months 에만(추이 빈칸).
+  //   신고건수는 기간 안 모든 달에 있어야 합계(한 달이라도 한쪽 자료뿐이면 null — 비율 「자료 없음」).
+  function rangeSummary(sum, range) {
+    var mo = summaryMonthly(sum), all = mo.map(function (x) { return x.ym; });
+    var from = range && range.from || all[0] || null, to = range && range.to || all[all.length - 1] || null, months = [];
+    for (var m = from; from && to && m <= to && months.length < 600; m = nextYm(m)) months.push(m);
+    var rows = mo.filter(function (x) { return x.ym >= from && x.ym <= to; }), by = {};
+    rows.forEach(function (x) { by[x.ym] = x; });
+    var dk = rows.length > 0 && rows.every(function (x) { return x.total.decl != null; });
+    var decl = dk ? rows.reduce(function (a, x) { return a + x.total.decl; }, 0) : null, score = round(rows.reduce(function (a, x) { return a + x.total.score; }, 0), 2);
+    var err = rows.reduce(function (a, x) { return a + x.total.err; }, 0), errScored = rows.reduce(function (a, x) { return a + x.total.errScored; }, 0);
+    return { from: from, to: to, months: months, rows: rows, byMonth: by, empty: !rows.length, withData: rows.map(function (x) { return x.ym; }),
+      total: { decl: decl, score: score, err: err, errScored: errScored, rate: rateOf(score, decl), partial: rows.some(function (x) { return x.total.partial; }) }, last: by[to] || null };
+  }
+  function nextYm(m) { var y = +m.slice(0, 4), mm = +m.slice(5, 7) + 1; if (mm > 12) { y++; mm = 1; } return y + '-' + (mm < 10 ? '0' : '') + mm; }
   function summaryMonthly(sum) {
     var g = {};
     ((sum && sum.rows) || []).filter(function (r) { return r.region === '종합' && !r.hq; }).forEach(function (r) {
@@ -771,7 +786,7 @@
 
   var api = {
     RULE: RULE, THRESHOLD: THRESHOLD, KINDS: KINDS, CAMPUSES: CAMPUSES, FIELDS: FIELDS, LEDGER_HEAD: LEDGER_HEAD,
-    buildSummary: buildSummary, summaryMonthly: summaryMonthly, localTime: localTime, SUMMARY_KEY: SUMMARY_KEY, SUMMARY_BASIS: SUMMARY_BASIS, HQ_NOPLANT: HQ_NOPLANT, HQ_NOMATCH: HQ_NOMATCH, HQ_ORDER2: HQ_ORDER2,
+    buildSummary: buildSummary, summaryMonthly: summaryMonthly, rangeSummary: rangeSummary, localTime: localTime, SUMMARY_KEY: SUMMARY_KEY, SUMMARY_BASIS: SUMMARY_BASIS, HQ_NOPLANT: HQ_NOPLANT, HQ_NOMATCH: HQ_NOMATCH, HQ_ORDER2: HQ_ORDER2,
     noteKey: noteKey, migrateNotes: migrateNotes, ledgerRows: ledgerRows, ledgerProgress: ledgerProgress, ledgerAoa: ledgerAoa, DIV_SHORT: DIV_SHORT, LEDGER_INPUT: LEDGER_INPUT,
     parseDeclNo: parseDeclNo, statusCheck: statusCheck, campusOf: campusOf, normRule: normRule, UNREGION: UNREGION, erpSummary: erpSummary, erpStoreFrom: erpStoreFrom, erpStoreMerge: erpStoreMerge, erpStoreTrim: erpStoreTrim, erpSumFromStore: erpSumFromStore, erpStoreHas: erpStoreHas, erpStoreValid: erpStoreValid, erpSourceText: erpSourceText, booksPack: booksPack, booksUnpack: booksUnpack, utf8Len: utf8Len, ERP_KEY: ERP_KEY, ERP_LIMIT: ERP_LIMIT, BOOKS_KEY: BOOKS_KEY, NOTES_KEY: 'build-2611-07.err.notes', HQ_CODE: HQ_CODE, HQ_NOJOIN: HQ_NOJOIN, hqBreakdown: hqBreakdown, regionChecks: regionChecks, declKey: declKey, HQ_ORDER: HQ_ORDER, parseDate: parseDate, monthOfName: monthOfName, classifySheet: classifySheet,
     mapHeaders: mapHeaders, findHeaderRow: findHeaderRow, readDetail: readDetail, readStatus: readStatus, readWorkbook: readWorkbook, readHandSummary: readHandSummary, applyRule: applyRule, brokers: brokers, countsFromBooks: countsFromBooks, compare: compare,
