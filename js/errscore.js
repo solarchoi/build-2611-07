@@ -291,12 +291,117 @@
     });
     return out;
   }
+  /* ---------- (v2.3.0) ERP 결과 저장 — 원본 행 없이 계산에 필요한 결과만(localStorage b2611-07.err.erp) ----------
+     { v, savedAt, files: [{ name, kind, period, rows, src(errors|dashboard), at, months }],
+       counts: { 수입: { 'YYYY-MM': { 본부: 신고번호 수(GN 포함) } } }, countsNoGN: { 수입: { 'YYYY-MM': n } },
+       plantOf: { 수입: { 'YYYY-MM': { 신고번호: 'B'|'E'|'P'|'N'|'U' } } }, noJoin: [{ kind, month: 'YYYY-MM' }] }
+     plantOf 는 오류 신고번호를 본부로 나눌 때만 쓴다(한 글자). 월별로 두어 용량이 넘치면 오래된 달부터 지우고 counts 는 남긴다(noJoin). */
+  var ERP_KEY = 'b2611-07.err.erp', ERP_LIMIT = 1024 * 1024, BOOKS_KEY = 'b2611-07.err.books';
+  var HQ_CODE = { '건기본부': 'B', '엔진본부': 'E', '부품센터': 'P' }; HQ_CODE[HQ_NOPLANT] = 'N'; HQ_CODE[HQ_BADPLANT] = 'U';
+  var CODE_HQ = {}; Object.keys(HQ_CODE).forEach(function (h) { CODE_HQ[HQ_CODE[h]] = h; });
+  var HQ_NOJOIN = '본부 조인 정보 없음';
+  function utf8Len(s) { var n = 0; for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i); n += c < 0x80 ? 1 : c < 0x800 ? 2 : (c >= 0xd800 && c <= 0xdbff) ? (i++, 4) : 3; } return n; }
+  function erpStoreEmpty() { return { v: 1, savedAt: null, files: [], counts: { 수입: {}, 수출: {} }, countsNoGN: { 수입: {}, 수출: {} }, plantOf: { 수입: {}, 수출: {} }, noJoin: [] }; }
+  function erpStoreValid(s) { return s && s.v === 1 && s.counts && s.plantOf && s.countsNoGN ? s : null; }
+  // erp = { 수입: [레코드], 수출: [레코드] }(GN 포함) · meta = { files: [{ name, kind, period, rows }], src, at }
+  function erpStoreFrom(erp, meta) {
+    meta = meta || {}; var out = erpStoreEmpty(), at = meta.at || new Date().toISOString(), months = { 수입: {}, 수출: {} };
+    KINDS.forEach(function (k) {
+      var seen = {}, gnDecl = {}, list = (erp || {})[k] || [];
+      list.forEach(function (r) { if (String(r.payment || '').toUpperCase() === 'GN') gnDecl[declKey(r.declNo)] = 1; });
+      list.forEach(function (r) {
+        var key = declKey(r.declNo); if (!key) return;
+        var ym = String(r.month || '').slice(0, 7), hq = erpHq(r);
+        var po = out.plantOf[k][ym] || (out.plantOf[k][ym] = {}); if (!po[key]) po[key] = HQ_CODE[hq] || 'U';
+        if (!ym) return;
+        months[k][ym] = 1;
+        if (seen[ym + '|' + key]) return; seen[ym + '|' + key] = 1;
+        var c = out.counts[k][ym] || (out.counts[k][ym] = {}); c[hq] = (c[hq] || 0) + 1;
+        if (!gnDecl[key]) out.countsNoGN[k][ym] = (out.countsNoGN[k][ym] || 0) + 1;
+      });
+    });
+    out.savedAt = at;
+    out.files = (meta.files || []).map(function (f) { return { name: f.name, kind: f.kind, period: f.period || null, rows: f.rows || 0, src: meta.src || 'errors', at: at, months: Object.keys(months[f.kind] || {}).sort() }; });
+    return out;
+  }
+  // 같은 종류 · 같은 달만 바꾼다(다른 달은 그대로). 이전 파일 목록에서는 바뀐 달을 빼고, 달이 남지 않은 파일은 지운다.
+  function erpStoreMerge(old, part) {
+    var b = erpStoreValid(old) ? JSON.parse(JSON.stringify(old)) : erpStoreEmpty();
+    KINDS.forEach(function (k) {
+      var ms = Object.keys(part.counts[k]).concat(Object.keys(part.plantOf[k])).filter(function (m, i, a) { return m && a.indexOf(m) === i; });
+      ms.forEach(function (m) {
+        if (part.counts[k][m]) b.counts[k][m] = part.counts[k][m]; else delete b.counts[k][m];
+        if (part.countsNoGN[k][m] != null) b.countsNoGN[k][m] = part.countsNoGN[k][m]; else delete b.countsNoGN[k][m];
+        if (part.plantOf[k][m]) b.plantOf[k][m] = part.plantOf[k][m];
+        b.noJoin = b.noJoin.filter(function (x) { return !(x.kind === k && x.month === m); });
+      });
+      if (part.plantOf[k]['']) b.plantOf[k][''] = Object.assign(b.plantOf[k][''] || {}, part.plantOf[k]['']);
+      b.files = b.files.map(function (f) { return f.kind !== k ? f : Object.assign({}, f, { months: (f.months || []).filter(function (m) { return ms.indexOf(m) < 0; }) }); }).filter(function (f) { return f.months && f.months.length; });
+    });
+    b.files = b.files.concat(part.files); b.savedAt = part.savedAt || b.savedAt;
+    return b;
+  }
+  // 1MB 를 넘으면 오래된 달부터 plantOf 를 지운다(counts 는 남김) → noJoin 에 적어 화면이 「본부 조인 정보 없음 — ERP 재업로드 필요」
+  function erpStoreTrim(store, limit) {
+    limit = limit || ERP_LIMIT; var dropped = [];
+    while (utf8Len(JSON.stringify(store)) > limit) {
+      var all = []; KINDS.forEach(function (k) { Object.keys(store.plantOf[k]).forEach(function (m) { all.push(m); }); });
+      if (!all.length) break;
+      var m0 = all.sort()[0];
+      KINDS.forEach(function (k) { if (store.plantOf[k][m0]) { delete store.plantOf[k][m0]; if (m0) { store.noJoin.push({ kind: k, month: m0 }); dropped.push({ kind: k, month: m0 }); } } });
+    }
+    return { store: store, dropped: dropped, bytes: utf8Len(JSON.stringify(store)) };
+  }
+  // 저장값 → erpSummary 와 같은 모양(그해 달만 · 월은 숫자). index 는 plantOf 전체(달과 무관하게 신고번호로 조인).
+  function erpSumFromStore(store, year) {
+    var s = erpStoreValid(store); if (!s) return null;
+    var out = { counts: { 수입: {}, 수출: {} }, countsNoGN: { 수입: {}, 수출: {} }, byHq: { 수입: {}, 수출: {} }, index: {}, rows: { 수입: 0, 수출: 0 }, noJoin: [], months: { 수입: [], 수출: [] } };
+    var inYear = function (m) { return m && (!year || m.slice(0, 4) === String(year)); };
+    KINDS.forEach(function (k) {
+      Object.keys(s.counts[k]).sort().forEach(function (m) {
+        if (!inYear(m)) return; var mn = +m.slice(5, 7), c = s.counts[k][m];
+        out.byHq[k][mn] = Object.assign({}, c); out.counts[k][mn] = Object.keys(c).reduce(function (a, h) { return a + c[h]; }, 0); out.months[k].push(m);
+        if (s.countsNoGN[k][m] != null) out.countsNoGN[k][mn] = s.countsNoGN[k][m];
+      });
+      Object.keys(s.plantOf[k]).forEach(function (m) { var po = s.plantOf[k][m]; Object.keys(po).forEach(function (d) { out.rows[k]++; if (!out.index[d]) out.index[d] = { kind: k, hq: CODE_HQ[po[d]] || HQ_BADPLANT, plant: '', month: m }; }); });
+    });
+    s.noJoin.forEach(function (x) { if (inYear(x.month)) out.noJoin.push({ kind: x.kind, month: +x.month.slice(5, 7), ym: x.month }); });
+    return out;
+  }
+  function erpStoreHas(store) { var s = erpStoreValid(store); return !!s && KINDS.some(function (k) { return Object.keys(s.counts[k]).length > 0; }); }
+  // 출처 한 줄 — 「인천 신고건수 · 본부: ERP 실적 2026-09, 2026-10 (대시보드에서 올림 · 11/20 15:20)」
+  function erpSourceText(store) {
+    var s = erpStoreValid(store); if (!erpStoreHas(s)) return '';
+    var ms = []; KINDS.forEach(function (k) { Object.keys(s.counts[k]).forEach(function (m) { if (ms.indexOf(m) < 0) ms.push(m); }); }); ms.sort();
+    var srcs = s.files.slice().sort(function (a, b) { return String(b.at).localeCompare(String(a.at)); }), last = srcs[0];
+    var where = srcs.map(function (f) { return f.src === 'dashboard' ? '대시보드에서 올림' : '오류점수 화면에서 올림'; }).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(' · ');
+    var t = last && last.at ? new Date(last.at) : null, p = function (v) { return (v < 10 ? '0' : '') + v; };
+    return '인천 신고건수 · 본부: ERP 실적 ' + ms.join(', ') + ' (' + where + (t && !isNaN(t) ? ' · ' + (t.getMonth() + 1) + '/' + t.getDate() + ' ' + p(t.getHours()) + ':' + p(t.getMinutes()) : '') + ')';
+  }
+  /* ---------- (v2.3.0) 유니패스 읽은 결과 저장 — 새로고침해도 화면 전체가 되살아나게(localStorage b2611-07.err.books) ----------
+     줄(rows)은 열 이름 한 번 + 값 배열로 줄여 저장. 원본 엑셀은 저장하지 않는다. */
+  function booksPack(books) {
+    return { v: 1, savedAt: new Date().toISOString(), books: (books || []).map(function (b) {
+      var o = {}; Object.keys(b).forEach(function (k) { if (k !== 'rows') o[k] = b[k]; });
+      var cols = []; (b.rows || []).forEach(function (r) { Object.keys(r).forEach(function (c) { if (cols.indexOf(c) < 0) cols.push(c); }); });
+      o.rowCols = cols; o.rowData = (b.rows || []).map(function (r) { return cols.map(function (c) { return r[c] === undefined ? null : r[c]; }); });
+      return o;
+    }) };
+  }
+  function booksUnpack(j) {
+    if (!j || j.v !== 1 || !Array.isArray(j.books)) return [];
+    return j.books.map(function (o) {
+      var b = {}; Object.keys(o).forEach(function (k) { if (k !== 'rowCols' && k !== 'rowData') b[k] = o[k]; });
+      b.rows = (o.rowData || []).map(function (a) { var r = {}; o.rowCols.forEach(function (c, i) { if (a[i] !== null) r[c] = a[i]; }); return r; });
+      return b;
+    });
+  }
   // 본부 세부(v2.0.0 — 지역별 줄): 인천 건은 ERP 와 신고번호로 조인해 본부(월과 무관 — 오류 달과 수리 달이 다를 수 있음).
   //   분모 = ERP 본부별 신고번호 수(GN 포함). ERP 에 있으나 Plant 가 빈 건 = 「Plant 없음」(분모에만), 오류 건인데 ERP 에서 못 찾은 건 = 「ERP 미매칭」(분자에만 — 비율 없음 · 목록).
   //   울산 건은 세부 자료가 없어 건기본부 한 줄(분모 = 울산 신고건수). 지역 미분류 건은 따로.
   //   → kinds[수입|수출][월] = [{ region, hq, decl, err, scored, score, rate }]
   function hqBreakdown(summary, books, erpSum) {
-    var idx = erpSum ? erpSum.index : {}, out = { kinds: {}, notFound: [], uncovered: [], hqs: HQ_ORDER2.slice(), ulsanNote: '울산은 세부 자료가 없어 전량 건기본부로 집계' };
+    var idx = erpSum ? erpSum.index : {}, out = { kinds: {}, notFound: [], uncovered: [], noJoin: [], hqs: HQ_ORDER2.slice(), ulsanNote: '울산은 세부 자료가 없어 전량 건기본부로 집계' };
     var all = []; (books || []).forEach(function (b) { if (b.kind) all = all.concat(b.rows.filter(function (r) { return r.month; })); });
     KINDS.forEach(function (k) {
       out.kinds[k] = {};
@@ -307,14 +412,17 @@
           if (r.campus === '울산') { ul.push(r); return; }
           if (r.campus !== '인천') { un.push(r); return; }
           var e = idx[declKey(r.declNo)], hq = e ? e.hq : HQ_NOMATCH;
-          if (!e && covered && !out.notFound.some(function (x) { return x.declNo === r.declNo && x.month === m; })) out.notFound.push({ kind: k, month: m, declNo: r.declNo });
+          // (v2.3.0) 저장 용량 때문에 이 달 조인표를 지웠으면 「ERP 미매칭」이 아니라 「본부 조인 정보 없음」(ERP 재업로드 필요)
+          var noJ = !e && erpSum && erpSum.noJoin && erpSum.noJoin.some(function (x) { return x.kind === k && x.month === m; });
+          if (noJ) { hq = HQ_NOJOIN; if (!out.noJoin.some(function (x) { return x.kind === k && x.month === m; })) out.noJoin.push({ kind: k, month: m }); }
+          if (!e && !noJ && covered && !out.notFound.some(function (x) { return x.declNo === r.declNo && x.month === m; })) out.notFound.push({ kind: k, month: m, declNo: r.declNo });
           if (!e && !covered && !out.uncovered.some(function (x) { return x.kind === k && x.month === m; })) out.uncovered.push({ kind: k, month: m });
           if (out.hqs.indexOf(hq) < 0) out.hqs.splice(out.hqs.length - 1, 0, hq);
           (g[hq] = g[hq] || []).push(r);
         });
         var mm = summary.kinds[k].months[m], list = [];
         out.hqs.forEach(function (h) {
-          var dec = h === HQ_NOMATCH ? null : byHq ? byHq[h] || 0 : null;
+          var dec = h === HQ_NOMATCH || h === HQ_NOJOIN ? null : byHq ? byHq[h] || 0 : null;
           if (!g[h] && !dec) return;
           list.push(Object.assign({ region: '인천', hq: h }, cell(g[h] || [], dec)));
         });
@@ -665,7 +773,7 @@
     RULE: RULE, THRESHOLD: THRESHOLD, KINDS: KINDS, CAMPUSES: CAMPUSES, FIELDS: FIELDS, LEDGER_HEAD: LEDGER_HEAD,
     buildSummary: buildSummary, summaryMonthly: summaryMonthly, localTime: localTime, SUMMARY_KEY: SUMMARY_KEY, SUMMARY_BASIS: SUMMARY_BASIS, HQ_NOPLANT: HQ_NOPLANT, HQ_NOMATCH: HQ_NOMATCH, HQ_ORDER2: HQ_ORDER2,
     noteKey: noteKey, migrateNotes: migrateNotes, ledgerRows: ledgerRows, ledgerProgress: ledgerProgress, ledgerAoa: ledgerAoa, DIV_SHORT: DIV_SHORT, LEDGER_INPUT: LEDGER_INPUT,
-    parseDeclNo: parseDeclNo, statusCheck: statusCheck, campusOf: campusOf, normRule: normRule, UNREGION: UNREGION, erpSummary: erpSummary, hqBreakdown: hqBreakdown, regionChecks: regionChecks, declKey: declKey, HQ_ORDER: HQ_ORDER, parseDate: parseDate, monthOfName: monthOfName, classifySheet: classifySheet,
+    parseDeclNo: parseDeclNo, statusCheck: statusCheck, campusOf: campusOf, normRule: normRule, UNREGION: UNREGION, erpSummary: erpSummary, erpStoreFrom: erpStoreFrom, erpStoreMerge: erpStoreMerge, erpStoreTrim: erpStoreTrim, erpSumFromStore: erpSumFromStore, erpStoreHas: erpStoreHas, erpStoreValid: erpStoreValid, erpSourceText: erpSourceText, booksPack: booksPack, booksUnpack: booksUnpack, utf8Len: utf8Len, ERP_KEY: ERP_KEY, ERP_LIMIT: ERP_LIMIT, BOOKS_KEY: BOOKS_KEY, NOTES_KEY: 'build-2611-07.err.notes', HQ_CODE: HQ_CODE, HQ_NOJOIN: HQ_NOJOIN, hqBreakdown: hqBreakdown, regionChecks: regionChecks, declKey: declKey, HQ_ORDER: HQ_ORDER, parseDate: parseDate, monthOfName: monthOfName, classifySheet: classifySheet,
     mapHeaders: mapHeaders, findHeaderRow: findHeaderRow, readDetail: readDetail, readStatus: readStatus, readWorkbook: readWorkbook, readHandSummary: readHandSummary, applyRule: applyRule, brokers: brokers, countsFromBooks: countsFromBooks, compare: compare,
     summarize: summarize, quarters: quarters, topItems: topItems, byDecl: byDecl, ledger: ledger, mailDraft: mailDraft,
     summaryAoa: summaryAoa, exportBook: exportBook, sampleBooks: sampleBooks, round: round, toNum: toNum

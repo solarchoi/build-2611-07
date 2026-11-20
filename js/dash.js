@@ -102,8 +102,24 @@
     var t = sets[k] || (sets[k] = { files: [] }); t.files.push(item);
     return true;
   }
+  // (v2.3.0) 확정본 ERP 수입 · 수출 실적 → 오류점수 화면이 쓰는 결과(인천 신고건수 · 본부 조인표). 실적 탭의 GN 제외 설정과 무관하게 GN 포함으로 센다.
+  //   원본 행은 넣지 않는다. 같은 종류 · 같은 달만 바꾼다(규칙은 errscore.js). 조회 모드 · 예제는 넣지 않는다.
+  function recordErp(items) {
+    if (!items.length || !window.ErrScore) return '';
+    var E = window.ErrScore, opts = Object.assign({}, state.settings, { excludeGN: false }), recs = { 수입: [], 수출: [] }, files = [];
+    items.forEach(function (x) {
+      var m = C.mergeFiles(x.kind, [x.item], opts); if (!m.ok) return;
+      var k = x.kind === 'import' ? '수입' : '수출'; recs[k] = recs[k].concat(m.records);
+      files.push({ name: x.item.file, kind: k, period: m.period ? m.period.from + '~' + m.period.to : null, rows: m.records.length });
+    });
+    if (!files.length) return '';
+    var old = null; try { old = JSON.parse(localStorage.getItem(E.ERP_KEY) || 'null'); } catch (e) { old = null; }
+    var t = E.erpStoreTrim(E.erpStoreMerge(old, E.erpStoreFrom(recs, { files: files, src: 'dashboard' })));
+    try { localStorage.setItem(E.ERP_KEY, JSON.stringify(t.store)); } catch (e2) { return '<span data-k="erp-rec-fail">오류점수 화면용 ERP 결과를 저장하지 못했습니다(용량).</span>'; }
+    return '<span data-k="erp-rec">오류점수 화면에도 인천 신고건수 · 본부로 기록했습니다(GN 포함 · ' + esc(files.map(function (x) { return x.name; }).join(', ')) + ') — 오류점수 화면에서 ERP 를 또 올리지 않아도 됩니다.</span>';
+  }
   function addFiles(list) {
-    var notes = [], warn = false, names = {}, views = [], confirmedN = 0;
+    var notes = [], warn = false, names = {}, views = [], confirmedN = 0, erpItems = [];
     list.forEach(function (f) {
       var sheets = sheetsOf(f.wb);
       if (!sheets.length) { notes.push(esc(f.name) + ' — 읽을 표가 없습니다.'); warn = true; return; }
@@ -129,6 +145,7 @@
       if (info.mode === 'view') { views.push({ kind: kind, item: item }); return; }
       if (!placeConfirmed(kind, item, state.base())) { notes.push(esc(item.file) + ' — 올리지 않았습니다(이전 파일 그대로).'); warn = true; return; }
       confirmedN++;
+      if ((kind === 'import' || kind === 'export') && !state.loadingSample) erpItems.push({ kind: kind, item: item });
       notes.push(esc(item.file) + (item.replaced ? ' — 이전 파일(' + esc(item.replaced.map(function (r) { return r.file + ' · ' + r.uploadedAt + ' · ' + C.fmtNum(r.rows) + '행'; }).join(', ')) + ')을 교체했습니다' : ' 파일을 더했습니다') + ' — ' + esc(label(kind)) + ' · ' + esc(info.modeWhy));
       names[kind] = names[kind] || {}; names[kind][item.file] = 1;
     });
@@ -140,6 +157,7 @@
       notes.push('<b>조회 모드</b> — ' + esc(views.map(function (v) { return v.item.file; }).join(', ')) + ' 은(는) 저장하지 않고 화면에만 보입니다. 저장된 확정 데이터는 그대로입니다.');
     }
     var note = rebuild(true);
+    var en = recordErp(erpItems); if (en) notes.push(en);
     Object.keys(names).forEach(function (k) { overlapNotes(k, names[k]).forEach(function (t) { notes.push(t); warn = true; }); });
     msg(notes.join('<br>') + note, warn || state.pending.length || note ? 'warn' : 'ok');
   }
@@ -152,15 +170,15 @@
   // (v1.10.0) 「이 결과를 저장」 — 누를 때만 조회 데이터를 확정 데이터에 넣는다(겹치면 교체할지 묻는다)
   function keepView() {
     if (!state.view) return;
-    var views = state.sets, base = state.saved || {}, done = [], skip = [];
+    var views = state.sets, base = state.saved || {}, done = [], skip = [], keptErp = [];
     Object.keys(views).forEach(function (k) {
       views[k].files.forEach(function (f) {
         f.meta = f.meta || {}; f.meta.mode = 'confirmed'; f.meta.modeWhy = '조회 결과를 저장함(' + now() + ')'; f.meta.savedFromView = true;
-        if (placeConfirmed(k, f, base)) done.push(f.file); else skip.push(f.file);
+        if (placeConfirmed(k, f, base)) { done.push(f.file); if (k === 'import' || k === 'export') keptErp.push({ kind: k, item: f }); } else skip.push(f.file);
       });
     });
     state.sets = base; state.saved = null; state.view = false;
-    var note = rebuild(true);
+    var note = rebuild(true), en = recordErp(keptErp); if (en) note += '<br>' + en;
     msg((done.length ? esc(done.join(', ')) + ' — 조회 결과를 저장했습니다.' : '') + (skip.length ? ' ' + esc(skip.join(', ')) + ' — 저장하지 않았습니다(이전 파일 그대로).' : '') + note, skip.length || note ? 'warn' : 'ok');
   }
   function readFiles(files) {
@@ -177,11 +195,12 @@
     });
   }
   function loadSample() {
-    state.sets = {}; state.pending = []; state.open = {}; state.view = false; state.saved = null; state.held = [];
+    state.sets = {}; state.pending = []; state.open = {}; state.view = false; state.saved = null; state.held = []; state.loadingSample = true;
     addFiles(C.sampleFiles().map(function (f) {
       var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(f.aoa), '데이터');
       return { name: f.name, wb: wb };
     }));
+    state.loadingSample = false;
     msg('예제 엑셀 5종(가짜 데이터)을 올렸습니다. 예제 데이터는 실제 사내 데이터가 아닙니다.', 'ok');
   }
 
@@ -348,7 +367,8 @@
         '<p class="sub" data-k="erp-note" style="margin-top:4px">자료 기준일 = 파일을 올린 날입니다. <b>ERP 는 월 마감 뒤에도 신고가 더해지므로 같은 달 파일을 다시 올리면 숫자가 바뀔 수 있습니다.</b></p>';
     }
     $('d-sets').innerHTML = h;
-    $('d-view').hidden = !state.range && !errSummary() && !ready('ftaImport');
+    // (v2.3.0) 탭은 늘 보인다 — 자료가 없는 탭은 「자료가 없습니다 … 올려 주세요」 안내(빈 화면 · 숨김 대신)
+    $('d-view').hidden = false;
     $('d-filter').hidden = !state.range;
   }
   function mapTable(k, i) {
@@ -410,7 +430,8 @@
   function monthChart(title, months, series, type, fmtKind) {
     var W = 640, H = 250, L = 62, R = 12, T = 30, B = 30, iw = W - L - R, ih = H - T - B;
     var max = niceMax(Math.max.apply(null, [0].concat.apply([], series.map(function (s) { return s.values.filter(function (v) { return v != null; }); }))));
-    var fmt = axisFmt(fmtKind), step = iw / Math.max(1, months.length), y = function (v) { return T + ih - (v / max) * ih; };
+    // (v2.3.0) 비율 축 눈금 간격(max ÷ 4)이 1% 미만이면 소수 첫째 자리 — 정수로 반올림하면 「2% · 2% · 1%」처럼 같은 값이 겹친다
+    var fmt = fmtKind === 'pct' && max / 4 < 0.01 ? function (v) { return C.fmtPct(v, 1); } : axisFmt(fmtKind), step = iw / Math.max(1, months.length), y = function (v) { return T + ih - (v / max) * ih; };
     var b = legend(series, L);
     for (var g = 0; g <= 4; g++) { var gv = max * g / 4; b += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(gv) + '" y2="' + y(gv) + '" class="grid"/><text x="' + (L - 6) + '" y="' + (y(gv) + 4) + '" class="ax" text-anchor="end">' + esc(fmt(gv)) + '</text>'; }
     var every = Math.ceil(months.length / 12);
@@ -423,7 +444,8 @@
         var seg = [], segs = [];
         s.values.forEach(function (v, i) { if (v == null) { if (seg.length) segs.push(seg); seg = []; } else seg.push([L + step * i + step / 2, y(v), v, i]); });
         if (seg.length) segs.push(seg);
-        segs.forEach(function (sg) { b += '<polyline fill="none" stroke="' + s.color + '" stroke-width="2.4"' + (s.dash ? ' stroke-dasharray="6 4"' : '') + ' points="' + sg.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' ') + '"/>'; });
+        var one = s.values.filter(function (v) { return v != null; }).length === 1;   // (v2.3.0) 점이 하나뿐 — 선 대신 점과 값 라벨
+        segs.forEach(function (sg) { if (one) { b += '<text x="' + sg[0][0].toFixed(1) + '" y="' + (sg[0][1] - 9).toFixed(1) + '" class="ax val" text-anchor="middle" data-k="one-label">' + esc(s.fmt(sg[0][2])) + '</text>'; return; } b += '<polyline fill="none" stroke="' + s.color + '" stroke-width="2.4"' + (s.dash ? ' stroke-dasharray="6 4"' : '') + ' points="' + sg.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' ') + '"/>'; });
         segs.forEach(function (sg) { sg.forEach(function (p) { b += '<circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="3" fill="' + s.color + '"><title>' + esc(C.monthLabel(months[p[3]]) + ' ' + s.name + ' ' + s.fmt(p[2])) + '</title></circle>'; }); });
       });
     }
@@ -762,7 +784,7 @@
   function renderFtaImport() {
     var el = $('fta-imp'); if (!el) return;
     var x = ftaReport();
-    if (!x || !x.rep.month) { el.innerHTML = '<div class="note" data-k="fta-none"><b>ERP 수입FTA 파일을 올리면 「FTA 수입 실적 보고」 메일의 표를 만듭니다.</b> 예: 2026-01~10_수입FTA.xlsx(확정본 · 저장) · EXPORT-수입FTA.XLSX(조회 모드 · 저장 안 함). 수입실적 합계에는 더하지 않습니다(같은 신고를 란 단위로 받은 자료).</div>'; return; }
+    if (!x || !x.rep.month) { el.innerHTML = '<div class="note" data-k="fta-none"><b>수입 FTA 자료가 없습니다. ERP 수입FTA 엑셀을 올려 주세요.</b> 올리면 「FTA 수입 실적 보고」 메일의 표를 만듭니다. 예: 2026-01~10_수입FTA.xlsx(확정본 · 저장) · EXPORT-수입FTA.XLSX(조회 모드 · 저장 안 함). 수입실적 합계에는 더하지 않습니다(같은 신고를 란 단위로 받은 자료).</div>'; return; }
     var r = x.rep, k = r.kpi, mo = +r.month.slice(5, 7), cmp = C.ftaCompare(r, ftaSnaps()), pc = r.pending.cumulative, ex = r.excluded;
     state.ftaMonth = r.month; state.ftaLast = r;
     var confirmed = !!cmp;
@@ -875,7 +897,7 @@
   function renderErrors() {
     var sum = errSummary(), ES = window.ErrScore;
     if (!sum || !ES) {
-      $('kpi-errors').innerHTML = '<div class="note" data-k="err-none" style="grid-column:1/-1"><b>오류점수 화면에서 유니패스 파일을 먼저 올려 주세요.</b> 오류점수는 관세청 유니패스 현황목록 · 상세목록만 받고, 계산은 오류점수 화면에서 합니다. 대시보드는 그 결과를 읽어 보여 줍니다.<div class="btnrow" style="margin-top:8px"><a class="btn primary" href="errors.html">오류점수 화면으로</a></div></div>';
+      $('kpi-errors').innerHTML = '<div class="note" data-k="err-none" style="grid-column:1/-1"><b>오류점수 요약이 없습니다. 오류점수 화면에서 유니패스 파일을 올려 주세요.</b> 오류점수는 관세청 유니패스 현황목록 · 상세목록만 받고, 계산은 오류점수 화면에서 합니다. 대시보드는 그 결과를 읽어 보여 줍니다.<div class="btnrow" style="margin-top:8px"><a class="btn primary" href="errors.html">오류점수 화면으로</a></div></div>';
       $('ch-errors').innerHTML = ''; $('tb-errors').innerHTML = ''; return;
     }
     var mo = ES.summaryMonthly(sum), last = mo[mo.length - 1], months = mo.map(function (x) { return x.ym; });
@@ -979,11 +1001,19 @@
     $('kpi-ruling').innerHTML = k; $('ch-ruling').innerHTML = ch; $('tb-ruling').innerHTML = tb;
   }
   var RENDER = { trade: renderTrade, export: renderExport, fta: renderFta, refund: renderRefund, errors: renderErrors, ruling: renderRuling };
+  // (v2.3.0) 탭별 「자료 없음」 안내 — 오류점수 · 수입 FTA 는 각 render 함수가 안내한다
+  var NODATA = {
+    trade: { kind: 'import', box: 'kpi-trade', text: '수입 실적 자료가 없습니다. 위에서 ERP 수입실적 엑셀을 올려 주세요.', clear: ['sum-trade', 'ch-trade', 'tb-trade-report', 'ch-trade-by', 'tb-trade'] },
+    export: { kind: 'export', box: 'kpi-export', text: '수출 실적 자료가 없습니다. 위에서 ERP 수출실적 엑셀을 올려 주세요.', clear: ['sum-export', 'ch-export', 'tb-export-report', 'ch-export-by', 'tb-export'] },
+    refund: { kind: 'refund', box: 'kpi-refund', text: '관세환급 자료가 없습니다. 위에서 환급프로그램의 관세환급 신청 현황 엑셀을 올려 주세요.', clear: ['ch-refund', 'tb-refund'] },
+    ruling: { kind: 'ruling', box: 'kpi-ruling', text: '품목분류 결정문 자료가 없습니다. 위에서 결정문 현황 엑셀을 올려 주세요.', clear: ['ch-ruling', 'tb-ruling'] }
+  };
   function renderTab() {
-    // (v2.0.0) 실적 자료 없이 오류점수 요약만 있을 때 · (v2.1.0) 수입 FTA 파일만 있을 때 — 그 탭만 그린다
-    if (!state.range) { var fOk = !!ready('ftaImport'), eOk = !!errSummary(); if (!fOk && !eOk) return; if (!((state.tab === 'fta' && fOk) || (state.tab === 'errors' && eOk))) state.tab = fOk ? 'fta' : 'errors'; }
+    // (v2.3.0) 누른 탭으로 늘 간다(자료가 없다고 다른 탭으로 되돌리지 않음) — 그 탭 자료가 없으면 아래에서 안내만
     document.querySelectorAll('.tab').forEach(function (b) { var on = b.dataset.tab === state.tab; b.setAttribute('aria-selected', on ? 'true' : 'false'); b.classList.toggle('on', on); });
     Object.keys(RENDER).forEach(function (t) { $('t-' + t).hidden = t !== state.tab; });
+    var nd = NODATA[state.tab];
+    if (nd && !ready(nd.kind)) { $(nd.box).innerHTML = '<div class="note" data-k="nodata-' + state.tab + '" style="grid-column:1/-1"><b>' + esc(nd.text) + '</b></div>'; nd.clear.forEach(function (id) { $(id).innerHTML = ''; }); return; }
     RENDER[state.tab]();
   }
 
@@ -1009,7 +1039,35 @@
   drop.addEventListener('drop', function (e) { readFiles(e.dataTransfer.files); });
   $('d-file').addEventListener('change', function () { readFiles(this.files); this.value = ''; });
   $('btn-dash-sample').addEventListener('click', loadSample);
-  $('btn-dash-clear').addEventListener('click', function () { localStorage.removeItem(LS.data); localStorage.removeItem(LS.kinds); localStorage.removeItem(LS.files); state.sets = {}; state.pending = []; state.open = {}; state.range = null; state.rrange = null; state.view = false; state.saved = null; state.held = []; state.lostFiles = []; renderSets(); msg('이 브라우저에 기억한 데이터를 지웠습니다.', 'ok'); });
+  // (v2.3.0) 지우기 — 지울 항목을 체크로 보인다. 사람이 손으로 입력한 관리대장 · 수입 FTA 확정값은 기본 해제.
+  var CLEAR_ITEMS = [
+    { id: 'data', label: '실적 데이터 (수입 · 수출 · 관세환급 · 품목분류 · 수입 FTA)', on: true, keys: function () { return [LS.data, LS.kinds, LS.files]; } },
+    { id: 'errsum', label: '오류점수 요약 (유니패스 · ERP 인천 건수 결과 포함)', on: true, keys: function () { var E = window.ErrScore || {}; return [E.SUMMARY_KEY || 'b2611-07.err.summary', E.ERP_KEY || 'b2611-07.err.erp', E.BOOKS_KEY || 'b2611-07.err.books']; } },
+    { id: 'notes', label: '오류점수 관리대장 입력값 — 사람이 손으로 입력한 내용', on: false, keys: function () { return [(window.ErrScore && window.ErrScore.NOTES_KEY) || 'build-2611-07.err.notes']; } },
+    { id: 'snaps', label: '수입 FTA 확정 스냅샷', on: false, keys: function () { return [FTA_SNAP_KEY]; } }
+  ];
+  function clearDialog() {
+    var dlg = $('d-clear-dlg');
+    if (!dlg) {
+      dlg = document.createElement('dialog'); dlg.id = 'd-clear-dlg'; dlg.className = 'clear-dlg'; dlg.setAttribute('aria-labelledby', 'd-clear-h');
+      dlg.innerHTML = '<form method="dialog"><h3 id="d-clear-h" style="margin-top:0">이 브라우저에서 지울 항목</h3>' + CLEAR_ITEMS.map(function (c) { return '<label class="chk"><input type="checkbox" data-clear="' + c.id + '"> ' + esc(c.label) + '</label>'; }).join('') +
+        '<p class="sub">지운 것은 되돌릴 수 없습니다. 관리대장 입력값은 먼저 오류점수 화면의 「대장 엑셀 내보내기」로 받아 두세요.</p><div class="btnrow"><button class="btn primary" value="ok" data-clear-ok>지우기</button> <button class="btn" value="cancel">취소</button></div></form>';
+      document.body.appendChild(dlg);
+      dlg.addEventListener('close', function () { if (dlg.returnValue === 'ok') doClear(CLEAR_ITEMS.filter(function (c) { return dlg.querySelector('[data-clear="' + c.id + '"]').checked; })); });
+    }
+    CLEAR_ITEMS.forEach(function (c) { dlg.querySelector('[data-clear="' + c.id + '"]').checked = c.on; });
+    dlg.returnValue = ''; if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', '');
+  }
+  function doClear(sel) {
+    if (!sel.length) { msg('고른 항목이 없어 아무것도 지우지 않았습니다.', 'ok'); return; }
+    sel.forEach(function (c) { c.keys().forEach(function (k) { try { localStorage.removeItem(k); } catch (e) { /* 지우지 못해도 화면은 계속 */ } }); });
+    var ids = sel.map(function (c) { return c.id; });
+    if (ids.indexOf('data') >= 0) { state.sets = {}; state.pending = []; state.open = {}; state.range = null; state.rrange = null; state.view = false; state.saved = null; state.held = []; state.lostFiles = []; }
+    var NAME = { data: '실적 데이터', errsum: '오류점수 요약', notes: '관리대장 입력값', snaps: '수입 FTA 확정 스냅샷' };
+    var kept = CLEAR_ITEMS.filter(function (c) { return ids.indexOf(c.id) < 0; }).map(function (c) { return NAME[c.id]; });
+    rebuild(); msg('<span data-k="clear-done">' + esc(ids.map(function (i) { return NAME[i]; }).join(' · ')) + '을(를) 지웠습니다.' + (kept.length ? ' ' + esc(kept.join(' · ')) + '은(는) 남겨 두었습니다.' : '') + '</span>', 'ok');
+  }
+  $('btn-dash-clear').addEventListener('click', clearDialog);
   // (v1.10.0) 조회 모드 띠의 버튼
   document.addEventListener('click', function (e) {
     if (e.target.closest('[data-view-keep]')) keepView();
@@ -1092,7 +1150,10 @@
 
   if (location.hash === '#example') loadSample();
   else if (restore()) { var rn = rebuild(true); msg('이 브라우저에 기억한 데이터를 불러왔습니다. 오늘 엑셀을 올리면 같은 종류 파일에 더합니다(이름이 같은 파일은 바꿉니다).' + rn + oldErrNote(), rn || state.oldErrors ? 'warn' : 'note'); }
-  else if (errSummary()) { renderSets(); renderTab(); }   // (v2.0.0) 실적 자료 없이 오류점수 요약만 있을 때도 오류점수 탭을 보인다
+  else {   // (v2.3.0) 기억한 실적이 없어도 탭과 안내를 보인다. 열 때 한 번만 — 자료가 있는 탭(오류점수 요약 → 수입 FTA)에서 시작(누른 탭을 되돌리지는 않음)
+    if (!ready('import')) { if (errSummary()) state.tab = 'errors'; else if (ready('ftaImport')) state.tab = 'fta'; }
+    renderSets(); renderTab();
+  }
   if (!state.range && state.oldErrors) msg(oldErrNote().replace(/^<br>/, ''), 'warn');
   // (v2.0.0) 예전에 기억한 오류점수 집계표(errors 종류)는 되읽지 않는다 — 한 번 알림
   function oldErrNote() { return state.oldErrors ? '<br><b>예전에 올린 오류점수 집계표는 더 이상 쓰지 않습니다</b> — 오류점수는 <a href="errors.html">오류점수 화면</a>에서 유니패스 원본(현황목록 · 상세목록)으로 계산합니다.' : ''; }

@@ -119,3 +119,9 @@ table.fta-reasons tr.clk{cursor:pointer;} table.fta-reasons tr.clk:hover td,tabl
 table.fta-reasons tr.sub-row > td{background:#fafcfe; padding:6px 10px 10px;}
 .tb-h .btn{margin-left:8px; vertical-align:middle;}
 @media (max-width:640px){ .kpis.fta4{grid-template-columns:repeat(2,minmax(0,1fr));} .fta-top-r{width:100%;} }
+
+/* (v2.3.0) 저장된 데이터 지우기 — 지울 항목 고르기 */
+dialog.clear-dlg{border:1px solid var(--line); border-radius:12px; padding:18px 20px; max-width:min(520px,calc(100vw - 32px));}
+dialog.clear-dlg::backdrop{background:rgba(10,25,40,.35);}
+dialog.clear-dlg label.chk{display:flex; gap:8px; align-items:flex-start; margin:8px 0; font-size:14px; line-height:1.4;}
+dialog.clear-dlg label.chk input{margin-top:3px;}

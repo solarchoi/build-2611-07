@@ -229,8 +229,8 @@ srv.listen(0, async function () {
     await pg.goto(base + 'dashboard.html');
     await pg.waitForSelector('#d-sets tr[data-kind="refund"]', { timeout: 5000 });
     ok(/예전형식/.test(await pg.textContent('#d-sets tr[data-kind="refund"]')) && /기억한 데이터/.test(await pg.textContent('#d-msg')), 'v1.5.0 예전 형식으로 기억한 자료도 오류 없이 읽힌다');
-    await pg.click('#btn-dash-clear');
-    ok(await pg.isHidden('#d-view'), '저장된 데이터 지우기');
+    await pg.click('#btn-dash-clear'); await pg.click('#d-clear-dlg [data-clear-ok]');
+    ok(/실적 데이터 · 오류점수 요약을\(를\) 지웠습니다/.test(await pg.textContent('#d-msg')) && (await pg.$$('#d-sets tr[data-kind]')).length === 0, '저장된 데이터 지우기 — 고른 항목만 지우고 알림(v2.3.0 탭은 그대로 보임)');
     // 실제 samples/ 엑셀 4종 올리기 — 수입 파일은 맨 위 제목 2줄을 건너뛰고 머리글을 찾는다
     var sdir = path.join(ROOT, 'samples');
     await pg.setInputFiles('#d-file', fs.readdirSync(sdir).filter(function (n) { return /\.xlsx$/.test(n); }).map(function (n) { return path.join(sdir, n); }));

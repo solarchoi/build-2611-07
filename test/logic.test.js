@@ -1162,6 +1162,7 @@ var v1110c = passed + failed; v1120(); console.log('v1.12.0 ' + (passed + failed
 var v1120c = passed + failed; v200(); console.log('v2.0.0 ' + (passed + failed - v1120c) + '개 검사');
 var v200c = passed + failed; v210(); console.log('v2.1.0 ' + (passed + failed - v200c) + '개 검사');
 var v210c = passed + failed; v220(); console.log('v2.2.0 ' + (passed + failed - v210c) + '개 검사');
+var v220c = passed + failed; v230(); console.log('v2.3.0 ' + (passed + failed - v220c) + '개 검사');
 console.log('v1.9.0 ' + (v190 - v180) + '개 검사');
 console.log('v1.8.0 ' + (v180 - v170) + '개 검사');
 console.log('v1.7.0 ' + (v170 - v160) + '개 검사');
@@ -1491,7 +1492,7 @@ function v200() {
   var dj = fsx.readFileSync(__dirname + '/../js/dash.js', 'utf8'), ej = fsx.readFileSync(__dirname + '/../js/errors.js', 'utf8'), dh = fsx.readFileSync(__dirname + '/../dashboard.html', 'utf8');
   ok(dj.indexOf('C.errorStats') < 0 && dj.indexOf("filtered('errors')") < 0 && /b2611-07\.err\.summary/.test(dj) && /ES\.summaryMonthly\(sum\)/.test(dj), 'v2.0.0 대시보드 오류점수 탭은 요약을 읽기만(계산 없음)');
   ok(/계산: 오류점수 ÷ 신고건수/.test(dj) && !/오류건수 ÷ 신고건수/.test(dj), 'v2.0.0 대시보드 문구 = 오류점수 ÷ 신고건수');
-  ok(/오류점수 화면에서 유니패스 파일을 먼저 올려 주세요/.test(dj) && /유니패스 오류점수 파일입니다\. 오류점수 화면으로 이동할까요\?/.test(dj) && /href="errors\.html"/.test(dj), 'v2.0.0 요약 없음 안내 · 유니패스 파일 → 오류점수 화면 단추');
+  ok(/오류점수 요약이 없습니다\. 오류점수 화면에서 유니패스 파일을 올려 주세요/.test(dj) && /유니패스 오류점수 파일입니다\. 오류점수 화면으로 이동할까요\?/.test(dj) && /href="errors\.html"/.test(dj), 'v2.0.0 요약 없음 안내 · 유니패스 파일 → 오류점수 화면 단추');
   ok(dh.indexOf('<script src="js/errscore.js">') > dh.indexOf('<script src="js/filerules.js">'), 'v2.0.0 대시보드가 errscore.js 를 읽음(요약 읽기용)');
   ok(/saveSummary\(\)/.test(ej) && /E\.SUMMARY_KEY/.test(ej) && ej.indexOf("put('요약 시트'") < 0 && ej.indexOf("put('직접 입력'") < 0, 'v2.0.0 오류점수 화면 — 요약 저장 · 인천 분모는 ERP 만(요약 시트 · 직접 입력 안 받음)');
   // [7] 예제 — 유니패스 형식 · 실제 부호 체계
@@ -1628,4 +1629,67 @@ function v220() {
   ok(/@media \(max-width:640px\)\{ \.kpis\.fta4\{grid-template-columns:repeat\(2,/.test(cs) && /tr\.late td:nth-child\(4\)\{color:#c0362c/.test(cs) && /p\.days >= 30/.test(body), 'v2.2.0 모바일 카드 2열 · 경과일수 30일 이상 빨강');
   ok(/data-fta-goto="fta-pend-sec"/.test(body) && /data-fta-reason=/.test(body) && /\[data-fta-goto\]/.test(dj) && /state\.ftaReasonOpen/.test(dj), 'v2.2.0 대기 카드 → 목록 이동 · 사유 행 → 신고번호 목록');
   ok(/class="hit"><title>/.test(dj) && /i === peak/.test(dj) && /m === sel && tots\[i\] > 0/.test(dj), 'v2.2.0 쌓은 막대 — 숫자 라벨은 최댓값 달 · 고른 달에만, 마우스를 올리면 본부별 금액');
+}
+// ---------- v2.3.0 저장 · 지우기 · 탭 · 눈금 — ERP 결과(b2611-07.err.erp) · 유니패스 결과(b2611-07.err.books) ----------
+function v230() {
+  var ES = require('../js/errscore.js');
+  var SH = ['No', '귀책사유자부호', '귀책사유자상호', '관할지세관부호', '관할지세관', '총신고건', '오류점수', '비율'];
+  var DH = ['No', '귀책사유자부호', '신고번호', '란번호', '정정일자 및 시간', '수리구분', '정정구분', '항목코드', '항목명', '오류점수', '변경 후 오류점수', '정정전내역', '정정후내역'];
+  function dr(no, decl, score, m) { return [no, '(가상)', decl, 0, '2026-' + m + '-01  10:00:00', '수리후', '정정', 'A1', '(가상)', score, score, '전(가상)', '후(가상)']; }
+  var book = ES.readWorkbook([
+    { name: '귀책사유자별오류현황목록_9월', aoa: [SH, [1, '', '', '', '', 2000, 30, 1.5]] },
+    { name: '귀책사유자별오류상세목록_9월', aoa: [DH, dr(1, '2237126800001X', 10, '09'), dr(2, '4390826000001X', 20, '09')] },
+    { name: '귀책사유자별오류현황목록_10월', aoa: [SH, [1, '', '', '', '', 2234, 69, 3.09]] },
+    { name: '귀책사유자별오류상세목록_10월', aoa: [DH, dr(1, '2237126813391X', 16, '10'), dr(2, '4215826106228X', 24, '10'), dr(3, '4215826106148X', 0, '10'), dr(4, '4390826009114X', 29, '10')] }
+  ], '2026년수출오류(가상).xlsx');
+  ES.applyRule([book], ES.normRule(null));
+  function R(d, m, hq, plant, pay) { return { declNo: d, month: m, hq: hq, plant: plant, payment: pay || 'TT' }; }
+  var erp = { 수출: [
+    R('2237126800001X', '2026-09', '건기본부', '1000'), R('4215826100001X', '2026-09', '부품센터', '6000'),
+    R('2237126813391X', '2026-10', '건기본부', '1000'), R('2237126813391X', '2026-10', '건기본부', '1000'),
+    R('4215826106228X', '2026-10', '부품센터', '6000', 'GN'), R('4215826106148X', '2026-10', '부품센터', '6000'),
+    R('2235626000777X', '2026-10', '본부 미분류', ''), R('2235626000999X', '2026-10', '본부 미분류', '7777')],
+    수입: [R('2235626B17742M', '2026-10', '엔진본부', '1130', 'GN')] };
+  var meta = { files: [{ name: '2026-09~10_수출실적(가상).xlsx', kind: '수출', rows: 8 }, { name: '2026-10_수입실적(가상).xlsx', kind: '수입', rows: 1 }], src: 'errors', at: '2026-11-20T06:20:00Z' };
+  var st = ES.erpStoreMerge(null, ES.erpStoreFrom(erp, meta)), old = ES.erpSummary(erp, 2026), nw = ES.erpSumFromStore(st, 2026);
+  eq([nw.counts, nw.countsNoGN, nw.byHq], [old.counts, old.countsNoGN, old.byHq], 'v2.3.0 저장값 → 계산값이 지금 계산(erpSummary)과 같음(신고건수 · GN 제외 · 본부별)');
+  ok(Object.keys(old.index).every(function (k) { return nw.index[k] && nw.index[k].hq === old.index[k].hq; }) && Object.keys(nw.index).length === Object.keys(old.index).length, 'v2.3.0 신고번호 → 본부 조인표도 같음');
+  eq([st.plantOf.수출['2026-10'], st.plantOf.수입['2026-10'], st.counts.수출['2026-10'], st.countsNoGN.수출['2026-10']],
+    [{ '2237126813391X': 'B', '4215826106228X': 'P', '4215826106148X': 'P', '2235626000777X': 'N', '2235626000999X': 'U' }, { '2235626B17742M': 'E' }, { 건기본부: 1, 부품센터: 2, 'Plant 없음': 1, 'Plant 미등록': 1 }, 4],
+    'v2.3.0 본부 한 글자(B 건기 · E 엔진 · P 부품 · N Plant 없음 · U Plant 미등록) · counts 는 본부별 신고번호 수(GN 포함)');
+  ok(!/payment|records|aoa/.test(JSON.stringify(st)) && st.files.every(function (f) { return f.src === 'errors' && f.at === meta.at; }) && JSON.stringify(st.files[0].months) === '["2026-09","2026-10"]', 'v2.3.0 원본 행 없이 결과만 · 파일마다 출처 · 시각 · 달');
+  // 같은 달을 다시 올리면 그 달만 바뀜
+  var part = ES.erpStoreFrom({ 수출: erp.수출.filter(function (r) { return r.month === '2026-10' && r.declNo !== '4215826106148X'; }) }, { files: [{ name: '2026-10_수출실적(가상).xlsx', kind: '수출', rows: 5 }], src: 'dashboard', at: '2026-11-21T01:00:00Z' });
+  var st2 = ES.erpStoreMerge(st, part);
+  eq([st2.counts.수출['2026-09'], st2.counts.수출['2026-10'].부품센터, st2.counts.수입['2026-10'], st2.files.map(function (f) { return f.name + ':' + f.months.join('/'); })],
+    [{ 건기본부: 1, 부품센터: 1 }, 1, { 엔진본부: 1 }, ['2026-09~10_수출실적(가상).xlsx:2026-09', '2026-10_수입실적(가상).xlsx:2026-10', '2026-10_수출실적(가상).xlsx:2026-10']], 'v2.3.0 같은 달 ERP 를 다시 올리면 그 달만 교체(다른 달 · 다른 종류 그대로)');
+  ok(st.counts.수출['2026-10'].부품센터 === 2, 'v2.3.0 합치기는 이전 저장값을 바꾸지 않음(복사)');
+  // 1MB 를 넘으면 오래된 달부터 plantOf 를 지우고 counts 는 남김
+  var b0 = ES.utf8Len(JSON.stringify(st)), tr = ES.erpStoreTrim(JSON.parse(JSON.stringify(st)), b0 - 1);
+  eq([tr.dropped, Object.keys(tr.store.plantOf.수출), tr.store.counts.수출['2026-09'], tr.store.noJoin, ES.ERP_LIMIT, ES.utf8Len('가a')], [[{ kind: '수출', month: '2026-09' }], ['2026-10'], { 건기본부: 1, 부품센터: 1 }, [{ kind: '수출', month: '2026-09' }], 1048576, 4], 'v2.3.0 용량을 넘으면 오래된 달의 조인표만 지움(신고건수는 남김) · 한도 1MB');
+  var trs = ES.erpSumFromStore(tr.store, 2026);
+  var S = ES.summarize([book], trs.counts, {}), H = ES.hqBreakdown(S, [book], trs), h9 = {}; H.kinds.수출[9].forEach(function (x) { h9[x.region + '|' + x.hq] = x; });
+  eq([trs.noJoin.map(function (x) { return x.kind + x.month; }), H.noJoin, !!h9['인천|본부 조인 정보 없음'], h9['인천|본부 조인 정보 없음'].decl, H.notFound.length, !h9['인천|ERP 미매칭']],
+    [['수출9'], [{ kind: '수출', month: 9 }], true, null, 0, true], 'v2.3.0 조인표를 지운 달의 인천 오류 건 = 「본부 조인 정보 없음」(ERP 미매칭으로 세지 않음)');
+  var H10 = ES.hqBreakdown(S, [book], trs), h10 = {}; H10.kinds.수출[10].forEach(function (x) { h10[x.region + '|' + x.hq] = x; });
+  eq([h10['인천|건기본부'].score, h10['인천|부품센터'].score, h10['인천|부품센터'].decl, h10['인천|Plant 없음'].decl], [16, 24, 2, 1], 'v2.3.0 조인표가 남은 달(10월)은 그대로 본부로 나뉨');
+  var back = ES.erpStoreMerge(tr.store, ES.erpStoreFrom({ 수출: erp.수출.filter(function (r) { return r.month === '2026-09'; }) }, { files: [{ name: '9월', kind: '수출', rows: 2 }] }));
+  eq([back.noJoin, Object.keys(back.plantOf.수출).sort()], [[], ['2026-09', '2026-10']], 'v2.3.0 그 달 ERP 를 다시 올리면 조인표가 돌아오고 「조인 정보 없음」이 사라짐');
+  ok(/^인천 신고건수 · 본부: ERP 실적 2026-09, 2026-10 \(오류점수 화면에서 올림 · 11\/20 \d\d:\d\d\)$/.test(ES.erpSourceText(st)) && /대시보드에서 올림 · 오류점수 화면에서 올림/.test(ES.erpSourceText(st2)) && ES.erpSourceText(null) === '', 'v2.3.0 출처 줄 — ERP 실적 달 · 어디서 올렸는지 · 시각');
+  // 유니패스 읽은 결과 저장 · 되살리기
+  var pk = ES.booksPack([book]), un = ES.booksUnpack(JSON.parse(JSON.stringify(pk)));
+  ES.applyRule(un, ES.normRule(null));
+  var Sa = ES.summarize([book], trs.counts, {}), Sb = ES.summarize(un, trs.counts, {});
+  eq([JSON.stringify(Sb), un[0].rows.length, un[0].fileName, ES.booksUnpack(null), ES.booksUnpack({ v: 9 })], [JSON.stringify(Sa), book.rows.length, book.fileName, [], []], 'v2.3.0 유니패스 결과 저장 → 되살려 계산해도 같은 요약 · 잘못된 저장값은 무시');
+  ok(JSON.stringify(pk).length < JSON.stringify([book]).length && Array.isArray(pk.books[0].rowCols) && !pk.books[0].rows, 'v2.3.0 줄은 열 이름 한 번 + 값 배열로 줄여 저장');
+  // 화면 — 지우기 창 · 탭 · 기록 · 눈금
+  var dj = fsx.readFileSync(__dirname + '/../js/dash.js', 'utf8'), ej = fsx.readFileSync(__dirname + '/../js/errors.js', 'utf8'), eh = fsx.readFileSync(__dirname + '/../errors.html', 'utf8');
+  ok(/\{ id: 'data', label: '실적 데이터 \(수입 · 수출 · 관세환급 · 품목분류 · 수입 FTA\)', on: true/.test(dj) && /\{ id: 'errsum', label: '오류점수 요약[^']*', on: true/.test(dj) && /\{ id: 'notes', label: '오류점수 관리대장 입력값[^']*', on: false/.test(dj) && /\{ id: 'snaps', label: '수입 FTA 확정 스냅샷', on: false/.test(dj), 'v2.3.0 지우기 창 — 실적 · 오류점수 요약은 기본 체크, 관리대장 입력값 · FTA 확정값은 기본 해제');
+  ok(/E\.ERP_KEY \|\| 'b2611-07\.err\.erp', E\.BOOKS_KEY/.test(dj) && /을\(를\) 지웠습니다\.' \+ \(kept\.length \? ' ' \+ esc\(kept\.join\(' · '\)\) \+ '은\(는\) 남겨 두었습니다\.'/.test(dj) && /btn-dash-clear'\)\.addEventListener\('click', clearDialog\)/.test(dj), 'v2.3.0 지우기 — 오류점수 요약에 ERP · 유니패스 결과 포함 · 무엇을 지우고 남겼는지 알림');
+  ok(ej.indexOf("notes: 'build-2611-07.err.notes'") > 0 && ES.NOTES_KEY === 'build-2611-07.err.notes', 'v2.3.0 관리대장 입력값 열쇠가 두 화면에서 같음');
+  ok(dj.indexOf("state.tab = fOk ? 'fta' : 'errors'") < 0 && /수입 실적 자료가 없습니다\. 위에서 ERP 수입실적 엑셀을 올려 주세요\./.test(dj) && /수입 FTA 자료가 없습니다\. ERP 수입FTA 엑셀을 올려 주세요\./.test(dj) && /오류점수 요약이 없습니다\. 오류점수 화면에서 유니패스 파일을 올려 주세요\./.test(dj), 'v2.3.0 탭을 되돌리지 않음 · 자료 없는 탭은 안내');
+  ok(/excludeGN: false/.test(dj) && /!state\.loadingSample\) erpItems\.push/.test(dj) && /src: 'dashboard'/.test(dj) && dj.indexOf("if (info.mode === 'view') { views.push") < dj.indexOf('erpItems.push'), 'v2.3.0 대시보드 확정본 ERP 실적 → 오류점수용 결과(GN 포함 · 예제 · 조회 모드는 넣지 않음)');
+  ok(/fmtKind === 'pct' && max \/ 4 < 0\.01 \? function \(v\) \{ return C\.fmtPct\(v, 1\); \}/.test(dj) && /data-k="one-label"/.test(dj) && C_fmtPct(0.015) === '1.5%' && C_fmtPct(0.02) === '2.0%', 'v2.3.0 눈금 간격이 1% 미만이면 소수 첫째 자리(1.5% · 2.0%) · 점이 하나뿐이면 값 라벨');
+  ok(/function restoreSaved\(\)/.test(ej) && /localStorage\.setItem\(E\.ERP_KEY/.test(ej) && /localStorage\.setItem\(E\.BOOKS_KEY/.test(ej) && /\[E\.SUMMARY_KEY, E\.ERP_KEY, E\.BOOKS_KEY\]\.forEach/.test(ej) && /id="e-erpsrc"/.test(eh), 'v2.3.0 오류점수 화면 — 열 때 저장값을 먼저 읽음 · 비우기는 요약 · ERP · 유니패스 결과(관리대장 입력값은 그대로)');
+  function C_fmtPct(v) { return require('../js/customs.js').fmtPct(v, 1); }
 }

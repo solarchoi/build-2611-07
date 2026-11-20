@@ -6,9 +6,22 @@
   function load(k, d) { try { return JSON.parse(localStorage.getItem(k)) || d; } catch (e) { return d; } }
   // (v1.11.0) rule = 지역 표({ ulsan, incheon } — 예전 { ulsan } 저장값은 새 기본 표로 옮김) · erp = ERP 실적(인천 분모 · 본부 조인, 저장하지 않음) · manual = 직접 넣은 인천 건수
   var state = { books: [], rule: E.normRule(load(LS.rule, null)), notes: load(LS.notes, {}), th: load(LS.th, E.THRESHOLD), counts: { 수입: {}, 수출: {} }, countSrc: { 수입: {}, 수출: {} }, manual: { 수입: {}, 수출: {} }, erp: { 수입: null, 수출: null }, erpSum: null, hq: null, checks: [], summary: null, rows: [], decls: [] };
+  // (v2.3.0) ERP 결과(b2611-07.err.erp) · 유니패스 읽은 결과(b2611-07.err.books) — 새로고침 · 다른 메뉴에 다녀와도 남게. 원본 엑셀 행은 저장하지 않는다.
+  state.erpStore = E.erpStoreValid(load(E.ERP_KEY, null));
+  function hasErp() { return E.erpStoreHas(state.erpStore); }
+  function hasErpNow() { return !!state.erpSum; }
+  function saveErp(list) {
+    var recs = { 수입: [], 수출: [] }, files = [];
+    list.forEach(function (x) { var k = x.kind === 'import' ? '수입' : '수출'; recs[k] = recs[k].concat(x.records); files.push({ name: x.file, kind: k, period: x.period ? x.period.from + '~' + x.period.to : null, rows: x.records.length }); });
+    var part = E.erpStoreFrom(recs, { files: files, src: 'errors' }), t = E.erpStoreTrim(E.erpStoreMerge(state.erpStore, part));
+    state.erpStore = t.store; state.erpDropped = t.dropped;
+    try { localStorage.setItem(E.ERP_KEY, JSON.stringify(t.store)); state.erpSaveOk = true; } catch (e) { state.erpSaveOk = false; }
+  }
+  function saveBooks() { try { localStorage.setItem(E.BOOKS_KEY, JSON.stringify(E.booksPack(state.books))); state.booksSaveOk = true; } catch (e) { state.booksSaveOk = false; } }
+  function renderSrc() { var t = E.erpSourceText(state.erpStore); $('e-erpsrc').innerHTML = t ? '<b>' + esc(t) + '</b>' : 'ERP 실적이 아직 없습니다 — 인천 신고건수 · 본부는 ERP 수입실적 · 수출실적(여기서 또는 대시보드에서)을 올리면 채워집니다.'; }
   // (v2.0.0) 요약 저장 — 집계가 바뀔 때마다 덮어쓴다(원본 행은 넣지 않음). 대시보드 오류점수 탭은 이것을 읽기만 한다.
   function saveSummary() {
-    var erp = ['수입', '수출'].filter(function (k) { return state.erp[k]; }).map(function (k) { var x = state.erp[k]; return { name: x.file, kind: k, period: x.period || null, rows: x.records.length }; });
+    var erp = (E.erpStoreValid(state.erpStore) ? state.erpStore.files : []).map(function (x) { return { name: x.name, kind: x.kind, period: x.period || null, rows: x.rows, src: x.src }; });
     state.saved = E.buildSummary(state.summary, state.hq, state.books, { erp: erp });
     try { localStorage.setItem(E.SUMMARY_KEY, JSON.stringify(state.saved)); state.savedOk = true; } catch (e) { state.savedOk = false; }
   }
@@ -26,15 +39,16 @@
     E.applyRule(state.books, state.rule);
     state.rows = [].concat.apply([], state.books.map(function (b) { return b.rows; })).filter(function (r) { return r.month; });
     var year = (state.books.filter(function (b) { return b.year; })[0] || {}).year || (state.rows.map(function (r) { return r.year; }).filter(Boolean).sort()[0]) || null;
-    state.erpSum = E.erpSummary({ 수입: state.erp.수입 ? state.erp.수입.records : [], 수출: state.erp.수출 ? state.erp.수출.records : [] }, year);
+    // (v2.3.0) ERP 결과는 저장값(b2611-07.err.erp)에서 — 오류점수 화면 · 대시보드 어느 쪽에서 올렸든, 새로고침해도 남음
+    state.erpSum = hasErp() ? E.erpSumFromStore(state.erpStore, year) : null;
     // (v2.0.0) 인천 신고건수 = ERP 실적만. 요약 시트(팀 수기) · 직접 입력은 입력으로 받지 않는다(같은 달에 숫자가 둘 생기지 않게) — 요약 시트는 검증에서 대조만
     E.KINDS.forEach(function (k) {
       state.counts[k] = {}; state.countSrc[k] = {};
-      if (state.erp[k]) Object.keys(state.erpSum.counts[k]).forEach(function (m) { state.counts[k][m] = state.erpSum.counts[k][m]; state.countSrc[k][m] = 'ERP'; });
+      if (state.erpSum) Object.keys(state.erpSum.counts[k]).forEach(function (m) { state.counts[k][m] = state.erpSum.counts[k][m]; state.countSrc[k][m] = 'ERP'; });
     });
     state.summary = E.summarize(state.books, state.counts, { threshold: state.th });
-    state.hq = E.hqBreakdown(state.summary, state.books, state.erp.수입 || state.erp.수출 ? state.erpSum : null);
-    state.checks = E.regionChecks(state.summary, state.books, state.erp.수입 || state.erp.수출 ? state.erpSum : null);
+    state.hq = E.hqBreakdown(state.summary, state.books, state.erpSum);
+    state.checks = E.regionChecks(state.summary, state.books, state.erpSum);
     state.decls = E.byDecl(state.rows);
     saveSummary();
     var mg = E.migrateNotes(state.notes, state.decls); if (mg.moved) { state.notes = mg.notes; saveNotes(); }
@@ -82,10 +96,12 @@
     var errs = [], erps = [];
     raw.forEach(function (b) { var k = C && FR ? erpKindOf(b) : null; if (k) erps.push({ b: b, k: k }); else errs.push(b); });
     erps.forEach(function (x) { state.erp[x.k === 'import' ? '수입' : '수출'] = readErp(x.b, x.k); });
+    if (erps.length) saveErp(erps.map(function (x) { return state.erp[x.k === 'import' ? '수입' : '수출']; }));
     // (v2.0.0) 수입 · 수출 파일을 따로 올려도 앞 파일이 사라지지 않게 — 같은 열쇠(수입·수출 · 연도 · 파일 이름 월 · 현황/상세)의 파일만 바꾼다
     errs.map(function (b) { return E.readWorkbook(b.sheets, b.name, state.rule); }).forEach(function (nb) {
       var key = bookKey(nb); state.books = state.books.filter(function (ob) { return bookKey(ob) !== key && ob.fileName !== nb.fileName; }); state.books.push(nb);
     });
+    if (errs.length) saveBooks();
     var chk = E.statusCheck(state.books), diff = chk.filter(function (c) { return c.diff !== 0; });
     var erpList = ['수입', '수출'].filter(function (k) { return state.erp[k]; }).map(function (k) { return erpRow(state.erp[k]); });
     var list = table(['파일명', '인식된 종류', '기간', '월 귀속 기준', '읽은 행 수', '경고'], state.books.map(fileRow).concat(erpList), 'e-files');
@@ -93,6 +109,9 @@
     var erpTxt = '<p class="sub" data-k="erp-note">인천 신고건수 = ERP 실적의 신고번호 고유 개수(수입 수리일자 · 수출 신고일자 기준, <b>GN 포함</b> — 관세청 총신고건에 GN 이 들어 있어서 실적 탭의 「GN 제외」 설정을 따르지 않습니다). ' + (erpList.length ? '' : 'ERP 수입실적 · 수출실적 파일을 함께 올리면 인천 건수와 본부(PLANT)를 자동으로 채웁니다.') + '</p>';
     var ok = state.books.some(function (b) { return b.rows.length || b.hasStatus; });
     $('e-msg').innerHTML = '<div class="' + (ok && !diff.length ? 'ok' : 'warn') + '">' + list + chkTxt + erpTxt + (diff.length ? '<p><b>현황목록과 상세목록의 오류점수가 다릅니다</b> — 위 차액을 확인해 주세요.</p>' : '') + '</div>';
+    if (state.booksSaveOk === false || state.erpSaveOk === false) $('e-msg').innerHTML += '<div class="warn" data-k="save-fail">이 브라우저에 결과를 저장하지 못했습니다(용량) — 새로고침하면 다시 올려야 합니다.</div>';
+    if (state.erpDropped && state.erpDropped.length) $('e-msg').innerHTML += '<div class="warn">저장 용량(1MB)을 넘어 오래된 달의 본부 조인표를 지웠습니다: ' + esc(state.erpDropped.map(function (x) { return x.month + ' ' + x.kind; }).join(', ')) + ' — 신고건수는 남아 있습니다.</div>';
+    renderSrc();
     ['e-rule', 'e-view', 'e-ledger', 'e-mail'].forEach(function (id) { $(id).hidden = !ok; });
     if (ok) recompute();
   }
@@ -155,10 +174,11 @@
         });
       });
     });
-    var nf = H.notFound, hasErp = state.erp.수입 || state.erp.수출;
+    var nf = H.notFound, hasErp = hasErpNow();
     $('e-hq').innerHTML = '<p class="sub" data-k="ulsan-note"><b>' + esc(H.ulsanNote) + '</b>. 인천은 ERP 실적과 신고번호로 조인해 PLANT → 본부(1000 · 1100 · 1111 건기본부, 1130 · 1131 엔진본부, 6000 부품센터). 신고건수는 ERP 본부별 신고번호 수(GN 포함).</p>' +
       '<p class="sub" data-k="hq-split">「Plant 없음」 = ERP 에 있으나 Plant 가 빈 건(분모에만), 「ERP 미매칭」 = 오류 건인데 신고번호를 ERP 에서 못 찾은 건(분자에만 — 비율은 「—」). 두 집단을 한 줄에 합치지 않습니다.</p>' +
       (hasErp ? '' : '<div class="warn">ERP 실적 파일이 없어 인천 신고건수 · 본부를 정할 수 없습니다 — 인천 건은 모두 ERP 미매칭입니다. ERP 수입실적 · 수출실적을 함께 올려 주세요.</div>') +
+      (H.noJoin && H.noJoin.length ? '<div class="warn" data-k="hq-nojoin"><b>본부 조인 정보 없음 — ERP 재업로드 필요</b>: ' + esc(H.noJoin.map(function (x) { return x.month + '월 ' + x.kind; }).join(', ')) + ' (저장 용량 때문에 오래된 달의 신고번호 → 본부 표를 지웠습니다. 신고건수는 남아 있습니다.)</div>' : '') +
       (H.uncovered.length && hasErp ? '<p class="sub" data-k="hq-uncovered">ERP 실적이 없는 달 — 그 달 인천 건은 ERP 미매칭: ' + esc(H.uncovered.map(function (x) { return x.month + '월 ' + x.kind; }).join(', ')) + ' (그 달 ERP 실적을 함께 올리면 본부로 나뉩니다)</p>' : '') +
       (nf.length ? '<div class="warn" data-k="hq-notfound"><b>ERP 미매칭 신고번호 ' + nf.length + '개</b> — 늦은 계상이거나 ERP 조회 기간 밖일 수 있습니다: ' + esc(nf.map(function (x) { return x.month + '월 ' + x.kind + ' ' + x.declNo; }).join(', ')) + '</div>' : '') +
       table(['월 · 구분', '지역', '본부', '신고건수', '오류건수(0점 포함)', '점수 발생 건수', '오류점수', '비율'], rows, 'err-hq');
@@ -190,13 +210,13 @@
     $('e-items').innerHTML = table(['항목명', '항목코드', '정정 줄', '신고번호 수', '오류점수', '비중'], E.topItems(rows, 15).map(function (t) { return '<tr><td>' + esc(t.item) + '</td><td>' + esc(t.code) + '</td><td class="num">' + n(t.n) + '</td><td class="num">' + n(t.err) + '</td><td class="num">' + n(t.score) + '</td><td class="num">' + pc(t.share) + '</td></tr>'; }), 'items');
   }
   // (v1.12.0) 인천 오류건 관리대장 — 자동: 구분 · 연번 · 사업부 · 신고번호 · 정정일자 · 오류점수 / 담당자 입력: DRAFT NO · 발생사유 · 귀책 · 관련부서 · 담당자
-  function ledgerOf(month) { return E.ledgerRows(state.decls, state.notes, state.erp.수입 || state.erp.수출 ? state.erpSum : null, { month: month }); }
+  function ledgerOf(month) { return E.ledgerRows(state.decls, state.notes, state.erpSum, { month: month }); }
   function inp(r, f, ph, w) { return '<input type="text" data-key="' + esc(r.key) + '" data-note="' + f + '" value="' + esc(r[f]) + '" placeholder="' + esc(ph || '') + '"' + (f === 'blame' ? ' list="e-blames"' : '') + ' style="width:' + (w || 8) + 'em" aria-label="' + esc(r.declNo + ' ' + f) + '">'; }
   function renderLedger() {
     var m = +$('e-lmonth').value, rows = ledgerOf(m), pg = E.ledgerProgress(rows, m);
     // 미입력 줄을 위로, 그 안에서는 점수 큰 순서(연번은 그대로)
     var view = rows.slice().sort(function (a, b) { return (b.missing - a.missing) || (b.score - a.score) || (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : a.no - b.no); });
-    var noErp = !(state.erp.수입 || state.erp.수출);
+    var noErp = !hasErpNow();
     $('e-lprog').innerHTML = '<div class="' + (pg.missing ? 'warn' : 'ok') + '" data-k="ledger-progress"><b>' + esc(pg.text) + '</b>' + (pg.total ? ' · 입력 완료 ' + pg.done + '건' : '') + (noErp && pg.total ? ' · ERP 실적을 함께 올리면 사업부가 자동으로 채워집니다' : '') + '</div>';
     $('e-ltable').innerHTML = rows.length ? '<datalist id="e-blames"><option value="화주"><option value="관세사"></datalist>' + table(E.LEDGER_HEAD, view.map(function (r) {
       var st = r.score > 0 ? ' style="background:#fff4e5"' : ' style="color:var(--sub)"';
@@ -229,7 +249,7 @@
   $('e-file').addEventListener('change', function (e) { var fs = [].slice.call(e.target.files); if (!fs.length) return; Promise.all(fs.map(readFile)).then(setBooks).catch(function (er) { $('e-msg').innerHTML = '<div class="warn">파일을 읽지 못했습니다: ' + esc(er.message) + '</div>'; }); e.target.value = ''; });
   $('e-sample').addEventListener('click', function () { setBooks(E.sampleBooks()); });
   // 「비우기」 — 올린 파일과 그 요약(대시보드가 읽는 값)을 비운다. 관리대장 입력값은 지우지 않는다.
-  $('e-clear').addEventListener('click', function () { state.books = []; state.erp = { 수입: null, 수출: null }; try { localStorage.removeItem(E.SUMMARY_KEY); } catch (e) { /* 지우지 못해도 화면은 비움 */ } ['e-rule', 'e-view', 'e-ledger', 'e-mail'].forEach(function (id) { $(id).hidden = true; }); $('e-msg').innerHTML = ''; });
+  $('e-clear').addEventListener('click', function () { state.books = []; state.erp = { 수입: null, 수출: null }; state.erpStore = null; state.erpSum = null; try { [E.SUMMARY_KEY, E.ERP_KEY, E.BOOKS_KEY].forEach(function (k) { localStorage.removeItem(k); }); } catch (e) { /* 지우지 못해도 화면은 비움 */ } renderSrc(); ['e-rule', 'e-view', 'e-ledger', 'e-mail'].forEach(function (id) { $(id).hidden = true; }); $('e-msg').innerHTML = ''; });
   $('e-brokers').addEventListener('change', function (e) { var b = e.target.dataset.broker; if (b) setRegion(b, e.target.value); });
   $('e-brokers').addEventListener('click', function (e) {
     if (e.target.id === 'e-addbtn') { var c = ($('e-addcode').value || '').replace(/\D/g, ''); if (c.length !== 5) { $('e-addcode').focus(); return; } setRegion(c, $('e-addreg').value); }
@@ -251,6 +271,16 @@
   });
   $('e-mcopy').addEventListener('click', function () { var b = this; (navigator.clipboard ? navigator.clipboard.writeText($('e-mbody').value) : Promise.resolve()).then(function () { b.textContent = '복사했습니다'; setTimeout(function () { b.textContent = '본문 복사'; }, 1200); }); });
   $('e-xlsx').addEventListener('click', function () { var wb = XLSX.utils.book_new(); E.exportBook({ summary: state.summary, rows: state.rows, decls: state.decls, notes: state.notes, ledger: ledgerOf(null) }).forEach(function (s) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s.aoa), s.name); }); XLSX.writeFile(wb, '수출입오류점수_' + new Date().toISOString().slice(0, 10) + '.xlsx'); });
+  // (v2.3.0) 열 때 저장값을 먼저 읽는다 — 유니패스 결과가 있으면 화면 전체, ERP 결과만 있으면 출처 줄만
+  (function restoreSaved() {
+    renderSrc();
+    var bs = []; try { bs = E.booksUnpack(load(E.BOOKS_KEY, null)); } catch (e) { bs = []; }
+    if (!bs.length) return;
+    state.books = bs;
+    $('e-msg').innerHTML = '<div class="ok" data-k="restored">저장된 결과를 되살렸습니다 — 유니패스 파일 ' + bs.length + '개(' + esc(bs.map(function (b) { return b.fileName; }).join(', ')) + ')' + (hasErp() ? ' · ERP 실적' : '') + '. 새 파일을 올리면 같은 파일 · 같은 달만 바뀝니다.</div>';
+    ['e-rule', 'e-view', 'e-ledger', 'e-mail'].forEach(function (id) { $(id).hidden = false; });
+    recompute();
+  })();
   window.__err = { state: state };
   if (location.hash === '#example') $('e-sample').click();
 })();
