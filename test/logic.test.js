@@ -1163,6 +1163,7 @@ var v1120c = passed + failed; v200(); console.log('v2.0.0 ' + (passed + failed -
 var v200c = passed + failed; v210(); console.log('v2.1.0 ' + (passed + failed - v200c) + '개 검사');
 var v210c = passed + failed; v220(); console.log('v2.2.0 ' + (passed + failed - v210c) + '개 검사');
 var v220c = passed + failed; v230(); console.log('v2.3.0 ' + (passed + failed - v220c) + '개 검사');
+var v230c = passed + failed; v240(); console.log('v2.4.0 ' + (passed + failed - v230c) + '개 검사');
 console.log('v1.9.0 ' + (v190 - v180) + '개 검사');
 console.log('v1.8.0 ' + (v180 - v170) + '개 검사');
 console.log('v1.7.0 ' + (v170 - v160) + '개 검사');
@@ -1193,7 +1194,7 @@ function v1100() {
   eq(d('2026-10_관세환급.xlsx').dataset, 'refund', 'v1.10.0 2026-10_관세환급');
   // 순서 — 「수입FTA」에도 「수입」 · 「실적」이 들어 있다. 「오류」가 맨 앞
   eq([d('2026-10_수입FTA.xlsx').group, d('2026-10_수입FTA실적.xlsx').group, d('2026-10_수입오류_FTA.xlsx').group, d('2026-10_환급실적.xlsx').group, d('2026_결정문실적.xlsx').group], ['fta', 'fta', 'errscore', 'refund', 'ruling'], 'v1.10.0 이름 검사 순서 오류 → FTA → 환급 → 결정문 → 실적');
-  eq([d('2026-10_수입FTA.xlsx').dataset, d('2026-10_수입FTA.xlsx').label, d('2026-10_수출FTA.xlsx').dataset], ['ftaImport', '수입 FTA', null], 'v1.10.0 → v2.1.0 수입 FTA 는 자기 탭(수입실적 합계에 넣지 않음) · 수출 FTA 는 아직 목록에만');
+  eq([d('2026-10_수입FTA.xlsx').dataset, d('2026-10_수입FTA.xlsx').label, d('2026-10_수출FTA.xlsx').dataset], ['ftaImport', '수입 FTA', 'ftaExport'], 'v1.10.0 → v2.1.0 수입 FTA 는 자기 탭(수입실적 합계에 넣지 않음) · v2.4.0 수출 FTA 도 자기 탭(ftaExport)');
   eq([d('2026-10_수출입실적.xlsx').io, d('2026-10_수출입실적.xlsx', 'export').dataset], [null, 'export'], 'v1.10.0 「수출입」은 이름으로 가르지 않고 내용으로');
   // 6) 이름에 아무것도 없으면 내용 판별(이름을 바꾸지 않은 옛 파일)
   eq([d('예제_통관(가상).xlsx', 'import').dataset, d('예제_통관(가상).xlsx', 'import').how, d('예제_통관(가상).xlsx', 'import').mode], ['import', '내용', 'confirmed'], 'v1.10.0 이름 규칙에 안 걸리면 내용 판별 · 확정본');
@@ -1531,7 +1532,7 @@ function v210() {
   eq([det.kind, CU.detectKind(CU.uniqueHeaders(HD)).kind, info.dataset, info.mode, info.rule, info.period.text], ['ftaImport', 'ftaImport', 'ftaImport', 'confirmed', 'B', '2026-01~10'], 'v2.1.0 수입FTA 파일 판정(이름 · 내용) · 확정본 · 수리일자 귀속');
   var impErp = CU.sampleImportErp().aoa[0];
   eq([CU.detectKind(CU.uniqueHeaders(impErp), '2026-10_수입실적(가상).xlsx').kind, CU.detectKind(CU.uniqueHeaders(impErp)).kind], ['import', 'import'], 'v2.1.0 수입실적 ERP 파일은 수입 FTA 로 잡히지 않음(판정 열 개수)');
-  eq([FRr.describe('EXPORT-수입FTA.XLSX', { kind: 'ftaImport' }).mode, FRr.describe('EXPORT-수입FTA.XLSX', { kind: 'ftaImport' }).dataset, FRr.describe('2026-10_수출FTA.xlsx', null).dataset], ['view', 'ftaImport', null], 'v2.1.0 원본 이름 = 조회 모드 · 수출 FTA 는 아직 목록에만');
+  eq([FRr.describe('EXPORT-수입FTA.XLSX', { kind: 'ftaImport' }).mode, FRr.describe('EXPORT-수입FTA.XLSX', { kind: 'ftaImport' }).dataset, FRr.describe('2026-10_수출FTA.xlsx', null).dataset], ['view', 'ftaImport', 'ftaExport'], 'v2.1.0 원본 이름 = 조회 모드 · v2.4.0 수출 FTA 는 자기 탭(ftaExport)');
   var item = { name: name, file: name, headers: CU.uniqueHeaders(HD), aoa: aoa, offset: 0, override: {}, meta: info };
   var m = CU.mergeFiles('ftaImport', [item], CU.exportSettings({ excludeGN: false })), map = m.files[0].res.map;
   eq([m.ok, map.goods, map.saving, map.declNo, map.dutyType, map.date, map.naCode], [true, '(\\)Taxable.Amt', 'Tariff Reductions', 'Import declaration number', 'Duty Type', 'Acceptance date', 'FTA N/A Code'], 'v2.1.0 열 짝짓기 — 원화 (\\)Taxable.Amt(달러 열 아님) · 같은 이름 열에 흔들리지 않음');
@@ -1684,7 +1685,7 @@ function v230() {
   ok(JSON.stringify(pk).length < JSON.stringify([book]).length && Array.isArray(pk.books[0].rowCols) && !pk.books[0].rows, 'v2.3.0 줄은 열 이름 한 번 + 값 배열로 줄여 저장');
   // 화면 — 지우기 창 · 탭 · 기록 · 눈금
   var dj = fsx.readFileSync(__dirname + '/../js/dash.js', 'utf8'), ej = fsx.readFileSync(__dirname + '/../js/errors.js', 'utf8'), eh = fsx.readFileSync(__dirname + '/../errors.html', 'utf8');
-  ok(/\{ id: 'data', label: '실적 데이터 \(수입 · 수출 · 관세환급 · 품목분류 · 수입 FTA\)', on: true/.test(dj) && /\{ id: 'errsum', label: '오류점수 요약[^']*', on: true/.test(dj) && /\{ id: 'notes', label: '오류점수 관리대장 입력값[^']*', on: false/.test(dj) && /\{ id: 'snaps', label: '수입 FTA 확정 스냅샷', on: false/.test(dj), 'v2.3.0 지우기 창 — 실적 · 오류점수 요약은 기본 체크, 관리대장 입력값 · FTA 확정값은 기본 해제');
+  ok(/\{ id: 'data', label: '실적 데이터 \(수입 · 수출 · 관세환급 · 품목분류 · 수입 FTA( · 수출 FTA)?\)', on: true/.test(dj) && /\{ id: 'errsum', label: '오류점수 요약[^']*', on: true/.test(dj) && /\{ id: 'notes', label: '오류점수 관리대장 입력값[^']*', on: false/.test(dj) && /\{ id: 'snaps', label: '수입 FTA 확정 스냅샷', on: false/.test(dj), 'v2.3.0 지우기 창 — 실적 · 오류점수 요약은 기본 체크, 관리대장 입력값 · FTA 확정값은 기본 해제');
   ok(/E\.ERP_KEY \|\| 'b2611-07\.err\.erp', E\.BOOKS_KEY/.test(dj) && /을\(를\) 지웠습니다\.' \+ \(kept\.length \? ' ' \+ esc\(kept\.join\(' · '\)\) \+ '은\(는\) 남겨 두었습니다\.'/.test(dj) && /btn-dash-clear'\)\.addEventListener\('click', clearDialog\)/.test(dj), 'v2.3.0 지우기 — 오류점수 요약에 ERP · 유니패스 결과 포함 · 무엇을 지우고 남겼는지 알림');
   ok(ej.indexOf("notes: 'build-2611-07.err.notes'") > 0 && ES.NOTES_KEY === 'build-2611-07.err.notes', 'v2.3.0 관리대장 입력값 열쇠가 두 화면에서 같음');
   ok(dj.indexOf("state.tab = fOk ? 'fta' : 'errors'") < 0 && /수입 실적 자료가 없습니다\. 위에서 ERP 수입실적 엑셀을 올려 주세요\./.test(dj) && /수입 FTA 자료가 없습니다\. ERP 수입FTA 엑셀을 올려 주세요\./.test(dj) && /오류점수 요약이 없습니다\. 오류점수 화면에서 유니패스 파일을 올려 주세요\./.test(dj), 'v2.3.0 탭을 되돌리지 않음 · 자료 없는 탭은 안내');
@@ -1692,4 +1693,82 @@ function v230() {
   ok(/fmtKind === 'pct' && max \/ 4 < 0\.01 \? function \(v\) \{ return C\.fmtPct\(v, 1\); \}/.test(dj) && /data-k="one-label"/.test(dj) && C_fmtPct(0.015) === '1.5%' && C_fmtPct(0.02) === '2.0%', 'v2.3.0 눈금 간격이 1% 미만이면 소수 첫째 자리(1.5% · 2.0%) · 점이 하나뿐이면 값 라벨');
   ok(/function restoreSaved\(\)/.test(ej) && /localStorage\.setItem\(E\.ERP_KEY/.test(ej) && /localStorage\.setItem\(E\.BOOKS_KEY/.test(ej) && /\[E\.SUMMARY_KEY, E\.ERP_KEY, E\.BOOKS_KEY\]\.forEach/.test(ej) && /id="e-erpsrc"/.test(eh), 'v2.3.0 오류점수 화면 — 열 때 저장값을 먼저 읽음 · 비우기는 요약 · ERP · 유니패스 결과(관리대장 입력값은 그대로)');
   function C_fmtPct(v) { return require('../js/customs.js').fmtPct(v, 1); }
+}
+// ---------- v2.4.0 수출 FTA 탭 — 담당자 분석본(시트를 내용으로 고름 · 판가 · 절감액 그대로 · 피벗 대조 · 제외 건 · 세율표) ----------
+function v240() {
+  var CU = require('../js/customs.js'), FRr = require('../js/filerules.js'), E8 = 1e8;
+  var H = ['대상FTA', 'Commercial Invoice 번', 'BG', 'BG명', '국가코드', 'Sold-to Party', 'Name', '자재코드', '품명', '수량', '단위', 'HS Code', '거래통화', 'Invoice금액', '단가', '거래통화', '환산금액', '판가', 'CO 번호', 'Invoice금액(CO발급)', 'On Board Date', 'CO(FTA)예비', 'CO(FTA)확정', '확정판정', '철폐스케쥴', 'FTA기본관세율', '적용년도FTA관세율', '적용년도', '기본관세금액1(환산금액)', '기본관세금액2(판가)', 'FTA관세금액1(환산금액)', 'FTA관세금액2(판가)', 'FTA절감관세금액1(환산금액)', 'FTA절감관세금액2(판가)'];
+  function row(fta, ci, bg, bgn, country, hs, amt, base, rate, co, judged) {
+    var r = H.map(function () { return ''; }), s = amt * (base - rate) / 100;
+    r[0] = fta; r[1] = ci; r[2] = bg; r[3] = bgn; r[4] = country; r[6] = '(가상)'; r[11] = hs; r[16] = amt * 0.9; r[17] = amt; r[20] = 46298; r[22] = co; r[23] = judged; r[25] = base; r[26] = rate; r[27] = '2026'; r[32] = s * 0.9; r[33] = s;
+    return r;
+  }
+  var A = [H,
+    row('한-EU', 'GXX0001', 'B110', 'CE', '벨기에', '8431499000', 10 * E8, 4.5, 0, 'KR', 'Y'),
+    row('한-중', 'GXX0002', 'B110', 'CE', '중국', '8408900000', 4 * E8, 5, 1, '', 'N'),          // CO 확정 없음 · 판정 N — 다시 거르지 않음
+    row('한-칠레', 'GXX0003', 'B110', 'CE Gunsan', '칠레', '8429520000', 2 * E8, 6, 0, 'KR', 'Y'),
+    row('한-미', 'GXX0004', 'B110', 'CE', '미국', '8431499000', 20 * E8, 2.5, 2.5, 'KR', 'Y')];  // 판가는 크고 절감은 0
+  var RAW = [H].concat(A.slice(1)).concat(A.slice(1).map(function (r) { var q = r.slice(); q[25] = 0; q[26] = 0; q[33] = 0; q[1] += 'R'; return q; }));   // 원본 — 절반은 세율 비어 있음
+  function pivot(rows, total) { return [['행 레이블', '합계 : 판가', '합계 : FTA절감관세금액2(판가)']].concat(rows).concat([['총합계'].concat(total)]); }
+  var PV = pivot([['한-EU', 10 * E8, 0.45 * E8], ['한-미', 20 * E8, 0], ['한-중', 4 * E8, 0.16 * E8], ['한-칠레', 2 * E8, 0.12 * E8]], [36 * E8, 0.73 * E8]);
+  var PV0 = pivot([['한-EU', 0, 0]], [0, 0]);
+  var EXC = [['대상FTA', 'Commercial Invoice 번', ''], ['한-EU', 'GXX0099', '담당자(가상)']];
+  // 시트 이름 · 순서를 바꿔도 내용으로 고른다(분석본 = FTA기본관세율 > 0 비율이 가장 높은 34열 시트)
+  var book = [{ name: '피벗B', aoa: PV0.concat([[]]).concat(PV) }, { name: '분석(가상)', aoa: A }, { name: 'ERP원본', aoa: RAW }, { name: '빼낸건', aoa: EXC }, { name: '피벗A', aoa: PV }];
+  var name = '2026-10_수출FTA_건기(가상).xlsx', info = FRr.describe(name, null);
+  var r = CU.readExportFta(book, name, info.period.single);
+  eq([info.dataset, info.mode, info.period.text, info.rule, info.bg, r.ok, r.pick.sheet, r.pick.fill, r.candidates.map(function (c) { return c.sheet + ':' + c.fill; })],
+    ['ftaExport', 'confirmed', '2026-10', 'A', '건기본부', true, '분석(가상)', 1, ['분석(가상):1', 'ERP원본:0.5']], 'v2.4.0 분석본 = 34열 시트 중 FTA기본관세율 > 0 비율이 가장 높은 시트(이름 · 순서와 무관) · 비율을 남김');
+  ok(/FTA기본관세율 > 0 인 행 4 \/ 4 = 100\.0% \(다른 시트: ERP원본 50\.0%\)/.test(r.pick.why), 'v2.4.0 왜 그 시트를 골랐는지(채움 비율) 문구');
+  var sA = r.rows.reduce(function (a, x) { return a + x.amount; }, 0), sS = r.rows.reduce(function (a, x) { return a + x.saving; }, 0);
+  eq([r.rows.length, sA / E8, Math.round(sS / 1e4) / 1e4, r.hq, r.month, r.rows[1].coFinal, r.rows[1].judged], [4, 36, 0.73, '건기본부', '2026-10', '', 'N'], 'v2.4.0 모든 행을 그대로(CO확정 없음 · 판정 N 도) · 금액 = 판가(환산금액 아님) · 절감 = FTA절감관세금액2(판가)');
+  eq([r.check.ok, r.check.sheet, r.check.rows.map(function (q) { return q.fta + (q.ok ? '' : 'X'); }), r.pivots, r.excluded.sheet, r.excluded.headers, r.excluded.rows], [true, '피벗B', ['한-EU', '한-미', '한-중', '한-칠레'], 2, '빼낸건', ['대상FTA', 'Commercial Invoice 번', '비고'], [['한-EU', 'GXX0099', '담당자(가상)']]], 'v2.4.0 담당자 피벗과 대조(합계 0 블록은 건너뜀) · 제외 건 시트(이름 없는 열 = 비고)');
+  // 열 순서를 바꿔도 머리글 이름으로
+  var perm = H.map(function (_, i) { return i; }).reverse(), A2 = A.map(function (rr) { return perm.map(function (i) { return rr[i]; }); });
+  var r2 = CU.readExportFta([{ name: 'S', aoa: A2 }], name, '2026-10');
+  eq([r2.ok, r2.rows.reduce(function (a, x) { return a + x.amount; }, 0) / E8, r2.rows[0].hs, r2.rows[0].baseRate, r2.check], [true, 36, '8431499000', 4.5, null], 'v2.4.0 열 번호가 아니라 머리글 이름으로(순서를 거꾸로 해도 같음) · 피벗이 없으면 대조 없음');
+  // 피벗과 다르면 협정별로 차이
+  var PVbad = pivot([['한-EU', 10 * E8, 0.45 * E8], ['한-미', 20 * E8, 0], ['한-중', 4.1 * E8, 0.16 * E8], ['한-칠레', 2 * E8, 0.12 * E8]], [36.1 * E8, 0.73 * E8]);
+  var r3 = CU.readExportFta([{ name: 'a', aoa: A }, { name: 'p', aoa: PVbad }], name, '2026-10'), bad = r3.check.rows.filter(function (q) { return !q.ok; });
+  eq([r3.check.ok, bad.map(function (q) { return q.fta; }), Math.round(bad[0].diffAmount), r3.check.total.ok], [false, ['한-중'], -10000000, false], 'v2.4.0 피벗과 다르면 그 협정 · 차이(원)를 표시');
+  // 분석본이 없는 파일(원본만 — 채움 50%) — 집계하지 않고 알림
+  var r4 = CU.readExportFta([{ name: 'Sheet1', aoa: RAW }], '2026-10_수출FTA_엔진_V1.0(가상).xlsx', '2026-10');
+  ok(!r4.ok && /담당자 분석본\(세율을 채운 시트\)이 없습니다/.test(r4.reason) && r4.rows.length === 0 && CU.EXFTA_MIN_FILL === 0.9, 'v2.4.0 분석본이 없는 파일(가장 높은 채움 < 90%)은 집계하지 않고 알림');
+  // 본부 — 파일 이름이 앞서고, BG 열과 다르면 경고
+  var r5 = CU.readExportFta([{ name: 'a', aoa: A }], '2026-10_수출FTA_엔진(가상).xlsx', '2026-10');
+  eq([r5.hq, r5.rowHq, r5.warnings.filter(function (w) { return /파일 이름은 엔진본부인데 BG 열은 건기본부/.test(w); }).length], ['엔진본부', '건기본부', 1], 'v2.4.0 본부 = 파일 이름(건기 · 엔진) · BG 열(B110 · B111 = 건기, B130 = 엔진)과 다르면 경고');
+  eq([CU.readExportFta([{ name: 'a', aoa: A }], '수출FTA(가상).xlsx', null).hq, CU.readExportFta([{ name: 'a', aoa: A }], '수출FTA(가상).xlsx', null).month], ['건기본부', '2026-10'], 'v2.4.0 이름에 본부 · 월이 없으면 BG 열 · On Board Date 로');
+  // 집계 — 두 파일(같은 달 건기 · 엔진) + 앞 달
+  var EM = [H, row('한-EU', 'E0001', 'B130', 'EM', '독일', '8408900000', 8 * E8, 2.7, 0, 'KR', 'Y'), row('한-중', 'E0002', 'B130', 'EM', '중국', '8408900000', 3 * E8, 5, 1, 'KR', 'Y')];
+  var fE = CU.readExportFta([{ name: 'x', aoa: EM }], '2026-10_수출FTA_엔진(가상).xlsx', '2026-10'), f9 = CU.readExportFta([{ name: 'x', aoa: EM }], '2026-09_수출FTA_엔진(가상).xlsx', '2026-09');
+  var rep = CU.exportFtaReport([r, fE, f9, r4], {}), e = function (v) { return Math.round(v / 1e4) / 1e4; };
+  eq([rep.month, rep.months, e(rep.current.saving), rep.current.amount / E8, rep.current.lines, rep.current.byHq.map(function (q) { return q.hq + ':' + e(q.saving); }), e(rep.cumulative.saving), rep.files.length],
+    ['2026-10', ['2026-09', '2026-10'], 1.066, 47, 6, ['건기본부:0.73', '엔진본부:0.336'], 1.402, 2], 'v2.4.0 두 파일(건기 · 엔진)을 같은 달로 합쳐 전사 · 누적 · 분석본 없는 파일은 빠짐');
+  eq(rep.agreements.map(function (a) { return [a.key, e(a.saving), a.amount / E8, Math.round(a.rate * 10000) / 100]; }), [['한-EU', 0.666, 18, 3.7], ['한-중', 0.28, 7, 4], ['한-칠레', 0.12, 2, 6], ['한-미', 0, 20, 0]], 'v2.4.0 협정별 — 절감액 큰 순서 · 유효절감율(절감 ÷ 판가) — 한-미는 판가가 커도 0%');
+  eq([rep.monthlyHq.map(function (q) { return q.month + ':' + q.rows.map(function (w) { return w.hq; }).join('/'); }), rep.countries[0].key, CU.exportFtaReport([], {}).month], [['2026-09:엔진본부', '2026-10:건기본부/엔진본부'], '벨기에', null], 'v2.4.0 월별 본부별(쌓은 막대) · 국가별 상위');
+  // [8] 세율표 — 분석본에서 모으기 · 커버리지 · 불일치 · 검증용 계산
+  var m1 = CU.exftaRatesMerge(null, r), m2 = CU.exftaRatesMerge(m1.table, r);
+  eq([m1.coverage, m2.coverage.pct, Object.keys(m1.table.rates).length, m1.table.rates['한-EU|8431499000|벨기에'].months['2026-10']], [{ total: 4, existed: 0, added: 4, pct: 0 }, 1, 4, [4.5, 0]], 'v2.4.0 세율표 — (협정 · HS · 국가)별 기본 · FTA 세율 · 커버리지(이미 있던 것 % · 새로 건수)');
+  var r9 = JSON.parse(JSON.stringify(r)); r9.month = '2026-11'; r9.rows[0].baseRate = 4;
+  var m3 = CU.exftaRatesMerge(m1.table, r9), lst = CU.exftaRatesList(m3.table);
+  eq([m3.conflicts.length, lst[0].key, lst[0].conflict, /달마다 다름: 2026-10 4\.5\/0 · 2026-11 4\/0/.test(lst[0].why), m1.table.rates['한-EU|8431499000|벨기에'].conflict], [1, '한-EU|8431499000|벨기에', true, true, false], 'v2.4.0 같은 (협정 · HS · 국가)인데 달마다 세율이 다르면 「세율 불일치」(맨 위로)');
+  var rw = JSON.parse(JSON.stringify(r)); rw.rows.push(Object.assign({}, rw.rows[0], { baseRate: 3 }));
+  ok(CU.exftaRatesMerge(null, rw).conflicts.length === 1, 'v2.4.0 같은 달 안에서 세율이 둘이어도 불일치');
+  var cc = CU.exftaCalc(r.rows, m1.table, '2026-10'), cc9 = CU.exftaCalc(r.rows, m3.table, '2026-11');
+  eq([e(cc.saving), cc.hit, e(cc9.saving)], [0.73, 4, 0.68], 'v2.4.0 검증용 「세율표로 계산하면」 = 판가 × (기본 − FTA)% (그 달 세율 — 세율이 바뀐 달은 값이 벌어짐)');
+  var pk = CU.exftaUnpack(JSON.parse(JSON.stringify(CU.exftaPack([r]))));
+  eq([pk[0].rows.length, pk[0].rows[3].amount, pk[0].pick.sheet, pk[0].check.ok, CU.exftaUnpack(null)], [4, 20 * E8, '분석(가상)', true, []], 'v2.4.0 저장은 읽은 결과만(원본 엑셀 없음) · 되살리기');
+  // 파일 이름 · 내용 판별
+  eq([FRr.describe('2026_10_수출FTA_건기.xlsx', null).period.text, FRr.describe('2026_10_수출FTA_건기.xlsx', null).dataset, FRr.describe('2026_10_수입실적.xlsx', null).period.single, FRr.describe('2026_13_x.xlsx', null).period.text, FRr.describe('2026_수입실적.xlsx', null).period.text],
+    ['2026-10', 'ftaExport', '2026-10', '2026', '2026'], 'v2.4.0 밑줄 연 · 월(2026_10_)도 2026-10 · 월이 13 이면 연도만');
+  ok(CU.isExportFtaBook(book) && !CU.isExportFtaBook([{ name: 's', aoa: CU.sampleImportErp().aoa }]) && FRr.describe('x.xlsx', { kind: 'ftaExport' }).dataset === 'ftaExport', 'v2.4.0 이름이 달라도 내용(대상FTA · 판가 · FTA기본관세율 · FTA절감관세금액2(판가))으로 수출 FTA');
+  ok(CU.KINDS.indexOf('ftaExport') < 0 && CU.KINDS.indexOf('ftaImport') >= 0, 'v2.4.0 수출 FTA 는 실적 묶음(KINDS)에 넣지 않음 — 수입 FTA 와 별개 탭');
+  // 화면
+  var dj = fsx.readFileSync(__dirname + '/../js/dash.js', 'utf8'), dh = fsx.readFileSync(__dirname + '/../dashboard.html', 'utf8');
+  ok(/data-tab="fta"[^>]*>수입 FTA<\/button>\s*<button role="tab" class="tab" data-tab="exfta"[^>]*>수출 FTA</.test(dh) && /id="t-exfta"/.test(dh) && /exfta: renderExportFta/.test(dj), 'v2.4.0 「수출 FTA」 탭(수입 FTA 다음 · 별개)');
+  ok(dj.indexOf("info.dataset === 'ftaExport'") > 0 && dj.indexOf("info.dataset === 'ftaExport'") < dj.indexOf("if (info.group === 'fta' && !info.dataset)"), 'v2.4.0 수출 FTA 분석본은 목록 보관이 아니라 자기 탭으로');
+  var body = dj.slice(dj.indexOf('function renderExportFta()'), dj.indexOf('function renderFta()'));
+  var ord = ['exfta-k-saving', 'exfta-k-cum', 'exfta-k-amount', 'exfta-k-lines', 'exfta-ch-saving', 'exfta-ch-agree', 'exfta-rate-note', "'exfta-agree'", 'exfta-check', "'exfta-country'", 'exfta-excl', 'exfta-foot'].map(function (k) { return body.indexOf(k); });
+  ok(ord.every(function (v, i) { return v > 0 && (!i || v > ord[i - 1]); }) && /C\.hqColor\(hq\)/.test(body) && /유효절감율/.test(body) && /세율표로 계산하면/.test(body), 'v2.4.0 화면 — 카드 4 · 본부별 쌓은 막대(본부 고정색) · 협정별 · 유효절감율 · 피벗 대조 · 국가 · 제외 건 · 하단 근거', JSON.stringify(ord));
+  ok(/\{ id: 'exrates', label: '수출 FTA 세율표 \(분석본에서 모은 세율\)', on: false/.test(dj) && /LS\.files, C\.EXFTA_DATA_KEY\]/.test(dj) && /data-exrates-xlsx/.test(dj) && CU.EXFTA_RATES_KEY === 'b2611-07.exfta.rates', 'v2.4.0 세율표는 지우기 창에서 따로(기본 해제) · 수출 FTA 집계 자료는 실적 데이터 · 설정에서 세율표 내보내기');
 }

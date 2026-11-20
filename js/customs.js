@@ -635,6 +635,177 @@
     });
     return { ym: snap.ym, confirmedAt: snap.confirmedAt, rows: rows };
   }
+  /* ---------- (v2.4.0) 수출 FTA — FTA 담당자 분석본(건기 · 엔진 파일 · 시트 5개). 수입 FTA 와 완전히 별개 ----------
+     수입 = 우리가 아낀 관세(확정값), 수출 = 바이어가 아낀 관세(대표세율 기반). B단계: 담당자가 채운 절감액을 그대로 더한다(세율로 다시 계산하지 않음).
+     시트는 이름이 아니라 내용으로 고른다 — 머리글(대상FTA … FTA절감관세금액2(판가))이 같은 시트 중 FTA기본관세율 > 0 인 행 비율이 가장 높은 시트 = 분석본. */
+  var EXFTA_COLS = {
+    fta: ['대상FTA'], invoice: ['Commercial Invoice 번', 'Commercial Invoice 번호', 'Commercial Invoice No'], bg: ['BG'], bgName: ['BG명'], country: ['국가코드'], buyer: ['Name'],
+    hs: ['HS Code', 'HS코드'], amount: ['판가'], coFinal: ['CO(FTA)확정'], judged: ['확정판정'], baseRate: ['FTA기본관세율'], ftaRate: ['적용년도FTA관세율'], rateYear: ['적용년도'],
+    saving: ['FTA절감관세금액2(판가)'], date: ['On Board Date']
+  };
+  var EXFTA_REQ = ['fta', 'amount', 'saving', 'baseRate'];
+  var EXFTA_BG = { B110: '건기본부', B111: '건기본부', B130: '엔진본부' }, EXFTA_BGNAME = { CE: '건기본부', EM: '엔진본부' };
+  var EXFTA_MIN_FILL = 0.9;   // 가장 잘 채워진 시트가 이보다 낮으면 「분석본 없음」(원본만 있는 파일) — 집계하지 않는다
+  var EXFTA_DATA_KEY = 'b2611-07.exfta.data', EXFTA_RATES_KEY = 'b2611-07.exfta.rates';
+  var EXFTA_BASIS = '담당자 분석본 기준 · 판가(원화) · 절감액 = 담당자가 채운 FTA절감관세금액2(판가) 그대로(B단계 — 세율로 다시 계산하지 않음)';
+  function hn(h) { return clean(h).replace(/\s+/g, '').toLowerCase(); }
+  function exftaMap(headers) {
+    var H = (headers || []).map(hn), map = {}, missing = [];
+    Object.keys(EXFTA_COLS).forEach(function (k) { var i = -1; EXFTA_COLS[k].some(function (n) { i = H.indexOf(hn(n)); return i >= 0; }); map[k] = i; });
+    EXFTA_REQ.forEach(function (k) { if (map[k] < 0) missing.push(EXFTA_COLS[k][0]); });
+    return { map: map, missing: missing };
+  }
+  function exNum(v) { if (typeof v === 'number') return isFinite(v) ? v : 0; var n = Number(clean(v).replace(/,/g, '')); return isFinite(n) ? n : 0; }
+  function exHs(v) { var d = clean(v).replace(/\.0+$/, '').replace(/\D/g, ''); if (d.length === 9) d = '0' + d; return d; }
+  function exftaHqOfName(name) { var s = String(name || ''); return /건기/.test(s) ? '건기본부' : /엔진/.test(s) ? '엔진본부' : null; }
+  function exftaHqOfRow(bg, bgName) { var b = clean(bg).toUpperCase(), n = clean(bgName).toUpperCase().split(' ')[0]; return EXFTA_BG[b] || EXFTA_BGNAME[n] || null; }
+  function headerRowOf(aoa) { for (var i = 0; i < Math.min(6, aoa.length); i++) if ((aoa[i] || []).some(function (c) { return hn(c) === hn('대상FTA'); })) return i; return -1; }
+  // 피벗 블록 — 「행 레이블 | 합계 : 판가 | 합계 : FTA절감관세금액2(판가)」 … 「총합계」. 합계가 0 인 블록(필터가 걸린 채 남은 것)은 뺀다.
+  function exftaPivots(name, aoa) {
+    var out = [];
+    for (var i = 0; i < aoa.length; i++) {
+      var r = aoa[i] || []; if (hn(r[0]) !== hn('행 레이블')) continue;
+      var ca = -1, cs = -1; r.forEach(function (c, j) { var h = hn(c); if (/판가/.test(h) && !/절감/.test(h) && ca < 0) ca = j; if (/절감/.test(h) && cs < 0) cs = j; });
+      if (ca < 0 || cs < 0) continue;
+      var rows = {}, total = null;
+      for (var k = i + 1; k < aoa.length; k++) {
+        var q = aoa[k] || [], lab = clean(q[0]); if (!lab) break;
+        if (hn(lab) === hn('행 레이블')) break;
+        if (lab === '총합계') { total = { amount: exNum(q[ca]), saving: exNum(q[cs]) }; break; }
+        rows[lab] = { amount: exNum(q[ca]), saving: exNum(q[cs]) };
+      }
+      if (total && (total.amount || total.saving)) out.push({ sheet: name, rows: rows, total: total });
+    }
+    return out;
+  }
+  // sheets = [{ name, aoa(원본 그대로) }] · fileName · forceMonth(파일 이름 월) → 한 파일 결과
+  function readExportFta(sheets, fileName, forceMonth) {
+    var cands = [], pivots = [], excl = null, warnings = [];
+    (sheets || []).forEach(function (s, si) {
+      var aoa = s.aoa || [], hr = headerRowOf(aoa);
+      var pv = exftaPivots(s.name, aoa); if (pv.length) { pivots = pivots.concat(pv); return; }
+      if (hr < 0) return;
+      var mp = exftaMap(aoa[hr]);
+      if (!mp.missing.length) {
+        var rows = aoa.slice(hr + 1).filter(function (r) { return (r || []).some(function (c) { return clean(c); }); });
+        var filled = rows.filter(function (r) { return exNum(r[mp.map.baseRate]) > 0; }).length;
+        cands.push({ name: s.name, index: si, headers: aoa[hr].map(clean), map: mp.map, rows: rows, n: rows.length, filled: filled, fill: rows.length ? filled / rows.length : 0 });
+      } else if (!excl && mp.map.fta >= 0 && mp.map.invoice >= 0) {
+        // 담당자 제외 건 — 머리글에 대상FTA · Commercial Invoice 번이 있고 분석 열이 없는 시트. 이름 없는 열은 「비고」.
+        var H = aoa[hr].map(function (h, j) { return clean(h) || '비고' + (j > 0 ? '' : ''); });
+        var used = aoa.slice(hr + 1).filter(function (r) { return (r || []).some(function (c) { return clean(c); }); });
+        var keep = H.map(function (h, j) { return used.some(function (r) { return clean(r[j]); }) || clean(aoa[hr][j]) ? j : -1; }).filter(function (j) { return j >= 0; });
+        excl = { sheet: s.name, headers: keep.map(function (j) { return H[j]; }), rows: used.map(function (r) { return keep.map(function (j) { var v = r[j]; return v == null ? '' : v; }); }) };
+      }
+    });
+    cands.sort(function (a, b) { return b.fill - a.fill || b.filled - a.filled; });
+    var pick = cands[0] || null, nameHq = exftaHqOfName(fileName);
+    var res = { file: fileName, nameHq: nameHq, hq: nameHq, month: forceMonth || null, candidates: cands.map(function (c) { return { sheet: c.name, rows: c.n, filled: c.filled, fill: c.fill }; }),
+      pick: null, ok: false, reason: '', rows: [], excluded: excl || { sheet: null, headers: [], rows: [] }, pivot: pivots[0] || null, pivots: pivots.length, warnings: warnings };
+    if (!pick) { res.reason = '분석 시트를 찾지 못함 — 머리글에 ' + EXFTA_REQ.map(function (k) { return EXFTA_COLS[k][0]; }).join(' · ') + ' 가 있는 시트가 없습니다.'; return res; }
+    res.pick = { sheet: pick.name, rows: pick.n, filled: pick.filled, fill: pick.fill, why: 'FTA기본관세율 > 0 인 행 ' + pick.filled + ' / ' + pick.n + ' = ' + (pick.fill * 100).toFixed(1) + '%' + (cands.length > 1 ? ' (다른 시트: ' + cands.slice(1).map(function (c) { return c.name + ' ' + (c.fill * 100).toFixed(1) + '%'; }).join(' · ') + ')' : '') };
+    if (pick.fill < EXFTA_MIN_FILL) { res.reason = '담당자 분석본(세율을 채운 시트)이 없습니다 — 가장 잘 채워진 시트 「' + pick.name + '」도 ' + (pick.fill * 100).toFixed(1) + '%(원본만 있는 파일). 집계하지 않았습니다.'; return res; }
+    var m = pick.map, months = {}, hqs = {};
+    res.rows = pick.rows.map(function (r) {
+      var d = m.date >= 0 ? parseDate(r[m.date]) : null, hq = exftaHqOfRow(m.bg >= 0 ? r[m.bg] : '', m.bgName >= 0 ? r[m.bgName] : '');
+      if (hq) hqs[hq] = (hqs[hq] || 0) + 1; if (d) months[d.month] = (months[d.month] || 0) + 1;
+      return { fta: clean(r[m.fta]) || '(협정 없음)', invoice: m.invoice >= 0 ? clean(r[m.invoice]) : '', bg: m.bg >= 0 ? clean(r[m.bg]) : '', hq: hq, country: m.country >= 0 ? clean(r[m.country]) || '(국가 없음)' : '(국가 없음)',
+        buyer: m.buyer >= 0 ? clean(r[m.buyer]) : '', hs: m.hs >= 0 ? exHs(r[m.hs]) : '', amount: exNum(r[m.amount]), saving: exNum(r[m.saving]), baseRate: exNum(r[m.baseRate]), ftaRate: m.ftaRate >= 0 ? exNum(r[m.ftaRate]) : 0,
+        coFinal: m.coFinal >= 0 ? clean(r[m.coFinal]) : '', judged: m.judged >= 0 ? clean(r[m.judged]) : '', boardMonth: d ? d.month : null };
+    });
+    var rowHq = Object.keys(hqs).sort(function (a, b) { return hqs[b] - hqs[a]; })[0] || null;
+    if (nameHq && rowHq && nameHq !== rowHq) warnings.push('파일 이름은 ' + nameHq + '인데 BG 열은 ' + rowHq + '입니다 — 파일 이름을 따릅니다. 확인이 필요합니다.');
+    res.hq = nameHq || rowHq || '본부 미분류'; res.rowHq = rowHq;
+    if (!res.month) { var bm = Object.keys(months).sort(function (a, b) { return months[b] - months[a]; })[0]; res.month = bm || null; if (bm) warnings.push('파일 이름에 월이 없어 On Board Date 로 ' + bm + ' 로 봤습니다.'); }
+    if (!res.month) { res.reason = '월을 정하지 못함 — 파일 이름(2026-10_수출FTA_건기)이나 On Board Date 가 필요합니다.'; return res; }
+    if (!pivots.length) warnings.push('담당자 피벗(행 레이블 · 합계 : 판가 · 합계 : FTA절감관세금액2(판가))을 찾지 못해 대조하지 않았습니다.');
+    res.ok = true; res.check = exftaCheck(res);
+    return res;
+  }
+  // [5] 담당자 피벗과 대조 — 협정별 판가 합 · 절감액 합. 0.5원 넘게 다르면 다름(소수 반올림 흔들림은 같게).
+  function exftaGroup(rows, key) {
+    var g = {}; rows.forEach(function (r) { var k = r[key], o = g[k] || (g[k] = { key: k, lines: 0, amount: 0, saving: 0 }); o.lines++; o.amount += r.amount; o.saving += r.saving; });
+    return Object.keys(g).map(function (k) { var o = g[k]; o.rate = ratio(o.saving, o.amount); return o; }).sort(function (a, b) { return b.saving - a.saving || b.amount - a.amount; });
+  }
+  function exftaCheck(res) {
+    if (!res.pivot) return null;
+    var ours = {}; exftaGroup(res.rows, 'fta').forEach(function (o) { ours[o.key] = o; });
+    var keys = Object.keys(ours).concat(Object.keys(res.pivot.rows)).filter(function (k, i, a) { return a.indexOf(k) === i; }).sort();
+    var rows = keys.map(function (k) {
+      var a = ours[k] || { amount: 0, saving: 0, lines: 0 }, p = res.pivot.rows[k] || null, dA = p ? a.amount - p.amount : null, dS = p ? a.saving - p.saving : null;
+      return { fta: k, ours: { amount: a.amount, saving: a.saving, lines: a.lines }, pivot: p, diffAmount: dA, diffSaving: dS, ok: !!p && Math.abs(dA) < 0.5 && Math.abs(dS) < 0.5 };
+    });
+    var sumA = res.rows.reduce(function (s, r) { return s + r.amount; }, 0), sumS = res.rows.reduce(function (s, r) { return s + r.saving; }, 0), t = res.pivot.total;
+    return { sheet: res.pivot.sheet, rows: rows, total: { ours: { amount: sumA, saving: sumS }, pivot: t, ok: Math.abs(sumA - t.amount) < 0.5 && Math.abs(sumS - t.saving) < 0.5 }, ok: rows.every(function (r) { return r.ok; }) && Math.abs(sumA - t.amount) < 0.5 && Math.abs(sumS - t.saving) < 0.5 };
+  }
+  // 여러 파일(달 · 본부) → 탭 화면용. files = readExportFta 결과(ok 만) · opts = { month, rates }
+  function exportFtaReport(files, opts) {
+    opts = opts || {}; var ok = (files || []).filter(function (f) { return f && f.ok; }), ms = {};
+    var ho = function (h) { var i = FTA_HQ_ORDER.indexOf(h); return i < 0 ? 99 : i; };
+    ok = ok.slice().sort(function (a, b) { return a.month.localeCompare(b.month) || ho(a.hq) - ho(b.hq); });   // 본부 고정 순서(부품 · 건기 · 엔진)
+    ok.forEach(function (f) { ms[f.month] = 1; });
+    var months = Object.keys(ms).sort(), month = opts.month && ms[opts.month] ? opts.month : months[months.length - 1] || null;
+    if (!month) return { month: null, months: [], files: ok };
+    var year = month.slice(0, 4), cur = [], cum = [];
+    ok.forEach(function (f) { f.rows.forEach(function (r) { var x = Object.assign({ fileHq: f.hq }, r); if (f.month === month) cur.push(x); if (f.month >= year + '-01' && f.month <= month) cum.push(x); }); });
+    function sum(rows) { var a = 0, s = 0; rows.forEach(function (r) { a += r.amount; s += r.saving; }); return { lines: rows.length, amount: a, saving: s, rate: ratio(s, a) }; }
+    var hqs = FTA_HQ_ORDER.slice(); ok.forEach(function (f) { if (hqs.indexOf(f.hq) < 0) hqs.push(f.hq); });
+    var monthlyHq = months.map(function (m) { return { month: m, rows: hqs.map(function (h) { var rs = []; ok.forEach(function (f) { if (f.month === m && f.hq === h) rs = rs.concat(f.rows); }); return Object.assign({ hq: h }, sum(rs)); }).filter(function (q) { return q.lines; }) }; });
+    var calc = opts.rates ? function (rows) { return exftaCalc(rows, opts.rates, month); } : null;
+    var agree = exftaGroup(cur, 'fta'), agreeCum = exftaGroup(cum, 'fta');
+    if (calc) { agree.forEach(function (a) { a.calc = calc(cur.filter(function (r) { return r.fta === a.key; })); }); }
+    return {
+      month: month, months: months, year: year, basis: EXFTA_BASIS,
+      current: Object.assign(sum(cur), { byHq: hqs.map(function (h) { return Object.assign({ hq: h }, sum(cur.filter(function (r) { return r.fileHq === h; }))); }).filter(function (q) { return q.lines; }), calc: calc ? calc(cur) : null }),
+      cumulative: sum(cum), monthlyHq: monthlyHq, agreements: agree, agreementsCum: agreeCum,
+      countries: exftaGroup(cur, 'country').slice(0, 10),
+      files: ok.filter(function (f) { return f.month === month; }), allFiles: files || []
+    };
+  }
+  /* ---------- [8] A단계로 가는 다리 — 분석본에서 세율을 거꾸로 모아 세율표를 키운다(localStorage b2611-07.exfta.rates) ----------
+     { v, updatedAt, rates: { '협정|HS|국가': { fta, hs, country, months: { 'YYYY-MM': [기본, FTA] }, conflict, firstSeen, lastSeen } } }
+     같은 (협정 · HS · 국가)인데 달마다(또는 같은 달 안에서) 세율이 다르면 conflict — 연도 바뀜이거나 입력 오류. */
+  function exftaRateKey(r) { return [r.fta, r.hs, r.country].join('|'); }
+  function exftaRatesValid(t) { return t && t.v === 1 && t.rates ? t : null; }
+  function exftaRatesMerge(table, file) {
+    var t = exftaRatesValid(table) ? JSON.parse(JSON.stringify(table)) : { v: 1, updatedAt: null, rates: {} }, seen = {}, existed = 0, added = 0, conflicts = [];
+    (file.rows || []).forEach(function (r) {
+      if (!r.hs || !(r.baseRate > 0)) return;
+      var k = exftaRateKey(r), v = [r.baseRate, r.ftaRate];
+      if (!seen[k]) { seen[k] = 1; if (t.rates[k]) existed++; else added++; }
+      var o = t.rates[k] || (t.rates[k] = { fta: r.fta, hs: r.hs, country: r.country, months: {}, conflict: false, firstSeen: file.month, lastSeen: file.month });
+      var cur = o.months[file.month];
+      if (!cur) o.months[file.month] = v;
+      else if (cur[0] !== v[0] || cur[1] !== v[1]) { if (!o.conflict) conflicts.push({ key: k, month: file.month, a: cur, b: v }); o.conflict = true; o.conflictWhy = file.month + ' 안에서 ' + cur.join('/') + ' ↔ ' + v.join('/'); }
+      if (file.month < o.firstSeen) o.firstSeen = file.month; if (file.month > o.lastSeen) o.lastSeen = file.month;
+      var vals = Object.keys(o.months).map(function (m) { return o.months[m].join('/'); }).filter(function (x, i, a) { return a.indexOf(x) === i; });
+      if (vals.length > 1 && !o.conflict) { o.conflict = true; o.conflictWhy = '달마다 다름: ' + Object.keys(o.months).sort().map(function (m) { return m + ' ' + o.months[m].join('/'); }).join(' · '); conflicts.push({ key: k, month: file.month }); }
+    });
+    t.updatedAt = new Date().toISOString();
+    var total = existed + added;
+    return { table: t, coverage: { total: total, existed: existed, added: added, pct: total ? existed / total : null }, conflicts: conflicts };
+  }
+  // 검증용 「세율표로 계산하면」 — 판가 × (기본 − FTA)% . 그 달 값이 있으면 그 값, 없으면 가장 최근 달 값. 표에 없으면 담당자 값.
+  function exftaCalc(rows, table, month) {
+    var t = exftaRatesValid(table); if (!t) return null;
+    var s = 0, hit = 0; (rows || []).forEach(function (r) {
+      var o = t.rates[exftaRateKey(r)], v = null;
+      if (o) { v = o.months[month] || o.months[Object.keys(o.months).filter(function (m) { return m <= month; }).sort().pop()] || null; }
+      if (v) { s += r.amount * (v[0] - v[1]) / 100; hit++; } else s += r.saving;
+    });
+    return { saving: s, hit: hit, rows: (rows || []).length };
+  }
+  function exftaRatesList(table) {
+    var t = exftaRatesValid(table); if (!t) return [];
+    return Object.keys(t.rates).map(function (k) { var o = t.rates[k], ms = Object.keys(o.months).sort(), last = o.months[ms[ms.length - 1]]; return { key: k, fta: o.fta, hs: o.hs, country: o.country, base: last[0], rate: last[1], months: ms, conflict: !!o.conflict, why: o.conflictWhy || '' }; })
+      .sort(function (a, b) { return (b.conflict ? 1 : 0) - (a.conflict ? 1 : 0) || a.fta.localeCompare(b.fta) || a.hs.localeCompare(b.hs) || a.country.localeCompare(b.country); });
+  }
+  // 저장(대시보드) — 원본 엑셀이 아니라 읽은 결과만. 줄은 열 이름 한 번 + 값 배열.
+  var EXFTA_ROWCOLS = ['fta', 'invoice', 'bg', 'hq', 'country', 'buyer', 'hs', 'amount', 'saving', 'baseRate', 'ftaRate', 'coFinal', 'judged', 'boardMonth'];
+  function exftaPack(files) { return { v: 1, files: (files || []).map(function (f) { var o = Object.assign({}, f); o.rows = (f.rows || []).map(function (r) { return EXFTA_ROWCOLS.map(function (c) { return r[c] == null ? null : r[c]; }); }); o.rowCols = EXFTA_ROWCOLS; return o; }) }; }
+  function exftaUnpack(j) { if (!j || j.v !== 1 || !Array.isArray(j.files)) return []; return j.files.map(function (o) { var f = Object.assign({}, o), cols = o.rowCols || EXFTA_ROWCOLS; f.rows = (o.rows || []).map(function (a) { var r = {}; cols.forEach(function (c, i) { r[c] = a[i]; }); return r; }); delete f.rowCols; return f; }); }
+  // 내용만으로 수출 FTA 분석본인지 — 대상FTA · 판가 · FTA기본관세율 · FTA절감관세금액2(판가) 머리글이 있는 시트가 있으면
+  function isExportFtaBook(sheets) { return (sheets || []).some(function (s) { var hr = headerRowOf(s.aoa || []); return hr >= 0 && !exftaMap(s.aoa[hr]).missing.length; }); }
   function eok(v) { return v == null ? null : Math.round(v / 1e6) / 100; }   // 원 → 억원(소수 둘째 자리)
   function exportBasis(opts) { return (opts && opts.excludeGN === false ? 'GN 포함' : 'GN 제외') + ' · 건수는 신고번호 기준'; }
   // (v1.9.0) 수입 실적 기준 문구. has = { payment, declNo } — 그 열이 없는 파일(예전 한글 예제)에는 해당 문구를 붙이지 않는다.
@@ -1723,6 +1894,7 @@
     exportBook: exportBook,
     libValidate: libValidate, libAdd: libAdd, libRemove: libRemove, libSearch: libSearch, libCounts: libCounts, libToAoa: libToAoa,
     libFromRows: libFromRows, libSample: libSample, libLocationKind: libLocationKind,
+    readExportFta: readExportFta, exportFtaReport: exportFtaReport, exftaRatesMerge: exftaRatesMerge, exftaCalc: exftaCalc, exftaRatesList: exftaRatesList, exftaPack: exftaPack, exftaUnpack: exftaUnpack, isExportFtaBook: isExportFtaBook, exftaMap: exftaMap, exftaHqOfName: exftaHqOfName, EXFTA_DATA_KEY: EXFTA_DATA_KEY, EXFTA_RATES_KEY: EXFTA_RATES_KEY, EXFTA_BASIS: EXFTA_BASIS, EXFTA_MIN_FILL: EXFTA_MIN_FILL,
     ftaImportReport: ftaImportReport, ftaAgreeGroups: ftaAgreeGroups, ftaHs6: ftaHs6, prevMonthOf: prevMonthOf, HQ_COLORS: HQ_COLORS, hqColor: hqColor, FTA_AGREE_TOP: FTA_AGREE_TOP, ftaSnapshot: ftaSnapshot, ftaCompare: ftaCompare, ftaApplied: ftaApplied, eok: eok, FTA_NA_NAMES: FTA_NA_NAMES, FTA_AGREEMENTS: FTA_AGREEMENTS, FTA_HQ_ORDER: FTA_HQ_ORDER, FTA_BASIS: FTA_BASIS,
     sampleFiles: sampleFiles, aoaToRows: aoaToRows, skippedSheetNote: skippedSheetNote
   };

@@ -56,7 +56,8 @@
   ];
   // → { type(1~7), text, from, to(YYYY-MM-DD), months[YYYY-MM], unit('day'|'month'|'year'), confirmed, single(한 달이면 그 YYYY-MM) } 또는 null
   function periodOfName(name) {
-    var s = baseName(name);
+    // (v2.4.0) 「2026_10_수출FTA_건기」처럼 밑줄로 쓴 연 · 월도 2026-10 으로(월 01~12 일 때만)
+    var s = baseName(name).replace(/(^|[^\d])(20\d{2})_(0[1-9]|1[0-2])(?=[^\d]|$)/g, '$1$2-$3');
     for (var i = 0; i < PATTERNS.length; i++) {
       var p = PATTERNS[i], m = s.match(p.re); if (!m) continue;
       var n = m.slice(1).map(Number), r = build(p.type, n);
@@ -97,18 +98,20 @@
     // 실적(수입 · 수출)은 파일 전체를 이 월로. 환급 · 결정문은 담당자 자료라 행 날짜를 그대로 두고, 파일 이름 월과 다르면 알리기만 한다.
     if (period && period.single && group === 'perf') return { code: 'A', text: '파일 이름 ' + period.single + ' — 파일 전체를 이 월로', forceMonth: period.single };
     // (v2.1.0) 수입 FTA — 파일 이름 월로 몰아넣지 않고 수리일자로 귀속, 파일 이름 기간 밖은 집계에서 빼고 알림
+    // (v2.4.0) 수출 FTA(담당자 분석본) — 파일 이름 월로 파일 전체(건기 · 엔진 파일이 곧 그 달 본부 실적)
+    if (io === '수출' && group === 'fta') return period && period.single ? { code: 'A', text: '파일 이름 ' + period.single + ' — 담당자 분석본 전체를 이 월로', forceMonth: period.single } : { code: 'C', text: '행마다 On Board Date (파일 이름에 월 없음)', forceMonth: null };
     if (period && group === 'fta') return { code: 'B', text: '행마다 수리일자(Acceptance date) — 파일 이름 ' + period.text + ' 밖은 집계에서 뺌', forceMonth: null };
     if (period && period.single) return { code: 'A', text: '파일 이름 ' + period.single + ' (행 날짜가 다르면 알림)', forceMonth: null };
     if (period) return { code: 'B', text: '행마다 ' + col + ' (파일 이름 ' + period.text + ')', forceMonth: null };
     return { code: 'C', text: '행마다 ' + col + ' (파일 이름에 기간 없음)', forceMonth: null };
   }
-  var DATE_COL = { import: 'Acceptance date', export: 'Declaration Date', ftaImport: 'Acceptance date' };
+  var DATE_COL = { import: 'Acceptance date', export: 'Declaration Date', ftaImport: 'Acceptance date', ftaExport: 'On Board Date' };
   var BASIS_TEXT = '수입: 수리일자 기준 / 수출: 신고일자 기준';
 
   /* ---------- 파일 하나 판별 ---------- */
   // detect = 내용 판별 결과(customs.detectKind → { kind }) — 없으면 null. → 판별 정보(파일 목록 · 저장에 그대로 쓴다)
   var IO_OF_DATASET = { import: '수입', export: '수출' };
-  var DATASET_LABEL = { import: '수입 실적', export: '수출 실적', refund: '관세환급', ruling: '품목분류 결정문', ftaImport: '수입 FTA 실적' };   // (v2.0.0) errors 폐지 · (v2.1.0) 수입 FTA
+  var DATASET_LABEL = { import: '수입 실적', export: '수출 실적', refund: '관세환급', ruling: '품목분류 결정문', ftaImport: '수입 FTA 실적', ftaExport: '수출 FTA(담당자 분석본)' };   // (v2.0.0) errors 폐지 · (v2.1.0) 수입 FTA
   function describe(name, detect) {
     var byName = kindByName(name), exp = isExportName(name), period = periodOfName(name), warnings = [];
     var contentKind = detect && detect.kind || null, dataset = null, how = '', io = byName ? byName.io : null, group = byName ? byName.group : null;
@@ -132,7 +135,9 @@
       group = contentKind === 'refund' ? 'refund' : contentKind === 'ruling' ? 'ruling' : contentKind === 'ftaImport' ? 'fta' : contentKind ? 'perf' : null;
     }
     // (v2.1.0) 수입 FTA 는 자기 탭(ftaImport)으로 — 수입실적 합계에는 넣지 않는다(같은 신고를 란 단위로 받은 자료 · 물자대 두 번 방지). 수출 FTA 는 아직 목록에만.
-    if (group === 'fta') { io = io || (contentKind === 'ftaImport' ? '수입' : null); dataset = io === '수출' ? null : (io === '수입' || contentKind === 'ftaImport') ? 'ftaImport' : null; }
+    // (v2.4.0) 수출 FTA = 담당자 분석본 — 자기 탭(ftaExport). 수입 FTA 와 합치지 않는다. 본부는 파일 이름(건기 · 엔진) · 분석본 BG 열로.
+    if (contentKind === 'ftaExport' && !group) { group = 'fta'; io = '수출'; }
+    if (group === 'fta') { io = io || (contentKind === 'ftaImport' ? '수입' : contentKind === 'ftaExport' ? '수출' : null); dataset = io === '수출' ? 'ftaExport' : (io === '수입' || contentKind === 'ftaImport') ? 'ftaImport' : null; }
     var mode = fileMode(group, period, exp), rule = monthRule(group, period, io);
     if (!group && !dataset) warnings.push('종류를 판별하지 못함');
     // 「기간을 판별하지 못함」은 파일 이름 · 행 날짜(오류점수는 시트 이름) 모두 없을 때 — 읽은 뒤에 화면 쪽에서 붙인다(dataWarnings)
@@ -141,7 +146,7 @@
       name: String(name || ''), group: group, label: label,
       io: io, part: byName ? byName.part : null, dataset: dataset, how: how, exportName: exp,
       period: period, mode: mode.mode, modeWhy: mode.why, rule: rule.code, ruleText: rule.text, forceMonth: rule.forceMonth,
-      dateCol: dataset ? DATE_COL[dataset] || null : null, warnings: warnings
+      dateCol: dataset ? DATE_COL[dataset] || null : null, warnings: warnings, bg: dataset === 'ftaExport' ? (/건기/.test(baseName(name)) ? '건기본부' : /엔진/.test(baseName(name)) ? '엔진본부' : null) : null
     };
   }
 

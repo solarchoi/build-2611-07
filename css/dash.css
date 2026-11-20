@@ -125,3 +125,9 @@ dialog.clear-dlg{border:1px solid var(--line); border-radius:12px; padding:18px 
 dialog.clear-dlg::backdrop{background:rgba(10,25,40,.35);}
 dialog.clear-dlg label.chk{display:flex; gap:8px; align-items:flex-start; margin:8px 0; font-size:14px; line-height:1.4;}
 dialog.clear-dlg label.chk input{margin-top:3px;}
+
+/* (v2.4.0) 수출 FTA — 피벗 대조 차이(빨강) · 세율 불일치 */
+.badge.bad{color:#9b2c22; background:#fdecea; border-color:#e8a59d;}
+span.diff,b.diff{color:#c0362c; font-weight:700;}
+table.exfta-check tr[data-bad] td{background:#fff5f4;}
+table.exrates tr.conflict td{background:#fff5f4;}
