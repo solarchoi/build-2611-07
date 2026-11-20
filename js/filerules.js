@@ -96,17 +96,19 @@
     if (group === 'errscore') return period && period.single ? { code: 'A', text: '파일 이름 ' + period.single + ' (오류점수는 파일 이름 · 시트 이름만)', forceMonth: period.single } : { code: 'C', text: '시트 이름의 월 (오류점수는 날짜 열을 쓰지 않음)', forceMonth: null };
     // 실적(수입 · 수출)은 파일 전체를 이 월로. 환급 · 결정문은 담당자 자료라 행 날짜를 그대로 두고, 파일 이름 월과 다르면 알리기만 한다.
     if (period && period.single && group === 'perf') return { code: 'A', text: '파일 이름 ' + period.single + ' — 파일 전체를 이 월로', forceMonth: period.single };
+    // (v2.1.0) 수입 FTA — 파일 이름 월로 몰아넣지 않고 수리일자로 귀속, 파일 이름 기간 밖은 집계에서 빼고 알림
+    if (period && group === 'fta') return { code: 'B', text: '행마다 수리일자(Acceptance date) — 파일 이름 ' + period.text + ' 밖은 집계에서 뺌', forceMonth: null };
     if (period && period.single) return { code: 'A', text: '파일 이름 ' + period.single + ' (행 날짜가 다르면 알림)', forceMonth: null };
     if (period) return { code: 'B', text: '행마다 ' + col + ' (파일 이름 ' + period.text + ')', forceMonth: null };
     return { code: 'C', text: '행마다 ' + col + ' (파일 이름에 기간 없음)', forceMonth: null };
   }
-  var DATE_COL = { import: 'Acceptance date', export: 'Declaration Date' };
+  var DATE_COL = { import: 'Acceptance date', export: 'Declaration Date', ftaImport: 'Acceptance date' };
   var BASIS_TEXT = '수입: 수리일자 기준 / 수출: 신고일자 기준';
 
   /* ---------- 파일 하나 판별 ---------- */
   // detect = 내용 판별 결과(customs.detectKind → { kind }) — 없으면 null. → 판별 정보(파일 목록 · 저장에 그대로 쓴다)
   var IO_OF_DATASET = { import: '수입', export: '수출' };
-  var DATASET_LABEL = { import: '수입 실적', export: '수출 실적', refund: '관세환급', ruling: '품목분류 결정문' };   // (v2.0.0) errors(오류 비율 표) 종류 폐지
+  var DATASET_LABEL = { import: '수입 실적', export: '수출 실적', refund: '관세환급', ruling: '품목분류 결정문', ftaImport: '수입 FTA 실적' };   // (v2.0.0) errors 폐지 · (v2.1.0) 수입 FTA
   function describe(name, detect) {
     var byName = kindByName(name), exp = isExportName(name), period = periodOfName(name), warnings = [];
     var contentKind = detect && detect.kind || null, dataset = null, how = '', io = byName ? byName.io : null, group = byName ? byName.group : null;
@@ -127,9 +129,10 @@
       if (byName.group === 'perf' && io && cIo2 && cIo2 !== io) warnings.push('파일명은 ' + io + '인데 내용은 ' + cIo2 + '로 보입니다. 확인이 필요합니다.');
     } else {
       dataset = contentKind; how = '내용'; io = IO_OF_DATASET[contentKind] || null;
-      group = contentKind === 'refund' ? 'refund' : contentKind === 'ruling' ? 'ruling' : contentKind ? 'perf' : null;
+      group = contentKind === 'refund' ? 'refund' : contentKind === 'ruling' ? 'ruling' : contentKind === 'ftaImport' ? 'fta' : contentKind ? 'perf' : null;
     }
-    if (group === 'fta') dataset = null;                      // FTA 는 다음 단계 — 실적 합계에 넣지 않는다(물자대 두 번 방지)
+    // (v2.1.0) 수입 FTA 는 자기 탭(ftaImport)으로 — 수입실적 합계에는 넣지 않는다(같은 신고를 란 단위로 받은 자료 · 물자대 두 번 방지). 수출 FTA 는 아직 목록에만.
+    if (group === 'fta') { io = io || (contentKind === 'ftaImport' ? '수입' : null); dataset = io === '수출' ? null : (io === '수입' || contentKind === 'ftaImport') ? 'ftaImport' : null; }
     var mode = fileMode(group, period, exp), rule = monthRule(group, period, io);
     if (!group && !dataset) warnings.push('종류를 판별하지 못함');
     // 「기간을 판별하지 못함」은 파일 이름 · 행 날짜(오류점수는 시트 이름) 모두 없을 때 — 읽은 뒤에 화면 쪽에서 붙인다(dataWarnings)

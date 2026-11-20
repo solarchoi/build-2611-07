@@ -87,6 +87,27 @@
         { key: 'amount', label: '환급액', type: 'num', req: true, aliases: ['환급금액', '환급금', '관세환급액', '환급세액', '결정금액'] },
         { key: 'count', label: '건수', type: 'num', aliases: ['환급건수', '신청건수', '결정건수'] }
       ]
+    },
+    // (v2.1.0) 수입 FTA — ERP 수입FTA 다운로드(Sheet1 · 63열, 한 줄 = 한 란). 수입실적과 같은 수입신고를 란 단위로 내려받은 자료라
+    //   수입실적 합계에는 더하지 않고 「수입 FTA」 탭에서만 따로 집계한다(ftaImportReport). 열은 머리글 이름으로만 찾는다.
+    //   원화 물자대 = (\)Taxable.Amt(한글 글꼴에서 ₩ 로 보임) — 바로 옆 ($)Taxable.Amt(달러)는 짝짓지 않는다. 같은 이름 열(Short Descript. · Vendor Name)은 uniqueHeaders 로 구분.
+    //   판정 열: Tariff Reductions · FTA N/A Code · N/A Reason · Column sequence number(수입실적 파일에는 없음).
+    ftaImport: {
+      label: '수입 FTA 실적', source: 'ERP 엑셀(수입FTA)', cycle: '매월', hint: /fta/i, decisive: ['Tariff Reductions', 'FTA N/A Code', 'N/A Reason', 'Column sequence number'],
+      fields: [
+        { key: 'date', label: '수리일자', type: 'date', req: true, exact: ['Acceptance date'], exclude: ['carryindate', 'declarationdatedesired'], aliases: ['수리일자', 'acceptancedate'] },
+        { key: 'declNo', label: '신고번호', type: 'text', req: true, keepBlank: true, declLoose: true, exact: ['Import declaration number'], aliases: ['수입신고번호', '신고번호', 'importdeclarationnumber'] },
+        { key: 'line', label: '란번호', type: 'text', keepBlank: true, exact: ['Column sequence number'], aliases: ['란번호', 'columnsequencenumber'] },
+        { key: 'dutyType', label: '관세구분', type: 'text', req: true, keepBlank: true, exact: ['Duty Type'], aliases: ['세율구분', '관세구분', 'dutytype'] },
+        { key: 'hq', label: '본부', type: 'text', req: true, plant: true, exact: ['Plant'], aliases: ['plant', '플랜트'] },
+        { key: 'payment', label: '결제방법', type: 'text', keepBlank: true, exact: ['Payment method', 'Payment'], aliases: ['결제방법', 'paymentmethod'] },
+        { key: 'goods', label: '물자대', type: 'num', req: true, exact: ['(\\)Taxable.Amt', '(₩)Taxable.Amt', '(￦)Taxable.Amt', '(KRW)Taxable.Amt', '(원)Taxable.Amt'],
+          excludeRaw: ['($)Taxable.Amt', '(USD)Taxable.Amt'], exclude: ['amount', 'totratalamt', 'tottaxsum'], aliases: ['과세가격원화', '물자대'] },
+        { key: 'saving', label: '절감액', type: 'num', req: true, exact: ['Tariff Reductions'], aliases: ['tariffreductions', '감면액', '절감액'] },
+        { key: 'naCode', label: 'FTA 미적용 사유', type: 'text', keepBlank: true, exact: ['FTA N/A Code'], aliases: ['ftanacode', '미적용사유코드'] },
+        { key: 'naReason', label: '미적용 사유 설명', type: 'text', keepBlank: true, exact: ['N/A Reason'], aliases: ['nareason', '미적용사유'] },
+        { key: 'country', label: '원산지', type: 'text', exact: ['Origin'], exclude: ['shcountry'], aliases: ['원산지', 'origin'] }
+      ]
     }
     // (v2.0.0) 「errors」(사람이 집계한 기간 · 구분 · 본부 · 신고건수 · 오류건수 · 오류점수 표) 종류를 없앴다.
     //   오류점수는 관세청 유니패스 원본(현황목록 · 상세목록)만 입력으로 받고, 계산은 errscore.js 한 곳에서 한다(오류점수 화면).
@@ -138,7 +159,7 @@
   var DASH_BASE_FROM = '2026-01';
   // (v1.8.0) 집계표 시트 이름(「종합」 · 「10월 소계」 …) — 여러 시트를 합칠 때 건너뛴다
   var SUMMARY_SHEET_RE = /종합|소계|합계|총계|집계|요약|summary|total|pivot/i;
-  var KINDS = ['import', 'export', 'refund', 'ruling'];             // (v2.0.0) errors 폐지
+  var KINDS = ['import', 'export', 'refund', 'ruling', 'ftaImport'];   // (v2.0.0) errors 폐지 · (v2.1.0) 수입 FTA
   function fieldsOf(kind) { return DATASETS[kind].fields; }
   function hasField(kind, key) { return fieldsOf(kind).some(function (f) { return f.key === key; }); }
 
@@ -230,7 +251,7 @@
       var m = mapColumns(headers, k), req = fieldsOf(k).filter(function (f) { return f.req; }).length;
       var dec = (DATASETS[k].decisive || []).filter(function (d) { return keys.indexOf(normKey(d)) >= 0; });
       var ratio = (req - m.missing.length) / req;
-      return { kind: k, ratio: ratio, ok: ratio >= 0.5 ? 1 : 0, found: Object.keys(m.map).length, decisive: dec.length ? 1 : 0, decisiveCol: dec[0] || '', hit: DATASETS[k].hint.test(fileName || '') };
+      return { kind: k, ratio: ratio, ok: ratio >= 0.5 ? 1 : 0, found: Object.keys(m.map).length, decisive: dec.length, decisiveCol: dec[0] || '', hit: DATASETS[k].hint.test(fileName || '') };
     });
     var hits = ranked.filter(function (r) { return r.ok && r.hit; });
     ranked.forEach(function (r) { r.name = hits.length === 1 && hits[0] === r ? 1 : 0; });
@@ -471,8 +492,100 @@
     else Object.keys(EXPORT_PLANT_HQ).forEach(function (k) { t[k] = EXPORT_PLANT_HQ[k]; });
     // (v1.9.0) 고쳐 저장한 표에 없으면 늘 넣는다(1131 = 엔진본부). 이름은 사용자가 바꾼 값이 앞선다.
     Object.keys(PLANT_HQ_ALWAYS).forEach(function (k) { if (!t[k]) t[k] = PLANT_HQ_ALWAYS[k]; });
-    return { plantHq: t, excludeGN: s.excludeGN !== false, rows: Object.keys(t).sort().map(function (k) { return { code: k, hq: t[k] }; }), custom: !!rows };
+    // (v2.1.0) 수입 FTA 미적용 사유 코드 이름 — 고친 값만 덮어쓴다(빈칸은 기본 이름)
+    var na = {}; Object.keys(FTA_NA_NAMES).forEach(function (k) { var v = s.ftaNa && clean(s.ftaNa[k]); na[k] = v || FTA_NA_NAMES[k]; });
+    return { plantHq: t, excludeGN: s.excludeGN !== false, rows: Object.keys(t).sort().map(function (k) { return { code: k, hq: t[k] }; }), custom: !!rows, ftaNa: na };
   }
+  /* ---------- (v2.1.0) 수입 FTA 실적 — 「FTA 수입 실적 보고」 메일의 표를 ERP 수입FTA 파일로 ---------- */
+  var FTA_NA_NAMES = { '01': '기타세율 적용', '02': '비특혜 원산지', '03': 'CO 발급 불가·미발행', '04': '긴급건 사후적용', '05': 'PSR·세번 상이', '06': '개별 원산지', '07': '양허대상 아님·불량품 등' };
+  var FTA_AGREEMENTS = { FCN1: '한중', FEU1: '한EU', FUS1: '한미', FIN1: '한인도', FGB1: '한영', FRCJP1: 'RCEP(일본)', FCA1: '한캐나다', FAS1: '한아세안', FEF1: '한EFTA' };
+  var FTA_HQ_ORDER = ['부품센터', '건기본부', '엔진본부'];
+  var FTA_BASIS = '최신 ERP 기준 · GN 제외 · 수리일자 기준. 사후적용이 완료되면 과거 월 실적이 소급해 늘어납니다.';
+  // FTA 적용 = Duty Type 이 F 로 시작하고 4자 이상(FCN1 · FEU1 · FRCJP1 …). 「F」 한 글자는 넣지 않는다. N/A 코드가 붙어 있어도 F 로 적용됐으면 적용분.
+  function ftaApplied(dt) { var d = clean(dt).toUpperCase(); return d.charAt(0) === 'F' && d.length >= 4; }
+  function ftaNaCode(v) { var c = clean(v); if (/^\d$/.test(c)) c = '0' + c; return c; }
+  function ftaCell() { return { all: 0, poss: 0, fta: 0, saving: 0, lines: 0 }; }
+  function ftaAdd(o, r, applied) { var g = r.goods || 0; o.all += g; o.saving += r.saving || 0; o.lines++; if (applied) { o.fta += g; o.poss += g; } else if (ftaNaCode(r.naCode) === '04') o.poss += g; }
+  function ftaFinish(o) { return { all: o.all, poss: o.poss, fta: o.fta, saving: o.saving, lines: o.lines, rate: ratio(o.fta, o.poss) }; }
+  function daysBetween(a, b) { var x = Date.UTC(+a.slice(0, 4), +a.slice(5, 7) - 1, +a.slice(8, 10)), y = Date.UTC(+b.slice(0, 4), +b.slice(5, 7) - 1, +b.slice(8, 10)); return Math.round((y - x) / 864e5); }
+  // recs = ftaImport 레코드(normalize) · opts = { month: 'YYYY-MM', filePeriods: { 파일: [YYYY-MM…] }(파일 이름 기간 — 밖은 빼고 셈), today: 'YYYY-MM-DD', naNames }
+  //   GN 은 늘 뺀다(실적 탭 GN 설정과 무관). 금액은 원 단위로 더한다(화면은 억원). 절감액 = Tariff Reductions(신고된 감면액) — 관세율표로 다시 계산하지 않는다.
+  function ftaImportReport(recs, opts) {
+    opts = opts || {}; var fp = opts.filePeriods || {}, na = opts.naNames || FTA_NA_NAMES;
+    var ex = { gn: 0, gnAmount: 0, fOnly: 0, outside: 0 }, use = [], months = {};
+    (recs || []).forEach(function (r) {
+      var per = r.file && fp[r.file];
+      if (per && per.length && per.indexOf(r.month) < 0) { ex.outside++; return; }
+      if (clean(r.payment).toUpperCase() === EXPORT_EXCLUDE_PAYMENT) { ex.gn++; ex.gnAmount += r.goods || 0; return; }
+      if (clean(r.dutyType).toUpperCase() === 'F') ex.fOnly++;
+      use.push(r); months[r.month] = 1;
+    });
+    var ms = Object.keys(months).sort(), month = opts.month && months[opts.month] ? opts.month : ms[ms.length - 1] || null;
+    var hqs = FTA_HQ_ORDER.slice(); use.forEach(function (r) { if (hqs.indexOf(r.hq) < 0) hqs.push(r.hq); });
+    function table(filter) {
+      var g = {}, tot = ftaCell(); hqs.forEach(function (h) { g[h] = ftaCell(); });
+      use.forEach(function (r) { if (!filter(r)) return; var a = ftaApplied(r.dutyType); ftaAdd(g[r.hq], r, a); ftaAdd(tot, r, a); });
+      return hqs.filter(function (h) { return FTA_HQ_ORDER.indexOf(h) >= 0 || g[h].lines; }).map(function (h) { return Object.assign({ hq: h }, ftaFinish(g[h])); }).concat([Object.assign({ hq: '총합계', total: true }, ftaFinish(tot))]);
+    }
+    var year = month ? month.slice(0, 4) : null, inCum = function (r) { return month && r.month >= year + '-01' && r.month <= month; };
+    var monthly = ms.map(function (m) { var t = table(function (r) { return r.month === m; }); return Object.assign({ month: m }, t[t.length - 1]); });
+    // 협정별 — FTA 적용분을 Duty Type 별로
+    function agree(filter) {
+      var g = {}; use.forEach(function (r) { if (!filter(r) || !ftaApplied(r.dutyType)) return; var k = clean(r.dutyType).toUpperCase(), o = g[k] || (g[k] = { code: k, name: FTA_AGREEMENTS[k] || '', goods: 0, saving: 0, lines: 0 }); o.goods += r.goods || 0; o.saving += r.saving || 0; o.lines++; });
+      return Object.keys(g).map(function (k) { return g[k]; }).sort(function (a, b) { return b.goods - a.goods; });
+    }
+    // 사후적용 대기 — N/A 04 이고 FTA 가 적용되지 않은 줄, 신고번호 단위. 사후적용이 끝나면 ERP 에서 Duty Type 이 F 로 바뀌어 다음 파일에서 빠진다.
+    function pending(filter) {
+      var g = {}, lines = 0, amount = 0;
+      use.forEach(function (r) {
+        if (!filter(r) || ftaApplied(r.dutyType) || ftaNaCode(r.naCode) !== '04') return;
+        lines++; amount += r.goods || 0;
+        var o = g[r.declNo] || (g[r.declNo] = { declNo: r.declNo, hq: r.hq, date: r.date, goods: 0, lines: 0, reason: '' });
+        o.goods += r.goods || 0; o.lines++; if (r.date && (!o.date || r.date < o.date)) o.date = r.date; if (!o.reason && clean(r.naReason)) o.reason = clean(r.naReason);
+      });
+      var today = opts.today || null;
+      var list = Object.keys(g).map(function (k) { var o = g[k]; o.days = today && o.date ? daysBetween(o.date, today) : null; return o; });
+      list.sort(function (a, b) { return (b.days || 0) - (a.days || 0) || b.goods - a.goods; });
+      return { lines: lines, decls: list.length, amount: amount, list: list };
+    }
+    // 미적용 사유별 — FTA 가 적용되지 않은 줄(04 는 사후적용 대기로 따로). 사유 코드 없이 A · C 세율이면 「사유 없음(A)」 · 「사유 없음(C)」.
+    function reasons(filter) {
+      var g = {};
+      use.forEach(function (r) {
+        if (!filter(r) || ftaApplied(r.dutyType)) return;
+        var c = ftaNaCode(r.naCode); if (c === '04') return;
+        var dt = clean(r.dutyType).toUpperCase(), key = c || '사유 없음(' + (dt || '빈칸') + ')';
+        var o = g[key] || (g[key] = { code: c || '', key: key, name: c ? (na[c] || '(이름 없음)') : key, goods: 0, saving: 0, lines: 0 });
+        o.goods += r.goods || 0; o.lines++;
+      });
+      return Object.keys(g).map(function (k) { return g[k]; }).sort(function (a, b) { return (a.code ? 0 : 1) - (b.code ? 0 : 1) || (a.code < b.code ? -1 : a.code > b.code ? 1 : b.goods - a.goods); });
+    }
+    var isMonth = function (r) { return r.month === month; };
+    return {
+      month: month, months: ms, year: year, basis: FTA_BASIS,
+      current: month ? table(isMonth) : [], cumulative: month ? table(inCum) : [], monthly: monthly,
+      agreements: { month: month ? agree(isMonth) : [], cumulative: month ? agree(inCum) : [] },
+      pending: { month: month ? pending(isMonth) : null, cumulative: month ? pending(inCum) : null },
+      reasons: { month: month ? reasons(isMonth) : [], cumulative: month ? reasons(inCum) : [] },
+      excluded: ex, used: use.length
+    };
+  }
+  // [6] 월 확정 — 본부별 다섯 지표만(원본 행 없음). 저장은 화면이 localStorage b2611-07.fta.snapshots 에.
+  function ftaSnapshot(rep, now) {
+    return { ym: rep.month, confirmedAt: now || new Date().toISOString(), rows: rep.current.map(function (r) { return { hq: r.hq, all: r.all, poss: r.poss, fta: r.fta, saving: r.saving }; }) };
+  }
+  // 확정값 ↔ 지금 다시 계산한 값 — 확정된 적 없으면 null(화면 「—」). 사후적용 등으로 소급해 늘어난 만큼을 diff 로.
+  function ftaCompare(rep, snapshots) {
+    var snap = (snapshots || []).filter(function (x) { return x && x.ym === rep.month; }).sort(function (a, b) { return String(b.confirmedAt).localeCompare(String(a.confirmedAt)); })[0];
+    if (!snap) return null;
+    var rows = rep.current.map(function (r) {
+      var o = snap.rows.filter(function (x) { return x.hq === r.hq; })[0] || null;
+      var d = function (k) { return o && o[k] != null ? r[k] - o[k] : null; };
+      return { hq: r.hq, then: o, now: { all: r.all, poss: r.poss, fta: r.fta, saving: r.saving }, diff: { all: d('all'), poss: d('poss'), fta: d('fta'), saving: d('saving') } };
+    });
+    return { ym: snap.ym, confirmedAt: snap.confirmedAt, rows: rows };
+  }
+  function eok(v) { return v == null ? null : Math.round(v / 1e6) / 100; }   // 원 → 억원(소수 둘째 자리)
   function exportBasis(opts) { return (opts && opts.excludeGN === false ? 'GN 포함' : 'GN 제외') + ' · 건수는 신고번호 기준'; }
   // (v1.9.0) 수입 실적 기준 문구. has = { payment, declNo } — 그 열이 없는 파일(예전 한글 예제)에는 해당 문구를 붙이지 않는다.
   function importBasis(opts, has) {
@@ -1560,6 +1673,7 @@
     exportBook: exportBook,
     libValidate: libValidate, libAdd: libAdd, libRemove: libRemove, libSearch: libSearch, libCounts: libCounts, libToAoa: libToAoa,
     libFromRows: libFromRows, libSample: libSample, libLocationKind: libLocationKind,
+    ftaImportReport: ftaImportReport, ftaSnapshot: ftaSnapshot, ftaCompare: ftaCompare, ftaApplied: ftaApplied, eok: eok, FTA_NA_NAMES: FTA_NA_NAMES, FTA_AGREEMENTS: FTA_AGREEMENTS, FTA_HQ_ORDER: FTA_HQ_ORDER, FTA_BASIS: FTA_BASIS,
     sampleFiles: sampleFiles, aoaToRows: aoaToRows, skippedSheetNote: skippedSheetNote
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

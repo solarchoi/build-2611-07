@@ -1160,6 +1160,7 @@ var v191 = passed + failed; v1100(); console.log('v1.10.0 ' + (passed + failed -
 var v1103 = passed + failed; v1110(); console.log('v1.11.0 ' + (passed + failed - v1103) + '개 검사');
 var v1110c = passed + failed; v1120(); console.log('v1.12.0 ' + (passed + failed - v1110c) + '개 검사');
 var v1120c = passed + failed; v200(); console.log('v2.0.0 ' + (passed + failed - v1120c) + '개 검사');
+var v200c = passed + failed; v210(); console.log('v2.1.0 ' + (passed + failed - v200c) + '개 검사');
 console.log('v1.9.0 ' + (v190 - v180) + '개 검사');
 console.log('v1.8.0 ' + (v180 - v170) + '개 검사');
 console.log('v1.7.0 ' + (v170 - v160) + '개 검사');
@@ -1190,7 +1191,7 @@ function v1100() {
   eq(d('2026-10_관세환급.xlsx').dataset, 'refund', 'v1.10.0 2026-10_관세환급');
   // 순서 — 「수입FTA」에도 「수입」 · 「실적」이 들어 있다. 「오류」가 맨 앞
   eq([d('2026-10_수입FTA.xlsx').group, d('2026-10_수입FTA실적.xlsx').group, d('2026-10_수입오류_FTA.xlsx').group, d('2026-10_환급실적.xlsx').group, d('2026_결정문실적.xlsx').group], ['fta', 'fta', 'errscore', 'refund', 'ruling'], 'v1.10.0 이름 검사 순서 오류 → FTA → 환급 → 결정문 → 실적');
-  eq([d('2026-10_수입FTA.xlsx').dataset, d('2026-10_수입FTA.xlsx').label], [null, '수입 FTA'], 'v1.10.0 FTA 는 실적 합계에 넣지 않음(다음 단계)');
+  eq([d('2026-10_수입FTA.xlsx').dataset, d('2026-10_수입FTA.xlsx').label, d('2026-10_수출FTA.xlsx').dataset], ['ftaImport', '수입 FTA', null], 'v1.10.0 → v2.1.0 수입 FTA 는 자기 탭(수입실적 합계에 넣지 않음) · 수출 FTA 는 아직 목록에만');
   eq([d('2026-10_수출입실적.xlsx').io, d('2026-10_수출입실적.xlsx', 'export').dataset], [null, 'export'], 'v1.10.0 「수출입」은 이름으로 가르지 않고 내용으로');
   // 6) 이름에 아무것도 없으면 내용 판별(이름을 바꾸지 않은 옛 파일)
   eq([d('예제_통관(가상).xlsx', 'import').dataset, d('예제_통관(가상).xlsx', 'import').how, d('예제_통관(가상).xlsx', 'import').mode], ['import', '내용', 'confirmed'], 'v1.10.0 이름 규칙에 안 걸리면 내용 판별 · 확정본');
@@ -1452,7 +1453,7 @@ function v200() {
   var DH = ['No', '귀책사유자부호', '신고번호', '란번호', '정정일자 및 시간', '수리구분', '정정구분', '항목코드', '항목명', '오류점수', '변경 후 오류점수', '정정전내역', '정정후내역'];
   function dr(no, decl, score) { return [no, '(가상)', decl, 0, '2026-09-10  10:00:00', '수리후', '정정', 'A1', '(가상)', score, score, '', '']; }
   // [1] errors 종류 폐지 — 사람이 집계한 표 · 유니패스 현황목록 모두 대시보드 종류로 걸리지 않음
-  eq([CU.detectKind(SH).kind, CU.KINDS], [null, ['import', 'export', 'refund', 'ruling']], 'v2.0.0 유니패스 현황목록은 대시보드 종류가 아님');
+  eq([CU.detectKind(SH).kind, CU.KINDS], [null, ['import', 'export', 'refund', 'ruling', 'ftaImport']], 'v2.0.0 유니패스 현황목록은 대시보드 종류가 아님(v2.1.0 수입 FTA 더함)');
   eq([FRr.isErrorScoreFile('집계(가상).xlsx', ['년월', '구분', '본부', '신고건수', '오류건수', '오류점수'], ['Sheet1']), FRr.isErrorScoreFile('x.xlsx', SH, []), FRr.isErrorScoreFile('x.xlsx', ['a'], ['귀책사유자별오류상세목록_9월']), FRr.isErrorScoreFile('2026-10_수입실적.xlsx', ['Acceptance date', 'Plant'], ['Sheet1'])], [true, true, true, false], 'v2.0.0 사람이 만든 오류 집계표(관세환급으로 잘못 걸릴 뻔함) · 유니패스 파일은 오류점수 파일로 먼저 거름');
   ok(/FR\.isErrorScoreFile\(f\.name, best\.s\.aoa\[0\], f\.wb\.SheetNames\)/.test(fsx.readFileSync(__dirname + '/../js/dash.js', 'utf8')), 'v2.0.0 대시보드 올리기에서 오류점수 파일을 먼저 거름');
   eq([FRr.describe('2026_수입오류.xlsx', null).dataset, FRr.describe('2026-10_수입오류_현황목록.xlsx', null).dataset], [null, null], 'v2.0.0 「오류」 파일은 대시보드 자료가 아님(오류점수 화면으로)');
@@ -1502,4 +1503,71 @@ function v200() {
   var wb = XLSX.read(fsx.readFileSync(px.join(__dirname, '..', 'samples', b0.name)), { type: 'buffer' });
   eq([wb.SheetNames, XLSX.utils.sheet_to_json(wb.Sheets['요약'], { header: 1, raw: true, defval: '' })[0][0]], [b0.sheets.map(function (x) { return x.name; }), b0.sheets[0].aoa[0][0]], 'v2.0.0 samples/ 유니패스 예제 파일 = 예제 정의');
   ok(!fsx.existsSync(px.join(__dirname, '..', 'samples', '예제_수출입오류점수.xlsx')) && /예제_유니패스수입오류점수\(가상\)\.xlsx/.test(dh), 'v2.0.0 집계표 형식 예제를 없애고 유니패스 예제로 안내');
+}
+// ---------- v2.1.0 수입 FTA 탭 — ERP 수입FTA 파일 ----------
+function v210() {
+  var CU = require('../js/customs.js'), FRr = require('../js/filerules.js');
+  // 가짜 수입FTA 파일 — 실제처럼 ($)·(\) 이웃 열, 같은 이름 열(Short Descript. · Vendor Name) 둘씩
+  var HD = ['Import declaration number', 'Short Descript.', 'Column sequence number', 'Vendor Name', 'Duty Type', 'Plant', 'Payment method', 'Origin', '($)Taxable.Amt', '(\\)Taxable.Amt', 'Tariff Reductions', 'Acceptance date', 'Short Descript.', 'Vendor Name', 'FTA N/A Code', 'N/A Reason'];
+  function row(decl, line, dt, plant, pay, krw, red, date, na, why) { return [decl, '(가상)', line, '(가상)', dt, plant, pay, 'CN', krw / 1000, krw, red, date, '(가상)', '(가상)', na, why || '']; }
+  var E8 = 1e8;
+  var aoa = [HD,
+    row('2235626000001M', 1, 'FCN1', '6000', 'TT', 10 * E8, 0.8 * E8, '2026-10-05', '', ''),          // 부품 FTA
+    row('2235626000002M', 1, 'FEU1', '1000', 'TT', 20 * E8, 1.5 * E8, '2026-10-06', '01', '일부 적용'), // 건기 FTA(N/A 01 이 붙어도 적용분)
+    row('2235626000003M', 1, 'C', '1000', 'TT', 4 * E8, 0, '2026-10-07', '04', '긴급건 사후적용_(가상)'), // 건기 04 — 가능에만
+    row('2235626000003M', 2, 'A', '1000', 'TT', 1 * E8, 0, '2026-10-07', '04', ''),                    // 같은 신고 둘째 란
+    row('2235626000004M', 1, 'A', '1130', 'TT', 6 * E8, 0, '2026-10-08', '', ''),                      // 엔진 사유 없음(A)
+    row('2235626000005M', 1, 'C', '1131', 'TT', 3 * E8, 0, '2026-10-09', '07', '불량품'),              // 엔진 07
+    row('2235626000006M', 1, 'F', '1130', 'TT', 2 * E8, 0, '2026-10-10', '', ''),                      // F 단독 — FTA 아님(전체에는)
+    row('2235626000007M', 1, 'FCN1', '1000', 'GN', 5 * E8, 0.4 * E8, '2026-10-11', '', ''),            // GN — 늘 뺌
+    row('2235626000008M', 1, 'C', '9999', 'TT', 1 * E8, 0, '2026-10-12', '02', ''),                    // 본부 미분류 · 02
+    row('2235626000009M', 1, 'FCN1', '6000', 'TT', 7 * E8, 0.5 * E8, '2026-11-02', '', ''),            // 기간 밖(11월)
+    row('2235626000010M', 1, 'FUS1', '1130', 'TT', 8 * E8, 0.6 * E8, '2026-09-15', '', ''),            // 9월 엔진 FTA
+    row('2235626000011M', 1, 'C', '1100', 'TT', 2 * E8, 0, '2026-09-20', '04', '9월 대기(가상)')];      // 9월 04
+  var name = '2026-01~10_수입FTA(가상).xlsx';
+  var det = CU.detectKind(CU.uniqueHeaders(HD), name), info = FRr.describe(name, det);
+  eq([det.kind, CU.detectKind(CU.uniqueHeaders(HD)).kind, info.dataset, info.mode, info.rule, info.period.text], ['ftaImport', 'ftaImport', 'ftaImport', 'confirmed', 'B', '2026-01~10'], 'v2.1.0 수입FTA 파일 판정(이름 · 내용) · 확정본 · 수리일자 귀속');
+  var impErp = CU.sampleImportErp().aoa[0];
+  eq([CU.detectKind(CU.uniqueHeaders(impErp), '2026-10_수입실적(가상).xlsx').kind, CU.detectKind(CU.uniqueHeaders(impErp)).kind], ['import', 'import'], 'v2.1.0 수입실적 ERP 파일은 수입 FTA 로 잡히지 않음(판정 열 개수)');
+  eq([FRr.describe('EXPORT-수입FTA.XLSX', { kind: 'ftaImport' }).mode, FRr.describe('EXPORT-수입FTA.XLSX', { kind: 'ftaImport' }).dataset, FRr.describe('2026-10_수출FTA.xlsx', null).dataset], ['view', 'ftaImport', null], 'v2.1.0 원본 이름 = 조회 모드 · 수출 FTA 는 아직 목록에만');
+  var item = { name: name, file: name, headers: CU.uniqueHeaders(HD), aoa: aoa, offset: 0, override: {}, meta: info };
+  var m = CU.mergeFiles('ftaImport', [item], CU.exportSettings({ excludeGN: false })), map = m.files[0].res.map;
+  eq([m.ok, map.goods, map.saving, map.declNo, map.dutyType, map.date, map.naCode], [true, '(\\)Taxable.Amt', 'Tariff Reductions', 'Import declaration number', 'Duty Type', 'Acceptance date', 'FTA N/A Code'], 'v2.1.0 열 짝짓기 — 원화 (\\)Taxable.Amt(달러 열 아님) · 같은 이름 열에 흔들리지 않음');
+  var hd2 = HD.map(function (h) { return h === '(\\)Taxable.Amt' ? '(₩)Taxable.Amt' : h; });
+  eq(CU.mapColumns(CU.uniqueHeaders(hd2), 'ftaImport').map.goods, '(₩)Taxable.Amt', 'v2.1.0 (₩)Taxable.Amt 도 같은 열');
+  var rep = CU.ftaImportReport(m.records, { month: '2026-10', filePeriods: { [name]: info.period.months }, today: '2026-11-20' });
+  var e = function (v) { return Math.round(v / 1e6) / 100; }, cell = function (rows, hq) { var r = rows.filter(function (x) { return x.hq === hq; })[0]; return r ? [e(r.all), e(r.poss), e(r.fta), e(r.saving), r.rate == null ? null : Math.round(r.rate * 10000) / 100] : null; };
+  // 손계산(10월, GN · 기간 밖 제외): 부품 10/10/10/0.8 · 건기 20+4+1=25 / 20+5=25 / 20 / 1.5 · 엔진 6+3+2=11 / 0 / 0 / 0 · 미분류 1/0/0/0
+  eq([cell(rep.current, '부품센터'), cell(rep.current, '건기본부'), cell(rep.current, '엔진본부'), cell(rep.current, '본부 미분류'), cell(rep.current, '총합계')],
+    [[10, 10, 10, 0.8, 100], [25, 25, 20, 1.5, 80], [11, 0, 0, 0, null], [1, 0, 0, 0, null], [47, 35, 30, 2.3, 85.71]], 'v2.1.0 당월 다섯 지표 — FTA = F+4자 이상 · 가능 = FTA + 04 미적용 · 비율 = FTA ÷ 가능 · F 단독 · 미분류');
+  eq([rep.current.map(function (r) { return r.hq; }), cell(rep.cumulative, '총합계'), cell(rep.cumulative, '엔진본부')], [['부품센터', '건기본부', '엔진본부', '본부 미분류', '총합계'], [57, 45, 38, 2.9, 84.44], [19, 8, 8, 0.6, 100]], 'v2.1.0 누적(1월 ~ 선택 월) · 행 순서(부품센터 · 건기 · 엔진 · 미분류 · 총합계)');
+  eq([rep.excluded.gn, e(rep.excluded.gnAmount), rep.excluded.fOnly, rep.excluded.outside, rep.months], [1, 5, 1, 1, ['2026-09', '2026-10']], 'v2.1.0 제외 — GN 1란 5억 · F 단독 1란 · 기간 밖 1란(11월)');
+  var rep9 = CU.ftaImportReport(m.records, { month: '2026-09', filePeriods: { [name]: info.period.months } });
+  eq(cell(rep9.current, '총합계'), [10, 10, 8, 0.6, 80], 'v2.1.0 9월 당월');
+  // GN 은 실적 탭 설정(excludeGN)과 무관하게 늘 뺌
+  var m2 = CU.mergeFiles('ftaImport', [item], CU.exportSettings({ excludeGN: true }));
+  eq(cell(CU.ftaImportReport(m2.records, { month: '2026-10', filePeriods: { [name]: info.period.months } }).current, '총합계'), [47, 35, 30, 2.3, 85.71], 'v2.1.0 GN 은 실적 탭 설정과 관계없이 늘 뺌');
+  // 협정별 · 사후적용 대기 · 미적용 사유
+  eq(rep.agreements.month.map(function (a) { return [a.code, a.name, e(a.goods), e(a.saving)]; }), [['FEU1', '한EU', 20, 1.5], ['FCN1', '한중', 10, 0.8]], 'v2.1.0 협정별(Duty Type)');
+  var pm = rep.pending.month;
+  eq([pm.lines, pm.decls, e(pm.amount), pm.list[0].declNo, pm.list[0].hq, pm.list[0].days, e(pm.list[0].goods), pm.list[0].reason], [2, 1, 5, '2235626000003M', '건기본부', 44, 5, '긴급건 사후적용_(가상)'], 'v2.1.0 사후적용 대기 — 04 · 미적용 · 신고번호 단위 · 경과일수');
+  eq(rep.pending.cumulative.list.map(function (p) { return [p.declNo, p.days]; }), [['2235626000011M', 61], ['2235626000003M', 44]], 'v2.1.0 사후적용 대기 누적 — 경과일수 긴 순');
+  eq(rep.reasons.month.map(function (q) { return [q.key, q.name, e(q.goods)]; }), [['02', '비특혜 원산지', 1], ['07', '양허대상 아님·불량품 등', 3], ['사유 없음(A)', '사유 없음(A)', 6], ['사유 없음(F)', '사유 없음(F)', 2]], 'v2.1.0 미적용 사유별(04 제외 · FEU1+01 은 적용분이라 빠짐 · 사유 없음(A))');
+  var rn = CU.ftaImportReport(m.records, { month: '2026-10', filePeriods: { [name]: info.period.months }, naNames: CU.exportSettings({ ftaNa: { '07': '양허 제외(고침)' } }).ftaNa });
+  eq([rn.reasons.month[1].name, CU.exportSettings(null).ftaNa['01'], CU.exportSettings({ ftaNa: { '01': ' ' } }).ftaNa['01']], ['양허 제외(고침)', '기타세율 적용', '기타세율 적용'], 'v2.1.0 사유 코드 이름은 설정에서 고침(비우면 기본)');
+  // [6] 월 확정 · 비교
+  var snap = CU.ftaSnapshot(rep, 'T');
+  eq([snap.ym, snap.confirmedAt, Object.keys(snap.rows[0]), snap.rows.length], ['2026-10', 'T', ['hq', 'all', 'poss', 'fta', 'saving'], 5], 'v2.1.0 확정 — 본부별 다섯 지표만(원본 행 없음)');
+  eq(CU.ftaCompare(rep, []), null, 'v2.1.0 확정한 적 없는 달 — 비교 없음(—)');
+  var later = aoa.map(function (r, i) { return i === 3 ? r.map(function (c, j) { return j === 4 ? 'FKR1' : j === 14 ? '' : c; }) : r; });   // 사후적용 완료(04 → FKR1)
+  var mL = CU.mergeFiles('ftaImport', [{ name: name, file: name, headers: CU.uniqueHeaders(HD), aoa: later, offset: 0, override: {}, meta: info }], CU.exportSettings(null));
+  var repL = CU.ftaImportReport(mL.records, { month: '2026-10', filePeriods: { [name]: info.period.months }, today: '2026-11-20' }), cmp = CU.ftaCompare(repL, [snap]), tot = cmp.rows.filter(function (q) { return q.hq === '총합계'; })[0];
+  eq([e(tot.then.fta), e(tot.now.fta), e(tot.diff.fta), repL.pending.month.lines], [30, 34, 4, 1], 'v2.1.0 사후적용 뒤 다시 계산 — 확정 30억 → 현재 34억 · 소급 증가 4억 · 대기 목록에서 빠짐');
+  eq([CU.eok(33336000000), CU.eok(null)], [333.36, null], 'v2.1.0 억원 · 소수 둘째 자리');
+  // [7] 수입실적 합계와 따로
+  ok(CU.KINDS.indexOf('ftaImport') >= 0 && CU.tradeTotal.toString().indexOf('ftaImport') < 0, 'v2.1.0 수입 FTA 는 수입실적 · 수출입 합계에 더하지 않음');
+  var dj = fsx.readFileSync(__dirname + '/../js/dash.js', 'utf8'), dh = fsx.readFileSync(__dirname + '/../dashboard.html', 'utf8');
+  ok(/C\.ftaImportReport\(/.test(dj) && /b2611-07\.fta\.snapshots/.test(dj) && /메일용 표 복사/.test(dj) && /이 달 실적 확정/.test(dj) && /ClipboardItem/.test(dj) && /'text\/html'/.test(dj), 'v2.1.0 화면 — 보고서는 엔진 결과 · 확정 저장 · 메일용 HTML 표 복사');
+  ok(dj.indexOf("info.group === 'fta' && !info.dataset") > 0 && /id="fta-imp"/.test(dh) && /data-tab="fta"[^>]*>수입 FTA</.test(dh) && /참고 — 실적 파일의 FTA 열/.test(dh), 'v2.1.0 수입FTA 는 목록 보관(held)이 아니라 탭 · 예전 활용률은 참고 칸');
+  eq(CU.FTA_BASIS, '최신 ERP 기준 · GN 제외 · 수리일자 기준. 사후적용이 완료되면 과거 월 실적이 소급해 늘어납니다.', 'v2.1.0 기준 표기');
 }

@@ -117,7 +117,7 @@
       var info = FR.describe(f.name, best.d);
       // (v2.0.0) 유니패스 오류점수 파일(이름에 「오류」 또는 시트 「귀책사유자별오류…」) — 오류점수 화면으로 보낸다(대시보드는 요약만 읽음)
       if (info.group === 'errscore' || FR.isErrorScoreFile(f.name, best.s.aoa[0], f.wb.SheetNames)) { notes.push('<span data-k="unipass"><b>' + esc(f.name) + ' — 유니패스 오류점수 파일입니다. 오류점수 화면으로 이동할까요?</b> 오류점수는 그 화면에서 계산하고, 대시보드 「오류점수」 탭은 그 결과를 읽어 보입니다. <a class="btn primary" href="errors.html">오류점수 화면으로</a></span>'); warn = true; return; }
-      if (info.group === 'fta') { state.held.push({ file: f.name, label: info.label, rows: rowsOfItem(item), uploadedAt: item.uploadedAt, warnings: info.warnings }); notes.push(esc(f.name) + ' — ' + esc(info.label) + ' 파일로 인식했습니다. FTA 집계는 다음 단계라 목록에만 올리고 합계에는 넣지 않습니다(물자대가 두 번 잡히지 않게).'); warn = true; return; }
+      if (info.group === 'fta' && !info.dataset) { state.held.push({ file: f.name, label: info.label, rows: rowsOfItem(item), uploadedAt: item.uploadedAt, warnings: info.warnings }); notes.push(esc(f.name) + ' — ' + esc(info.label) + ' 파일로 인식했습니다. FTA 집계는 다음 단계라 목록에만 올리고 합계에는 넣지 않습니다(물자대가 두 번 잡히지 않게).'); warn = true; return; }
       // 사람이 전에 같은 머리글의 파일 종류를 바꿔 준 적이 있으면 — 파일 이름으로 정하지 못한 경우에만 그 종류가 앞선다
       var byName = info.dataset && info.how.indexOf('파일 이름') === 0, pref = kindPrefs()[item.headers.join('|')];
       var kind = byName ? info.dataset : pref && C.DATASETS[pref] ? pref : best.d.kind;
@@ -191,7 +191,8 @@
   // 다시 계산하고 그린다. 기억하지 못했으면 그 알림 문구(HTML)를 돌려준다 — 부른 쪽이 안내 문구 뒤에 붙인다.
   function rebuild(resetRange) {
     Object.keys(state.sets).forEach(build);
-    var period = C.unionPeriod(C.KINDS.map(function (k) { return ready(k) ? ready(k).m.period : null; }));
+    // (v2.1.0) 수입 FTA 는 탭 안에서 월을 따로 고른다 — 공통 조회 기간 · 본부/국가 조건에 섞지 않음
+    var period = C.unionPeriod(C.KINDS.map(function (k) { return k !== 'ftaImport' && ready(k) ? ready(k).m.period : null; }));
     state.period = period;
     if (period && (resetRange || !state.range || state.range.from < period.from || state.range.to > period.to)) state.range = C.defaultRange(period);
     if (!period) state.range = null;
@@ -347,7 +348,7 @@
         '<p class="sub" data-k="erp-note" style="margin-top:4px">자료 기준일 = 파일을 올린 날입니다. <b>ERP 는 월 마감 뒤에도 신고가 더해지므로 같은 달 파일을 다시 올리면 숫자가 바뀔 수 있습니다.</b></p>';
     }
     $('d-sets').innerHTML = h;
-    $('d-view').hidden = !state.range && !errSummary();
+    $('d-view').hidden = !state.range && !errSummary() && !ready('ftaImport');
     $('d-filter').hidden = !state.range;
   }
   function mapTable(k, i) {
@@ -380,7 +381,7 @@
     $('f-from').innerHTML = ms.map(function (m) { return opt(m, cr.from, C.monthLabel(m)); }).join('');
     $('f-to').innerHTML = ms.map(function (m) { return opt(m, cr.to, C.monthLabel(m)); }).join('');
     var hqs = {}, cos = {};
-    C.KINDS.forEach(function (k) { var s = ready(k); if (!s) return; C.valuesOf(s.m.records, 'hq').forEach(function (v) { hqs[v] = 1; }); if (C.hasField(k, 'country')) C.valuesOf(s.m.records, 'country').forEach(function (v) { cos[v] = 1; }); });
+    C.KINDS.forEach(function (k) { var s = k !== 'ftaImport' && ready(k); if (!s) return; C.valuesOf(s.m.records, 'hq').forEach(function (v) { hqs[v] = 1; }); if (C.hasField(k, 'country')) C.valuesOf(s.m.records, 'country').forEach(function (v) { cos[v] = 1; }); });
     $('f-hq').innerHTML = opt('', state.filter.hq || '', '전체') + Object.keys(hqs).sort().map(function (v) { return opt(v, state.filter.hq); }).join('');
     $('f-country').innerHTML = opt('', state.filter.country || '', '전체') + Object.keys(cos).sort().map(function (v) { return opt(v, state.filter.country); }).join('');
     $('f-unit').value = state.unit;
@@ -644,7 +645,10 @@
       st.rows.map(function (r, i) { return '<tr><td><input type="text" data-set="code" value="' + esc(r.code) + '" aria-label="Plant 번호 ' + (i + 1) + '"></td><td><input type="text" data-set="hq" value="' + esc(r.hq) + '" aria-label="본부 ' + (i + 1) + '"></td><td><button class="x" type="button" data-set-del="' + i + '">빼기</button></td></tr>'; }).join('') +
       '<tr class="new"><td><input type="text" data-set-new="code" placeholder="새 번호"></td><td><input type="text" data-set-new="hq" placeholder="본부 이름"></td><td><button class="x" type="button" data-set-add>더하기</button></td></tr>' +
       '</tbody></table></div><div class="btnrow" style="margin-top:8px"><button class="btn" type="button" data-set-reset>기본 표로 되돌리기</button>' +
-      '<span class="sub">' + (st.custom ? '고친 표를 쓰는 중 · ' : '기본 표 · ') + '이 브라우저에만 저장됩니다(다른 PC · 다른 사람은 기본 표)</span></div>';
+      '<span class="sub">' + (st.custom ? '고친 표를 쓰는 중 · ' : '기본 표 · ') + '이 브라우저에만 저장됩니다(다른 PC · 다른 사람은 기본 표)</span></div>' +
+      // (v2.1.0) 수입 FTA 미적용 사유 코드 이름(FTA N/A Code 01 ~ 07)
+      '<p class="sub" style="margin:12px 0 4px">수입 FTA — 미적용 사유 코드(FTA N/A Code) 이름. 비우면 기본 이름입니다.</p><div class="tablewrap"><table class="set-na"><thead><tr><th>코드</th><th>이름</th></tr></thead><tbody>' +
+      Object.keys(st.ftaNa).sort().map(function (k) { return '<tr><td>' + esc(k) + '</td><td><input type="text" data-set-na="' + esc(k) + '" value="' + esc(st.ftaNa[k]) + '" aria-label="미적용 사유 ' + esc(k) + ' 이름"></td></tr>'; }).join('') + '</tbody></table></div>';
   }
   function settingsFromForm(extra) {
     var rows = [];
@@ -653,7 +657,8 @@
       rows.push({ code: tr.querySelector('[data-set="code"]').value, hq: tr.querySelector('[data-set="hq"]').value });
     });
     if (extra && extra.add) rows.push(extra.add);
-    return { plant: rows, excludeGN: $('set-gn').checked };
+    var na = {}; document.querySelectorAll('#d-settings-body [data-set-na]').forEach(function (el) { na[el.dataset.setNa] = el.value; });
+    return { plant: rows, excludeGN: $('set-gn').checked, ftaNa: na };
   }
   function applySettings(raw, text) {
     saveSettings(raw); renderSettings();
@@ -671,8 +676,98 @@
       el.textContent = r.ok ? T.tariffMetaText(r.meta) + ' (' + r.meta.source + ')' : T.FAIL_TEXT + ' — 세율 조회만 건너뜁니다.';
     });
   }
+  /* ---------- (v2.1.0) 수입 FTA — 「FTA 수입 실적 보고」 메일 표를 ERP 수입FTA 파일로. 계산은 C.ftaImportReport, 여기서는 그리기만 ---------- */
+  var FTA_SNAP_KEY = 'b2611-07.fta.snapshots';
+  function ftaSnaps() { try { var j = JSON.parse(localStorage.getItem(FTA_SNAP_KEY) || '[]'); return Array.isArray(j) ? j : []; } catch (e) { return []; } }
+  function eokT(v) { return v == null ? '—' : (v / 1e8).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  function pctT(v) { return v == null ? '—' : (v * 100).toFixed(2) + '%'; }
+  function todayStr() { var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; }; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); }
+  function ftaReport() {
+    var s = ready('ftaImport'); if (!s) return null;
+    var fp = {}; s.files.forEach(function (f) { if (f.meta && f.meta.period) fp[f.file || f.name] = f.meta.period.months; });
+    return { set: s, rep: C.ftaImportReport(s.m.records, { month: state.ftaMonth, filePeriods: fp, today: todayStr(), naNames: state.settings.ftaNa }) };
+  }
+  var FTA_HEAD = ['BG', '물자대(전체)', '물자대(협정국 수입_가능)', '물자대(FTA)', '절감액(FTA)', '비율'];
+  function ftaTable(rows, key) {
+    return table(FTA_HEAD, rows.filter(function (r) { return !r.total; }).map(function (r) { return { cells: [esc(r.hq), eokT(r.all), eokT(r.poss), eokT(r.fta), eokT(r.saving), pctT(r.rate)] }; }),
+      rows.filter(function (r) { return r.total; }).map(function (r) { return ['총합계', eokT(r.all), eokT(r.poss), eokT(r.fta), eokT(r.saving), pctT(r.rate)]; })[0], 'fta-imp ' + key);
+  }
+  // 메일용 표 — Outlook 에 붙여넣으면 표 모양 그대로(인라인 스타일 HTML 표)
+  function ftaMailHtml(rep) {
+    var th = 'style="border:1px solid #9aa8b6;background:#dbe5f1;padding:4px 8px;font-weight:bold;text-align:center"', td = 'style="border:1px solid #9aa8b6;padding:4px 8px;text-align:right"', tl = 'style="border:1px solid #9aa8b6;padding:4px 8px;text-align:left"';
+    function one(title, rows) {
+      return '<p style="margin:10px 0 4px;font-weight:bold">' + esc(title) + ' (단위: 억원)</p><table style="border-collapse:collapse;font-family:맑은 고딕,sans-serif;font-size:10pt"><tr>' + FTA_HEAD.map(function (h) { return '<th ' + th + '>' + esc(h) + '</th>'; }).join('') + '</tr>' +
+        rows.map(function (r) { var b = r.total ? ';font-weight:bold;background:#f2f2f2' : ''; return '<tr><td ' + tl.replace('"', '"' + b.slice(1) + ';') + '>' + esc(r.total ? '총합계' : r.hq) + '</td>' + [eokT(r.all), eokT(r.poss), eokT(r.fta), eokT(r.saving), pctT(r.rate)].map(function (v) { return '<td ' + td.replace('"', '"' + b.slice(1) + ';') + '>' + v + '</td>'; }).join('') + '</tr>'; }).join('') + '</table>';
+    }
+    var m = +rep.month.slice(5, 7);
+    return '<div>' + one(rep.year + '년 ' + m + '월 FTA 수입 실적(당월)', rep.current) + one(rep.year + '년 1~' + m + '월 FTA 수입 실적(누적)', rep.cumulative) + '<p style="font-size:9pt;color:#666">' + esc(rep.basis) + '</p></div>';
+  }
+  function ftaMailText(rep) {
+    var line = function (r) { return [r.total ? '총합계' : r.hq, eokT(r.all), eokT(r.poss), eokT(r.fta), eokT(r.saving), pctT(r.rate)].join('\t'); };
+    return ['당월 ' + rep.month, FTA_HEAD.join('\t')].concat(rep.current.map(line), ['', '누적 ' + rep.year + '-01 ~ ' + rep.month, FTA_HEAD.join('\t')], rep.cumulative.map(line)).join('\n');
+  }
+  function copyHtml(html, text) {
+    function fallback() {
+      var d = document.createElement('div'); d.contentEditable = 'true'; d.style.position = 'fixed'; d.style.left = '-9999px'; d.innerHTML = html; document.body.appendChild(d);
+      var r = document.createRange(); r.selectNodeContents(d); var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      var ok = false; try { ok = document.execCommand('copy'); } catch (e) { ok = false; } sel.removeAllRanges(); d.remove(); return ok;
+    }
+    if (navigator.clipboard && window.ClipboardItem) return navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([html], { type: 'text/html' }), 'text/plain': new Blob([text], { type: 'text/plain' }) })]).then(function () { return true; }, function () { return fallback(); });
+    return Promise.resolve(fallback());
+  }
+  // 절감액(막대) + 비율(선) — 한 그래프
+  function ftaCombo(title, rows) {
+    var W = 640, H = 250, L = 62, R = 46, T = 30, B = 30, iw = W - L - R, ih = H - T - B, n = rows.length;
+    var max = niceMax(Math.max.apply(null, [0].concat(rows.map(function (r) { return r.saving || 0; })))), step = iw / Math.max(1, n), y = function (v) { return T + ih - (v / max) * ih; }, yr = function (v) { return T + ih - v * ih; };
+    var b = legend([{ name: '절감액(FTA)', color: COL[3] }, { name: '비율(FTA ÷ 가능)', color: COL[4] }], L);
+    for (var g = 0; g <= 4; g++) { var gv = max * g / 4; b += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(gv) + '" y2="' + y(gv) + '" class="grid"/><text x="' + (L - 6) + '" y="' + (y(gv) + 4) + '" class="ax" text-anchor="end">' + esc(eokT(gv)) + '</text><text x="' + (W - R + 6) + '" y="' + (yr(g / 4) + 4) + '" class="ax">' + (g * 25) + '%</text>'; }
+    var bw = Math.min(40, step * 0.6), pts = [];
+    rows.forEach(function (r, i) {
+      var cx = L + step * i + step / 2, h = ((r.saving || 0) / max) * ih;
+      b += '<rect x="' + (cx - bw / 2).toFixed(1) + '" y="' + (T + ih - h).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + h.toFixed(1) + '" fill="' + COL[3] + '"><title>' + esc(C.monthLabel(r.month) + ' 절감액 ' + eokT(r.saving) + '억') + '</title></rect>';
+      b += '<text x="' + cx + '" y="' + (H - 10) + '" class="ax" text-anchor="middle">' + esc(r.month.slice(2, 4) + '.' + r.month.slice(5)) + '</text>';
+      if (r.rate != null) pts.push([cx, yr(r.rate), r]);
+    });
+    if (pts.length) { b += '<polyline fill="none" stroke="' + COL[4] + '" stroke-width="2.2" points="' + pts.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' ') + '"/>'; pts.forEach(function (p) { b += '<circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="3.2" fill="' + COL[4] + '"><title>' + esc(C.monthLabel(p[2].month) + ' 비율 ' + pctT(p[2].rate)) + '</title></circle>'; }); }
+    return frame(title, '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(title) + '">' + b + '</svg>');
+  }
+  function renderFtaImport() {
+    var el = $('fta-imp'); if (!el) return;
+    var x = ftaReport();
+    if (!x || !x.rep.month) { el.innerHTML = '<div class="note" data-k="fta-none"><b>ERP 수입FTA 파일을 올리면 「FTA 수입 실적 보고」 메일의 표를 만듭니다.</b> 예: 2026-01~10_수입FTA.xlsx(확정본 · 저장) · EXPORT-수입FTA.XLSX(조회 모드 · 저장 안 함). 수입실적 합계에는 더하지 않습니다(같은 신고를 란 단위로 받은 자료).</div>'; return; }
+    var r = x.rep, mo = +r.month.slice(5, 7), cmp = C.ftaCompare(r, ftaSnaps()), pm = r.pending.month, pc = r.pending.cumulative, ex = r.excluded;
+    state.ftaMonth = r.month; state.ftaLast = r;
+    var h = '<div class="note" data-k="fta-basis"><b>' + esc(r.basis) + '</b></div>';
+    h += '<div class="ctrl"><label>월 <select id="fta-month">' + r.months.slice().reverse().map(function (m) { return '<option value="' + m + '"' + (m === r.month ? ' selected' : '') + '>' + esc(C.monthLabel(m)) + '</option>'; }).join('') + '</select></label>' +
+      ' <button class="btn primary" type="button" data-fta-copy>메일용 표 복사</button> <button class="btn" type="button" data-fta-confirm>이 달 실적 확정</button> <span class="sub" id="fta-copied" aria-live="polite"></span></div>';
+    h += '<h3 class="tb-h">' + r.year + '년 ' + mo + '월 당월 <small class="sub">(단위: 억원)</small></h3>' + ftaTable(r.current, 'fta-cur');
+    // 확정값 비교
+    var tot = cmp ? cmp.rows.filter(function (q) { return q.hq === '총합계'; })[0] : null;
+    h += '<div class="' + (cmp ? 'note' : 'sub') + '" data-k="fta-cmp">' + (cmp && tot && tot.then ? '<b>' + mo + '월 확정(' + esc(window.ErrScore ? window.ErrScore.localTime(cmp.confirmedAt) : cmp.confirmedAt) + ') 당시 FTA ' + eokT(tot.then.fta) + '억 → 현재 ' + eokT(tot.now.fta) + '억 · 사후적용 등 소급 ' + (tot.diff.fta >= 0 ? '증가 ' : '감소 ') + eokT(Math.abs(tot.diff.fta)) + '억</b>' +
+      table(['BG', '확정 FTA', '현재 FTA', '차이', '확정 절감액', '현재 절감액', '차이'], cmp.rows.filter(function (q) { return q.then; }).map(function (q) { return { cells: [esc(q.hq), eokT(q.then.fta), eokT(q.now.fta), eokT(q.diff.fta), eokT(q.then.saving), eokT(q.now.saving), eokT(q.diff.saving)] }; }), null, 'fta-cmp') :
+      '확정 당시 값: — (' + mo + '월은 아직 확정하지 않았습니다. 「이 달 실적 확정」을 누르면 지금 값을 남겨 두고, 나중에 사후적용 등으로 바뀐 만큼을 보여 줍니다.)') + '</div>';
+    h += '<h3 class="tb-h">' + r.year + '년 1~' + mo + '월 누적 <small class="sub">(단위: 억원)</small></h3>' + ftaTable(r.cumulative, 'fta-cum');
+    h += '<div class="charts">' + ftaCombo('월별 절감액(FTA) · 비율', r.monthly) + '</div>';
+    // 협정별
+    var am = {}; r.agreements.month.forEach(function (a) { am[a.code] = a; });
+    h += '<h3 class="tb-h">협정별(Duty Type) — 1~' + mo + '월 누적 · ' + mo + '월 <small class="sub">(억원)</small></h3>' + table(['Duty Type', '협정', '물자대(FTA) 누적', '절감액 누적', mo + '월 물자대', mo + '월 절감액'], r.agreements.cumulative.map(function (a) { var m = am[a.code]; return { cells: [esc(a.code), esc(a.name || '—'), eokT(a.goods), eokT(a.saving), m ? eokT(m.goods) : '—', m ? eokT(m.saving) : '—'] }; }), null, 'fta-agree');
+    // 사후적용 대기(04)
+    h += '<h3 class="tb-h">사후적용 대기(FTA N/A 04 · 미적용) — ' + mo + '월 ' + pm.lines + '란 · 신고 ' + pm.decls + '건 · ' + eokT(pm.amount) + '억 / 1~' + mo + '월 ' + pc.lines + '란 · 신고 ' + pc.decls + '건 · ' + eokT(pc.amount) + '억</h3>' +
+      '<p class="sub">사후적용이 끝나면 ERP 에서 Duty Type 이 F 로 바뀌어 다음 파일에서 자동으로 빠집니다(완료 처리 필요 없음). 경과일수 = 오늘 − 수리일자.</p>' +
+      (pc.list.length ? table(['신고번호', '본부', '수리일자', '경과일수', '물자대(억)', '사유(N/A Reason)'], pc.list.map(function (p) { return { cells: [esc(p.declNo), esc(p.hq), esc(p.date || ''), p.days == null ? '—' : C.fmtNum(p.days) + '일', eokT(p.goods), esc(p.reason)] }; }), null, 'fta-pending') : '<p class="sub">대기 중인 건이 없습니다.</p>');
+    // 미적용 사유별
+    var rm = {}; r.reasons.month.forEach(function (q) { rm[q.key] = q; });
+    h += '<h3 class="tb-h">미적용 사유별 물자대 — FTA 확대 여지 <small class="sub">(04 는 사후적용 대기로 따로 · 억원)</small></h3>' +
+      table(['코드', '사유', '1~' + mo + '월 물자대', '란', mo + '월 물자대'], r.reasons.cumulative.map(function (q) { var m = rm[q.key]; return { cells: [esc(q.code || '—'), esc(q.name), eokT(q.goods), C.fmtNum(q.lines), m ? eokT(m.goods) : '—'] }; }), null, 'fta-reasons') +
+      '<p class="sub">사유 코드 없이 A · C 세율로 통관된 줄은 「사유 없음(A)」 · 「사유 없음(C)」 — 대부분 비협정국 수입입니다. 코드 이름은 설정에서 고칩니다.</p>';
+    var sk = x.set.m.skipped.length;
+    h += '<p class="sub" data-k="fta-excluded">제외 — GN ' + C.fmtNum(ex.gn) + '란 ' + eokT(ex.gnAmount) + '억 · Duty Type \'F\' 단독 ' + C.fmtNum(ex.fOnly) + '란(물자대(FTA)에 넣지 않음, 전체에는 포함) · 기간 밖 ' + C.fmtNum(ex.outside) + '란' + (sk ? ' · 읽지 못한 줄 ' + C.fmtNum(sk) + '란' : '') + '. GN 은 실적 탭 설정과 관계없이 늘 뺍니다.</p>';
+    el.innerHTML = h;
+  }
   function renderFta() {
     showTariffMeta();
+    renderFtaImport();
+    if (!state.range) return;
     var by = $('by-fta').value, BYL = C.BY[by], k = '', ch = '', tb = '', months = C.monthsBetween(state.range.from, state.range.to), monthly = [];
     ['import', 'export'].forEach(function (kind, i) {
       var f = filtered(kind), nm = kind === 'import' ? '수입' : '수출';
@@ -817,7 +912,8 @@
   }
   var RENDER = { trade: renderTrade, export: renderExport, fta: renderFta, refund: renderRefund, errors: renderErrors, ruling: renderRuling };
   function renderTab() {
-    if (!state.range) { if (!errSummary()) return; state.tab = 'errors'; }   // (v2.0.0) 실적 자료 없이 오류점수 요약만 있을 때
+    // (v2.0.0) 실적 자료 없이 오류점수 요약만 있을 때 · (v2.1.0) 수입 FTA 파일만 있을 때 — 그 탭만 그린다
+    if (!state.range) { var fOk = !!ready('ftaImport'), eOk = !!errSummary(); if (!fOk && !eOk) return; if (!((state.tab === 'fta' && fOk) || (state.tab === 'errors' && eOk))) state.tab = fOk ? 'fta' : 'errors'; }
     document.querySelectorAll('.tab').forEach(function (b) { var on = b.dataset.tab === state.tab; b.setAttribute('aria-selected', on ? 'true' : 'false'); b.classList.toggle('on', on); });
     Object.keys(RENDER).forEach(function (t) { $('t-' + t).hidden = t !== state.tab; });
     RENDER[state.tab]();
@@ -827,7 +923,7 @@
   function exportXlsx() {
     var data = {};
     C.KINDS.forEach(function (k) {
-      var s = ready(k); if (!s) return;
+      var s = k !== 'ftaImport' && ready(k); if (!s) return;   // (v2.1.0) 수입 FTA 는 집계 내보내기에 넣지 않음(탭의 메일용 표 복사로)
       var m = s.m;
       data[k] = { file: m.files.map(function (p) { return p.file; }).join(' + '), period: m.period, records: m.records, map: m.map, skipped: m.skipped,
         files: m.files.map(function (p) { return { file: p.file, uploadedAt: p.uploadedAt, period: p.period, n: p.norm.records.length, skipped: p.norm.skipped.length, excluded: p.excluded, totalRows: p.totalRows }; }) };
@@ -880,10 +976,26 @@
   document.querySelector('.tabs').addEventListener('click', function (e) { var b = e.target.closest('.tab'); if (b) { state.tab = b.dataset.tab; if (state.tab === 'fta') showTariffMeta(); renderFilter(); renderTab(); } });
   ['by-trade', 'top-trade', 'by-export', 'top-export', 'by-fta', 'by-ruling', 'sort-ruling'].forEach(function (id) { $(id).addEventListener('change', renderTab); });
   // (v1.7.0) 설정
+  // (v2.1.0) 수입 FTA 탭
+  $('fta-imp').addEventListener('change', function (e) { if (e.target.id === 'fta-month') { state.ftaMonth = e.target.value; renderFtaImport(); } });
+  $('fta-imp').addEventListener('click', function (e) {
+    var r = state.ftaLast; if (!r) return;
+    if (e.target.closest('[data-fta-copy]')) {
+      var html = ftaMailHtml(r); state.ftaMail = html;
+      copyHtml(html, ftaMailText(r)).then(function (ok) { $('fta-copied').textContent = ok ? '복사했습니다 — Outlook 메일 본문에 붙여넣으세요(표 모양 그대로).' : '복사하지 못했습니다 — 표를 끌어 선택해 복사해 주세요.'; });
+    } else if (e.target.closest('[data-fta-confirm]')) {
+      var list = ftaSnaps(), had = list.some(function (q) { return q.ym === r.month; });
+      if (had && !window.confirm(C.monthLabel(r.month) + ' 은(는) 이미 확정한 달입니다. 지금 값으로 다시 확정할까요?')) return;
+      list = list.filter(function (q) { return q.ym !== r.month; }).concat([C.ftaSnapshot(r)]);
+      try { localStorage.setItem(FTA_SNAP_KEY, JSON.stringify(list)); } catch (er) { /* 저장 못 해도 화면은 계속 */ }
+      renderFtaImport(); $('fta-copied').textContent = C.monthLabel(r.month) + ' 실적을 확정했습니다(본부별 다섯 지표만 저장).';
+    }
+  });
   $('d-settings-body').addEventListener('change', function (e) {
     var t = e.target;
     if (t.id === 'set-gn') applySettings(settingsFromForm(), '결제방법 ' + C.EXPORT_EXCLUDE_PAYMENT + ' 줄 ' + (t.checked ? '빼기를 켰습니다.' : '빼기를 껐습니다(GN 포함).'));
     else if (t.dataset.set) applySettings(settingsFromForm(), 'Plant → 본부 표를 고쳤습니다.');
+    else if (t.dataset.setNa) applySettings(settingsFromForm(), '수입 FTA 미적용 사유 이름을 고쳤습니다.');
   });
   $('d-settings-body').addEventListener('click', function (e) {
     var t = e.target;

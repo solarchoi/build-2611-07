@@ -122,7 +122,7 @@
   <div class="tabs" role="tablist" aria-label="분석 종류">
     <button role="tab" class="tab" data-tab="trade" aria-selected="true">수입 실적</button>
     <button role="tab" class="tab" data-tab="export" aria-selected="false">수출 실적</button>
-    <button role="tab" class="tab" data-tab="fta" aria-selected="false">FTA</button>
+    <button role="tab" class="tab" data-tab="fta" aria-selected="false">수입 FTA</button>
     <button role="tab" class="tab" data-tab="refund" aria-selected="false">관세환급</button>
     <button role="tab" class="tab" data-tab="errors" aria-selected="false">오류점수</button>
     <button role="tab" class="tab" data-tab="ruling" aria-selected="false">품목분류 결정문</button>
@@ -158,12 +158,15 @@
   </div>
   <div class="tabpanel" id="t-fta" role="tabpanel" hidden>
     <p class="sub tariff-meta" id="tariff-meta" aria-live="polite"></p>
+    <div id="fta-imp"></div>
+    <details class="settings" id="fta-old"><summary>참고 — 실적 파일의 FTA 열(물자대_FTA · 절감액, 수입 · 수출)</summary>
     <div class="kpis" id="kpi-fta"></div>
     <div class="ctrl">
       <label>묶는 기준 <select id="by-fta"><option value="hq">본부</option><option value="country">국가</option><option value="company">업체</option></select></label>
     </div>
     <div class="charts" id="ch-fta"></div>
     <div id="tb-fta"></div>
+    </details>
   </div>
   <div class="tabpanel" id="t-refund" role="tabpanel" hidden>
     <div class="kpis" id="kpi-refund"></div>
