@@ -1303,4 +1303,32 @@ function v1100() {
   var mres = C2.mergeFiles('ruling', [{ name: 'r', file: 'r', headers: C2.uniqueHeaders(pr.use[0].aoa[0]), aoa: pr.use[0].aoa, offset: 0, override: {}, skippedSheets: pr.skipped, promotedSheets: pr.promoted }]);
   eq([mres.ok, mres.records.length > 0, C2.migrateSaved({ sets: { ruling: { files: [{ name: 'r', file: 'r', headers: ['a'], aoa: [['a'], [1]], promotedSheets: ['종합'] }] } } }).sets.ruling.files[0].promotedSheets], [true, true, ['종합']], 'v1.10.2 「종합」 시트로 결정문 집계 · 기억할 때 보관');
   ok(/C\.skippedSheetNote\(f\.skippedSheets\)/.test(dj) && /C\.skippedSheetNote\(item\.skippedSheets\)/.test(dj) && /data-k="promoted-sheets"/.test(dj), 'v1.10.2 화면 — 열 못 찾음 · 종류 고르기 안내에 참고 문구, 파일 목록에 열 구성으로 읽은 시트');
+  // (v1.10.3) 유니패스 연 단위 파일(1~12월 시트) — 시트 이름 끝 공백 · 열 위치 밀림 · 표 두 개 · 소계 줄 · 빈 줄 · 연도는 요약 A1
+  function drow(no, decl, score, fixed) { return [no, '(가상)', decl, 0, fixed || '2025-12-30  10:00:00', '수리후', '정정', 'A1', '(가상)', score, score, '', '']; }
+  var BLANK13 = ['', '', '', '', '', '', '', '', '', '', '', '', ''];
+  var two = [DH.concat(['']).concat(DH)].concat([
+    drow(1, '4390826A00001X', 10).concat(['']).concat(drow(1, '4390826A00001X', 99)),
+    drow(2, '1111126000002X', 5).concat(['']).concat(drow(2, '1111126000002X', 99)),
+    BLANK13.concat(['']).concat(drow(3, '1111126000003X', 99)),                               // 오른쪽 작업 영역에만 있는 줄
+    BLANK13,                                                                                    // 빈 줄
+    ['', '', '', '', '', '', '', '', '', '인천CAM', 33, '', '']                                 // 팀 소계 줄(점수가 옆 칸)
+  ]);
+  var plantDH = DH.slice(0, 3).concat(['PLANT']).concat(DH.slice(3));                            // 열 위치 밀림(PLANT 끼움)
+  var plantRow = drow(1, '2235626B17742X', 7); plantRow.splice(3, 0, '1000');
+  var yb = ES2.readWorkbook([
+    { name: '요약', aoa: [['▣2026년 수출오류점수 현황(가상)'], ['구분', '1월']] },
+    { name: '귀책사유자별오류현황목록_6월 ', aoa: [SH, [1, '(가상)', '(가상)', '012', '세관', 2331, 15, 0.6]] },
+    { name: '귀책사유자별오류상세목록_6월 ', aoa: two },
+    { name: '귀책사유자별오류상세목록_5월', aoa: [plantDH, plantRow] }
+  ], '2026년수출귀책사유자별오류현황및상세목록(가상).xlsx');
+  var r6 = yb.rows.filter(function (r) { return r.month === 6; }), r5 = yb.rows.filter(function (r) { return r.month === 5; });
+  eq([yb.kind, yb.year, yb.summaryYear, Object.keys(yb.status), r6.length, r6.map(function (r) { return r.score; }), yb.skipped], ['수출', 2026, 2026, ['6'], 2, [10, 5], 0], 'v1.10.3 끝 공백 시트 이름 · 왼쪽 표만(오른쪽 99점 안 읽음) · 읽지 못한 줄 0');
+  eq([r6[0].year, r5.length, r5[0].score, r5[0].declNo], [2026, 1, 7, '2235626B17742X'], 'v1.10.3 연도는 요약 A1(정정일자 2025 아님) · PLANT 로 밀린 열도 머리글 이름으로');
+  var p6 = yb.perSheet.filter(function (p) { return p.month === 6; })[0];
+  eq([p6.sheetRows, p6.rows, p6.blank, p6.totalRows, p6.skipped, p6.cutAt, p6.sheet], [5, 2, 2, 1, 0, 14, '귀책사유자별오류상세목록_6월'], 'v1.10.3 시트 행 = 정정 줄 + 빈 줄(오른쪽만 있는 줄 포함) + 소계 줄 · 15번째 열부터 무시 · 이름 trim');
+  has(yb.notes.join(' '), '귀책사유자별오류상세목록_6월: 오른쪽 작업 영역(15번째 열부터)은 같은 머리글이 다시 나와 읽지 않았습니다', 'v1.10.3 오른쪽 작업 영역 알림');
+  eq(ES2.statusCheck([yb]), [{ kind: '수출', month: 6, detail: 15, status: 15, diff: 0 }], 'v1.10.3 왼쪽 표만 읽어 현황 = 상세(오른쪽을 읽었으면 차액)');
+  var nb = ES2.readWorkbook([{ name: '귀책사유자별오류상세목록_6월', aoa: [DH, drow(1, '4390826A00001X', 3)] }], '2026년수출(가상).xlsx');
+  eq([nb.year, nb.summaryYear, nb.rows[0].year], [null, null, 2025], 'v1.10.3 요약 시트가 없으면 예전처럼(정정일자 연도)');
+  ok(/b\.blankRows/.test(ej) && /b\.sheetRows/.test(ej), 'v1.10.3 오류점수 화면 목록에 빈 줄 · 시트 행 수');
 }

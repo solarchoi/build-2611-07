@@ -105,14 +105,23 @@
     if (!aoa.some(function (r) { return (r || []).some(function (c) { return clean(c) !== ''; }); })) return { rows: [], skipped: 0 };   // 그 달 오류 없음(빈 시트)
     var hi = findHeaderRow(aoa, ['신고번호', '오류점수']);
     if (hi < 0) return { rows: [], skipped: 0, error: '머리글(신고번호 · 오류점수)을 찾지 못했습니다.' };
-    var headers = aoa[hi].map(clean), mh = mapHeaders(headers);
+    // (v1.10.3) 한 시트에 표가 둘 이상(팀이 오른쪽에 같은 머리글로 작업 영역을 붙임) — 가장 왼쪽 표만 읽는다.
+    //   머리글 줄에서 「신고번호」 · 「오류점수」 · 「No」가 두 번째로 나오는 열부터는 읽지 않는다(중복 집계 방지).
+    var all = aoa[hi].map(clean), cut = all.length;
+    ['신고번호', '오류점수', 'No'].forEach(function (k) {
+      var at = all.map(function (h, i) { return normKey(h) === normKey(k) ? i : -1; }).filter(function (i) { return i >= 0; });
+      if (at.length > 1 && at[1] < cut) cut = at[1];
+    });
+    var headers = all.slice(0, cut), mh = mapHeaders(headers);
     if (mh.missing.length) return { rows: [], skipped: 0, error: '필요한 열이 없습니다: ' + mh.missing.join(' · ') };
-    var rows = [], skipped = 0, totalRows = 0, noMonth = 0, m = mh.map;
-    aoa.slice(hi + 1).forEach(function (r) {
+    var rows = [], skipped = 0, totalRows = 0, noMonth = 0, blank = 0, m = mh.map;
+    aoa.slice(hi + 1).forEach(function (r0) {
+      var r = (r0 || []).slice(0, cut);
       var p = parseDeclNo(r[m.declNo]);
       if (!p) {
-        if (!(r || []).some(function (c) { return clean(c) !== ''; })) return;
-        if (!clean(r[m.declNo]) && toNum(r[m.score]) != null) { totalRows++; return; }   // (v1.10.0) 신고번호 빈 맨 아래 합계 줄
+        if (!r.some(function (c) { return clean(c) !== ''; })) { blank++; return; }   // 빈 줄(오른쪽 작업 영역에만 값이 있는 줄 포함)
+        // (v1.10.0) 신고번호 빈 맨 아래 합계 줄 · (v1.10.3) 팀이 넣은 소계 줄(「인천CAM 33」처럼 점수가 옆 칸에 있어도) — 신고번호가 없고 숫자가 있으면 데이터가 아니다
+        if (!clean(r[m.declNo]) && r.some(function (c) { return toNum(c) != null; })) { totalRows++; return; }
         skipped++; return;
       }
       var fixedAt = m.fixedAt != null ? parseDate(r[m.fixedAt]) : null;
@@ -129,7 +138,7 @@
         before: m.before != null ? clean(r[m.before]) : '', after: m.after != null ? clean(r[m.after]) : ''
       });
     });
-    return { rows: rows, skipped: skipped, totalRows: totalRows, noMonth: noMonth, headers: headers, map: m };
+    return { rows: rows, skipped: skipped, totalRows: totalRows, noMonth: noMonth, blank: blank, sheetRows: aoa.length - hi - 1, cutAt: cut < all.length ? cut : null, headers: headers, map: m };
   }
   // 현황목록 시트 → { total(총신고건), score, rate } — 귀책사유자 한 줄
   function readStatus(aoa) {
@@ -159,9 +168,15 @@
   }
   // 통합문서 한 권: sheets = [{ name, aoa }]. 수입/수출은 요약 제목 → 파일명 → 신고번호 끝 글자 순으로 정한다.
   function readWorkbook(sheets, fileName, rule) {
-    var kind = null, notes = [], rows = [], status = {}, skipped = 0;
+    var kind = null, notes = [], rows = [], status = {}, skipped = 0, sumYear = null;
+    // (v1.10.3) 시트 이름 끝 공백(「귀책사유자별오류현황목록_10월 」) — 처음 한 번 trim 해 모든 비교 · 알림에 같은 이름을 쓴다
+    sheets = (sheets || []).map(function (s) { return { name: clean(s.name), aoa: s.aoa || [] }; });
     var sm = sheets.filter(function (s) { return classifySheet(s.name) === 'summary'; })[0];
-    if (sm) { var first = (sm.aoa[0] || []).concat(sm.aoa[1] || []).map(clean).join(' '); kind = kindOfText(first); }
+    if (sm) {
+      var first = (sm.aoa[0] || []).concat(sm.aoa[1] || []).map(clean).join(' '); kind = kindOfText(first);
+      // (v1.10.3) 연도도 요약 시트 A1 제목에서 — 「▣ 2026년 수입오류점수 현황」
+      var ym = first.match(/(20\d{2})\s*년/); if (ym) sumYear = +ym[1];
+    }
     if (!kind) kind = kindOfText(fileName || '');
     var details = sheets.filter(function (s) { return classifySheet(s.name) === 'detail'; });
     var statuses = sheets.filter(function (s) { return classifySheet(s.name) === 'status'; });
@@ -172,12 +187,14 @@
     var per = FR ? FR.periodOfName(fileName || '') : null, fileMonth = per && per.single ? +per.single.slice(5, 7) : null, fileYear = per && per.single ? +per.single.slice(0, 4) : null;
     // (v1.10.0) 현황목록만 있어도 받는다(검증용 — 총신고건 · 총 오류점수). 상세목록만 있어도 받는다(본부 배분용).
     if (!details.length && !statuses.length && !sm) return { kind: kind, rows: [], status: {}, hand: {}, notes: ['현황목록 · 상세목록 시트를 찾지 못했습니다(시트 이름에 「현황」 · 「상세」 또는 머리글에 총신고건 · 신고번호 · 오류점수).'], skipped: 0, months: [], detailMonths: [], fileMonth: fileMonth, fileName: fileName || '' };
-    var totalRows = 0, noMonth = 0, detailMonths = [];
+    var totalRows = 0, noMonth = 0, blankRows = 0, sheetRows = 0, detailMonths = [], year = fileYear || sumYear || null, perSheet = [];
     details.forEach(function (s) {
       var mo = fileMonth || monthOfName(s.name);
-      var d = readDetail(s.aoa, { month: mo, year: fileYear, kind: kind, rule: rule });
+      var d = readDetail(s.aoa, { month: mo, year: year, kind: kind, rule: rule });
       if (d.error) { notes.push(s.name + ': ' + d.error); return; }
-      rows = rows.concat(d.rows); skipped += d.skipped; totalRows += d.totalRows || 0; noMonth += d.noMonth || 0;
+      rows = rows.concat(d.rows); skipped += d.skipped; totalRows += d.totalRows || 0; noMonth += d.noMonth || 0; blankRows += d.blank || 0; sheetRows += d.sheetRows || 0;
+      if (d.cutAt != null) notes.push(s.name + ': 오른쪽 작업 영역(' + (d.cutAt + 1) + '번째 열부터)은 같은 머리글이 다시 나와 읽지 않았습니다(중복 집계 방지).');
+      perSheet.push({ sheet: s.name, month: mo, sheetRows: d.sheetRows || 0, rows: d.rows.length, blank: d.blank || 0, totalRows: d.totalRows || 0, skipped: d.skipped || 0, cutAt: d.cutAt });
       if (mo && detailMonths.indexOf(mo) < 0) detailMonths.push(mo);
     });
     if (!details.length && statuses.length) notes.push('상세목록 없음 — 현황목록(총신고건 · 총 오류점수)만 읽었습니다.');
@@ -195,7 +212,8 @@
     var months = uniq(rows.map(function (r) { return r.month; }).filter(Boolean)).sort(function (a, b) { return a - b; });   // 오류 있는 달(현황목록의 달은 status)
     if (!kind) notes.push('수입인지 수출인지 알 수 없습니다 — 파일 이름에 「수입」 또는 「수출」을 넣어 주세요.');
     return { kind: kind, rows: rows, status: status, hand: sm ? readHandSummary(sm.aoa) : {}, notes: notes, skipped: skipped, totalRows: totalRows, noMonth: noMonth, months: months, detailMonths: detailMonths,
-      hasDetail: details.length > 0, hasStatus: Object.keys(status).length > 0, fileMonth: fileMonth, fileYear: fileYear, period: per, fileName: fileName || '' };
+      hasDetail: details.length > 0, hasStatus: Object.keys(status).length > 0, fileMonth: fileMonth, fileYear: fileYear, year: year, summaryYear: sumYear, period: per,
+      blankRows: blankRows, sheetRows: sheetRows, perSheet: perSheet, fileName: fileName || '' };
   }
   // (v1.10.0) 현황목록 총 오류점수 ↔ 상세목록 오류점수 합계 — 둘 다 올라온 수입 · 수출 × 월만. 다르면 차액을 숨기지 않고 보인다.
   function statusCheck(books) {

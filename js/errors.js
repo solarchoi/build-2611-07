@@ -30,7 +30,8 @@
     var basis = b.fileMonth ? 'A 파일 이름' : ms.length ? 'C 시트 이름' : 'D 월 미지정';
     var warn = b.notes.slice(); if (!b.kind) warn.unshift('종류(수입 · 수출)를 판별하지 못함'); if (!ms.length && !b.noMonth) warn.push('기간을 판별하지 못함');
     if (b.skipped) warn.push('읽지 못한 줄 ' + b.skipped);
-    var nrows = b.rows.length + (b.hasStatus ? ' (현황 ' + Object.keys(b.status).length + '줄)' : '') + (b.totalRows ? ' · 합계 줄 ' + b.totalRows + ' 제외' : '');
+    // (v1.10.3) 시트 행 = 정정 줄 + 빈 줄 + 합계 · 소계 줄 + 읽지 못한 줄 — 기대값(시트 행 수)과 바로 맞춰 볼 수 있게
+    var nrows = b.rows.length + (b.hasStatus ? ' (현황 ' + Object.keys(b.status).length + '줄)' : '') + (b.blankRows ? ' · 빈 줄 ' + b.blankRows : '') + (b.totalRows ? ' · 합계 · 소계 줄 ' + b.totalRows + ' 제외' : '') + (b.sheetRows ? ' / 시트 ' + b.sheetRows + '행' : '');
     return '<tr><td>' + esc(b.fileName) + '</td><td>' + esc((b.kind || '구분 모름') + ' 오류점수 · ' + part) + '</td><td>' + esc(period) + '</td><td>' + esc(basis) + '</td><td class="num">' + esc(nrows) + '</td><td>' + (warn.length ? '<span class="bad">' + esc(warn.join(' / ')) + '</span>' : '—') + '</td></tr>';
   }
   function setBooks(raw) {

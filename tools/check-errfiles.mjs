@@ -32,8 +32,10 @@ books.forEach((b) => {
   const part = b.hasDetail && b.hasStatus ? '현황+상세' : b.hasDetail ? '상세목록' : b.hasStatus ? '현황목록' : '—';
   const per = b.fileMonth ? (b.fileYear + '-' + String(b.fileMonth).padStart(2, '0')) : '(시트 이름) ' + b.months.join(',');
   console.log('  ' + b.fileName);
-  console.log('     종류 ' + (b.kind || '구분 모름') + ' 오류점수 · ' + part + ' | 기간 ' + per + ' | ' + (d.mode === 'confirmed' ? '확정본' : '조회용') + ' | 월 귀속 ' + d.rule + ' ' + d.ruleText);
-  console.log('     상세 ' + b.rows.length + '줄' + (b.totalRows ? ' · 합계 줄 ' + b.totalRows + ' 제외' : '') + (b.skipped ? ' · 읽지 못한 줄 ' + b.skipped : '') + (b.hasStatus ? ' · 현황 ' + JSON.stringify(b.status) : '') + (b.notes.length ? ' · ' + b.notes.join(' / ') : ''));
+  console.log('     종류 ' + (b.kind || '구분 모름') + ' 오류점수 · ' + part + ' | 연도 ' + (b.year || '—') + (b.summaryYear ? '(요약 A1)' : '') + ' | 기간 ' + per + ' | ' + (d.mode === 'confirmed' ? '확정본' : '조회용') + ' | 월 귀속 ' + d.rule + ' ' + d.ruleText);
+  console.log('     상세 ' + b.rows.length + '줄' + (b.blankRows ? ' · 빈 줄 ' + b.blankRows : '') + (b.totalRows ? ' · 합계 · 소계 줄 ' + b.totalRows + ' 제외' : '') + (b.skipped ? ' · 읽지 못한 줄 ' + b.skipped : '') + (b.hasStatus ? ' · 현황 ' + JSON.stringify(b.status) : ''));
+  (b.perSheet || []).forEach((p) => console.log('       ' + (p.month ? String(p.month).padStart(2) + '월' : '월?') + ' 상세: 시트 ' + p.sheetRows + '행 = 정정 줄 ' + p.rows + ' + 빈 줄 ' + p.blank + ' + 합계 · 소계 ' + p.totalRows + ' + 읽지 못한 줄 ' + p.skipped + (p.cutAt != null ? ' (오른쪽 작업 영역 ' + (p.cutAt + 1) + '열부터 무시)' : '')));
+  b.notes.forEach((t) => console.log('     · ' + t));
 });
 
 const S = E.summarize(books, E.countsFromBooks(books), {});
