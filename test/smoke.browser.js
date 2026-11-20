@@ -16,6 +16,8 @@ function ok(c, label, d) { if (c) passed++; else { failed++; console.log('  X ' 
 srv.listen(0, async function () {
   var base = 'http://127.0.0.1:' + srv.address().port + '/';
   var br = await chromium.launch(); var pg = await br.newPage({ viewport: { width: 1280, height: 900 } });
+  // (v2.5.0) 아래 기대값은 원 단위 표기 — 기본 단위(억원) 대신 원을 고른 채로 연다
+  await pg.addInitScript(function () { try { localStorage.setItem('b2611-07.dash.unit', '원'); localStorage.setItem('b2611-07.dash.unit.v', '2'); } catch (e) {} });
   var errs = []; pg.on('pageerror', function (e) { errs.push(e.message); });
   var outbound = []; pg.on('request', function (r) { if (!r.url().startsWith(base) && !r.url().startsWith('https://api.openai.com/') && !r.url().startsWith('https://unipass.customs.go.kr:38010/')) outbound.push(r.url()); });
   try {
@@ -314,9 +316,9 @@ srv.listen(0, async function () {
     await pg.click('.tab[data-tab="ruling"]');
     ok(await pg.inputValue('#f-from') === '2026-01', 'v1.6.0 결정문 기본 기간 시작 2026-01');
     await pg.selectOption('#f-to', '2026-12');
-    ok(await kv('rul-n') === '1' && await kv('rul-claim') === '300만원' && await kv('rul-reserve') === '100만원' && await kv('rul-impact') === '400만원', 'v1.6.0 확인 — 1건 · 경정청구 300만원 · 유보 100만원 · impact 400만원');
+    ok(await kv('rul-n') === '1' && await kv('rul-claim') === '3,000,000원' && await kv('rul-reserve') === '1,000,000원' && await kv('rul-impact') === '4,000,000원', 'v1.6.0 확인 — 1건 · 경정청구 300만원 · 유보 100만원 · impact 400만원');
     var basis = await pg.textContent('[data-k="rul-basis"]');
-    ok(/건수와 유보액은 시행일자, 경정청구 금액은 경정청구일 기준/.test(basis) && /경정청구 금액 중 300만원은 기간 밖 결정문 건/.test(basis), 'v1.6.0 기준 문구 · 기간 밖 결정문 금액', basis);
+    ok(/건수와 유보액은 시행일자, 경정청구 금액은 경정청구일 기준/.test(basis) && /경정청구 금액 중 3,000,000원은 기간 밖 결정문 건/.test(basis), 'v1.6.0 기준 문구 · 기간 밖 결정문 금액', basis);
     ok(await pg.$$eval('table.ruling-list tr.outside', function (t) { return t.length; }) === 1, 'v1.6.0 목록에 기간 밖 결정문');
     await pg.click('.tab[data-tab="trade"]');
     ok(!/결정문 조회 기간/.test(await pg.textContent('#f-note')), 'v1.6.0 다른 탭 기간은 그대로');

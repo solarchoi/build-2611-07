@@ -1389,14 +1389,21 @@
   function fmtSigned(v, dp) { return v == null || !isFinite(v) ? '—' : (v > 0 ? '+' : '') + fmtNum(v, dp); }
   function fmtSignedPct(v) { return v == null || !isFinite(v) ? '—' : (v > 0 ? '+' : '') + fmtPct(v); }
   // 원 단위일 때만 억·만으로 줄여 쓴다(다른 단위면 그대로).
-  function fmtShort(v, unit) {
-    if (v == null || !isFinite(v)) return '—';
-    if (unit && unit !== '원') return fmtNum(v) + ' ' + unit;
-    var a = Math.abs(v), sg = v < 0 ? '-' : '';
-    if (a >= 1e8) return sg + fmtNum(a / 1e8, a >= 1e10 ? 0 : 1) + '억원';
-    if (a >= 1e4) return sg + fmtNum(a / 1e4, 0) + '만원';
-    return fmtNum(v) + '원';
+  // (v2.5.0) 금액 단위 — 화면에서 고른 단위로만 나눠 보인다(값 크기에 따라 억원 · 만원으로 멋대로 줄이지 않음). 원본 금액은 늘 원.
+  var UNITS = { '원': 1, '백만원': 1e6, '천만원': 1e7, '억원': 1e8 }, UNIT_LIST = ['원', '백만원', '천만원', '억원'], UNIT_DEFAULT = '억원';
+  function normUnit(u) { return UNITS[u] ? u : UNIT_DEFAULT; }
+  // 숫자만(접미사 없이) — 표 칸 · 축 라벨용. 원은 소수 없이, 나머지는 소수 첫째(그 단위로 10 이상이면 정수). dp 를 주면 그 자리수로 고정(FTA 탭 · 원은 0).
+  //   0 · 빈값은 「—」, 음수는 앞에 「-」.
+  function fmtUnitNum(v, unit, dp) {
+    if (v == null || !isFinite(v) || v === 0) return '—';
+    var u = normUnit(unit), x = v / UNITS[u];
+    if (u === '원') return fmtNum(Math.round(x), 0);
+    if (dp != null) return fmtNum(x, dp);
+    return fmtNum(x, Math.abs(x) >= 10 ? 0 : 1);
   }
+  function fmtShort(v, unit) { var s = fmtUnitNum(v, unit); return s === '—' ? s : s + normUnit(unit); }
+  // 엑셀 내보내기용 — 고른 단위로 나눈 숫자(원은 그대로, 나머지는 소수 둘째에서 반올림)
+  function toUnit(v, unit) { if (typeof v !== 'number' || !isFinite(v)) return v; var u = normUnit(unit); return u === '원' ? v : Math.round(v / UNITS[u] * 100) / 100; }
   function monthLabel(m) { return m ? m.slice(0, 4) + '.' + m.slice(5, 7) : ''; }
 
   /* ---------- 엑셀 표(탭별 집계 시트) ---------- */
@@ -1495,7 +1502,22 @@
         out.push({ name: '결정문_세율인하', aoa: [['종전세율 → 결정세율', '건수', '낮아짐']].concat(rl.rateChanges.map(function (c) { return [c.key, c.n, c.lowered == null ? '' : c.lowered ? 'Y' : 'N']; })) });
       }
     }
+    // (v2.5.0) 금액 열을 화면에서 고른 단위로 나눈다(원이면 그대로) — 머리글에 「(단위)」.
+    if (normUnit(unit) !== '원') out.forEach(function (sh) { if (sh.name !== '안내') unitSheet(sh, unit); });
     return out;
+  }
+  // 금액 열 = 머리글에 물자대 · 관세 · 수출금액 · 전년 동기 · 증감 · FOB · 절감 · 금액 · 수입액 · 경정청구 · 관세유보 · impact(% · 율 · 건수 제외).
+  //   환급 · 결정문 연도별 시트는 달 열(2026.01) · 합계 · 누계도 금액.
+  var AMT_COL = /물자대|(^|\s)관세$|관세 집계 제외|수출금액|전년 동기|^증감$|FOB|절감|금액|수입액|경정청구|관세유보|impact/;
+  function isAmountCol(sheetName, h) {
+    var t = clean(h); if (!t || /%|율|건수/.test(t)) return false;
+    if (/^(환급|결정문_연도별)/.test(sheetName) && (/^\d{4}\.\d{2}$/.test(t) || t === '합계' || t === '누계')) return true;
+    return AMT_COL.test(t);
+  }
+  function unitSheet(sh, unit) {
+    var head = sh.aoa[0] || [], cols = head.map(function (h, i) { return isAmountCol(sh.name, h) ? i : -1; }).filter(function (i) { return i >= 0; });
+    if (!cols.length) return;
+    sh.aoa = sh.aoa.map(function (r, ri) { if (!ri) return r.map(function (h, i) { return cols.indexOf(i) >= 0 ? h + '(' + unit + ')' : h; }); return r.map(function (v, i) { return cols.indexOf(i) >= 0 ? toUnit(v, unit) : v; }); });
   }
 
   /* ---------- 자료 목록(⑦ 통관 서식·업무 매뉴얼) ---------- */
@@ -1890,7 +1912,7 @@
     parseRate: parseRate, rulingStats: rulingStats, RULING_BY: RULING_BY, RULING_BASIS: RULING_BASIS, RULING_BASE_FROM: RULING_BASE_FROM, RULING_PROGRESS: RULING_PROGRESS,
     isProgress: isProgress, rowImpact: rowImpact, rulingPeriod: rulingPeriod, rulingMonths: rulingMonths, rulingDefaultRange: rulingDefaultRange,
     sampleRulingCheck: sampleRulingCheck, sampleRulingAmounts: sampleRulingAmounts,
-    fmtNum: fmtNum, fmtPct: fmtPct, fmtSigned: fmtSigned, fmtSignedPct: fmtSignedPct, fmtShort: fmtShort, monthLabel: monthLabel,
+    fmtNum: fmtNum, fmtPct: fmtPct, fmtSigned: fmtSigned, fmtSignedPct: fmtSignedPct, fmtShort: fmtShort, fmtUnitNum: fmtUnitNum, toUnit: toUnit, normUnit: normUnit, UNITS: UNITS, UNIT_LIST: UNIT_LIST, UNIT_DEFAULT: UNIT_DEFAULT, monthLabel: monthLabel,
     exportBook: exportBook,
     libValidate: libValidate, libAdd: libAdd, libRemove: libRemove, libSearch: libSearch, libCounts: libCounts, libToAoa: libToAoa,
     libFromRows: libFromRows, libSample: libSample, libLocationKind: libLocationKind,

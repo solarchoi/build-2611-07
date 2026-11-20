@@ -310,9 +310,9 @@ eq(C.fmtNum(1234567), '1,234,567', '천 단위 쉼표');
 eq(C.fmtPct(0.12345), '12.3%', '백분율');
 eq(C.fmtPct(null), '—', '빈 값은 —');
 eq(C.fmtSignedPct(0.5), '+50.0%', '증가 +');
-eq(C.fmtShort(1234000000), '12.3억원', '억 단위');
-eq(C.fmtShort(56780000), '5,678만원', '만 단위');
-eq(C.fmtShort(1500, '천원'), '1,500 천원', '원이 아니면 줄이지 않는다');
+eq(C.fmtShort(1234000000), '12억원', '억 단위(v2.5.0 기본 억원 · 10 이상은 정수)');
+eq(C.fmtShort(56780000, '백만원'), '57백만원', '백만원 단위(v2.5.0 — 만원으로 멋대로 줄이지 않음)');
+eq(C.fmtShort(1500, '원'), '1,500원', '원은 소수 없이 그대로(v2.5.0)');
 
 // 엑셀 표
 var book = C.exportBook({ range: R25, filter: {}, unit: '원', data: { import: { file: 'a.xlsx', uploadedAt: '2026-11-03', period: ni.period, records: ni.records, map: IMP_MAP, skipped: ni.skipped } } });
@@ -778,7 +778,7 @@ var v150 = passed + failed;
   eq(s.reserve, 1000000, 'v1.6.0 확인 — 관세유보금액 100만원(나만, 가의 유보는 2025년 귀속)');
   eq(s.impact, 4000000, 'v1.6.0 확인 — 관세절감 impact 400만원');
   eq([s.claimOutside, s.claimOutsideN], [3000000, 1], 'v1.6.0 확인 — 경정청구 금액 중 300만원은 기간 밖 결정문 건');
-  eq(C.fmtShort(s.claimOutside, '원'), '300만원', 'v1.6.0 화면 표기 300만원');
+  eq(C.fmtShort(s.claimOutside, '원'), '3,000,000원', 'v1.6.0 화면 표기(v2.5.0 — 원을 고르면 원 그대로)');
   eq(s.basis, '건수와 유보액은 시행일자, 경정청구 금액은 경정청구일 기준', 'v1.6.0 기준 문구');
   eq(s.list.map(function (r) { return [r.seq, r.outside]; }), [['나', false], ['가', true]], 'v1.6.0 목록에 기간 밖 결정문(가)도 「기간 밖」으로');
   eq(s.mismatchN, 0, 'v1.6.0 impact 칸 = 경정청구 + 유보');
@@ -1164,6 +1164,7 @@ var v200c = passed + failed; v210(); console.log('v2.1.0 ' + (passed + failed - 
 var v210c = passed + failed; v220(); console.log('v2.2.0 ' + (passed + failed - v210c) + '개 검사');
 var v220c = passed + failed; v230(); console.log('v2.3.0 ' + (passed + failed - v220c) + '개 검사');
 var v230c = passed + failed; v240(); console.log('v2.4.0 ' + (passed + failed - v230c) + '개 검사');
+var v240c = passed + failed; v250(); console.log('v2.5.0 ' + (passed + failed - v240c) + '개 검사');
 console.log('v1.9.0 ' + (v190 - v180) + '개 검사');
 console.log('v1.8.0 ' + (v180 - v170) + '개 검사');
 console.log('v1.7.0 ' + (v170 - v160) + '개 검사');
@@ -1771,4 +1772,38 @@ function v240() {
   var ord = ['exfta-k-saving', 'exfta-k-cum', 'exfta-k-amount', 'exfta-k-lines', 'exfta-ch-saving', 'exfta-ch-agree', 'exfta-rate-note', "'exfta-agree'", 'exfta-check', "'exfta-country'", 'exfta-excl', 'exfta-foot'].map(function (k) { return body.indexOf(k); });
   ok(ord.every(function (v, i) { return v > 0 && (!i || v > ord[i - 1]); }) && /C\.hqColor\(hq\)/.test(body) && /유효절감율/.test(body) && /세율표로 계산하면/.test(body), 'v2.4.0 화면 — 카드 4 · 본부별 쌓은 막대(본부 고정색) · 협정별 · 유효절감율 · 피벗 대조 · 국가 · 제외 건 · 하단 근거', JSON.stringify(ord));
   ok(/\{ id: 'exrates', label: '수출 FTA 세율표 \(분석본에서 모은 세율\)', on: false/.test(dj) && /LS\.files, C\.EXFTA_DATA_KEY\]/.test(dj) && /data-exrates-xlsx/.test(dj) && CU.EXFTA_RATES_KEY === 'b2611-07.exfta.rates', 'v2.4.0 세율표는 지우기 창에서 따로(기본 해제) · 수출 FTA 집계 자료는 실적 데이터 · 설정에서 세율표 내보내기');
+}
+// ---------- v2.5.0 금액 단위 — 고른 단위로만 표시(원 · 백만원 · 천만원 · 억원) ----------
+function v250() {
+  var CU = require('../js/customs.js'), V = 221600000000;
+  eq(CU.UNIT_LIST.map(function (u) { return CU.fmtShort(V, u); }), ['221,600,000,000원', '221,600백만원', '22,160천만원', '2,216억원'], 'v2.5.0 [검증] 221,600,000,000원 → 원 · 백만원 · 천만원 · 억원');
+  eq([CU.UNIT_LIST, CU.UNIT_DEFAULT, CU.UNITS], [['원', '백만원', '천만원', '억원'], '억원', { '원': 1, '백만원': 1e6, '천만원': 1e7, '억원': 1e8 }], 'v2.5.0 단위 네 가지 · 기본 억원');
+  eq([CU.fmtShort(940000000, '억원'), CU.fmtShort(1000000000, '억원'), CU.fmtShort(996000000, '억원'), CU.fmtShort(-940000000, '억원'), CU.fmtShort(-2216e8, '억원'), CU.fmtShort(1234567.6, '원'), CU.fmtShort(5500000, '백만원'), CU.fmtShort(123456789, '천만원')],
+    ['9.4억원', '10억원', '10.0억원', '-9.4억원', '-2,216억원', '1,234,568원', '5.5백만원', '12천만원'], 'v2.5.0 소수 첫째 · 그 단위로 10 이상이면 정수 · 원은 정수 · 음수 「-」');
+  eq([CU.fmtShort(0, '억원'), CU.fmtShort(null, '원'), CU.fmtShort(NaN, '억원'), CU.fmtUnitNum(0, '원')], ['—', '—', '—', '—'], 'v2.5.0 0 · 빈값은 「—」');
+  eq([CU.fmtShort(1e8, '천원'), CU.fmtShort(1e8, 'USD'), CU.normUnit(undefined), CU.fmtShort(1e8)], ['1.0억원', '1.0억원', '억원', '1.0억원'], 'v2.5.0 목록에 없는 단위(천원 · USD)는 기본 억원 — USD 는 열 이름일 뿐 표시 단위가 아님');
+  eq([CU.fmtUnitNum(V, '억원'), CU.fmtUnitNum(49804000000, '억원', 2), CU.fmtUnitNum(49804000000, '백만원', 2), CU.fmtUnitNum(49804000000, '원', 2), CU.fmtUnitNum(8000000, '억원', 2)], ['2,216', '498.04', '49,804.00', '49,804,000,000', '0.08'], 'v2.5.0 숫자만(표 · 축) · FTA 는 고른 단위 · 소수 둘째(원은 정수)');
+  ok(CU.UNIT_LIST.every(function (u) { return Math.abs(Number(CU.fmtUnitNum(V, u).replace(/,/g, '')) * CU.UNITS[u] - V) < CU.UNITS[u]; }), 'v2.5.0 어떤 단위를 골라도 값은 같고 반올림만 다름');
+  eq([CU.toUnit(V, '억원'), CU.toUnit(123456789, '백만원'), CU.toUnit(V, '원'), CU.toUnit('x', '억원')], [2216, 123.46, V, 'x'], 'v2.5.0 엑셀 숫자 — 고른 단위로 나눔(소수 둘째 반올림 · 원은 그대로)');
+  // 엑셀 내보내기 — 금액 열만 고른 단위로 · 머리글에 단위 · 금액 단위 줄
+  var data = {}; CU.sampleFiles().forEach(function (f) { var d = CU.detectKind(CU.uniqueHeaders(f.aoa[0]), f.name), k = d.kind; if (!k || !CU.DATASETS[k]) return; var m = CU.mergeFiles(k, [{ name: f.name, file: f.name, headers: CU.uniqueHeaders(f.aoa[0]), aoa: f.aoa, offset: 0, override: {} }], CU.exportSettings(null)); if (m.ok) data[k] = { file: f.name, period: m.period, records: m.records, map: m.map, skipped: m.skipped }; });
+  var rg = CU.defaultRange(CU.unionPeriod(Object.keys(data).map(function (k) { return data[k].period; })));
+  var ctx = function (u) { return { range: rg, rulingRange: CU.rulingDefaultRange(CU.rulingPeriod(data.ruling ? data.ruling.records : [])), filter: {}, unit: u, data: data, exportOpts: CU.exportSettings(null) }; };
+  var bW = CU.exportBook(ctx('원')), bE = CU.exportBook(ctx('억원')), sh = function (b, n) { return b.filter(function (x) { return x.name === n; })[0]; };
+  var iW = sh(bW, '수입_본부'), iE = sh(bE, '수입_본부'), rE = sh(bE, '환급_본부월'), rW = sh(bW, '환급_본부월'), dE = sh(bE, '결정문_목록');
+  eq([iE.aoa[0], iE.aoa[1][1] === iW.aoa[1][1], iE.aoa[1][2], iE.aoa[1][4] === iW.aoa[1][4]], [['본부', '건수', '물자대(억원)', '관세(억원)', '관세부담율(%)'], true, Math.round(iW.aoa[1][2] / 1e6) / 100, true], 'v2.5.0 엑셀 — 금액 열만 억원으로(건수 · 비율 그대로) · 머리글에 단위');
+  eq([rE.aoa[0][1], rE.aoa[0][rE.aoa[0].length - 1], rE.aoa[1][rE.aoa[1].length - 1] === rW.aoa[1][rW.aoa[1].length - 1], dE.aoa[0].slice(5), sh(bE, '수출_본부').aoa[0]],
+    ['2025.01(억원)', '건수(건수 열의 합)', true, ['관세율', '종전세율', '관세사', '연간 수입액(억원)', '절감 추정(억원)'], ['본부', '건수', '수출금액(억원)', '전년 동기(억원)', '증감(억원)', '증감률(%)']], 'v2.5.0 엑셀 — 환급 달 열 · 합계도 금액, 관세율 · 종전세율 · 건수는 그대로');
+  eq([bE[0].aoa.filter(function (r) { return r[0] === '금액 단위'; })[0][1], JSON.stringify(sh(bW, '수입_본부').aoa[0]).indexOf('(원)') < 0], ['억원', true], 'v2.5.0 엑셀 「금액 단위」 = 화면 단위 · 원이면 그대로(머리글도 그대로)');
+  // 화면
+  var dj = fsx.readFileSync(__dirname + '/../js/dash.js', 'utf8'), dh = fsx.readFileSync(__dirname + '/../dashboard.html', 'utf8');
+  ok(/<select id="f-unit"><option>원<\/option><option>백만원<\/option><option>천만원<\/option><option selected>억원<\/option><\/select>/.test(dh) && !/USD|천원/.test(dh.match(/<select id="f-unit">[\s\S]*?<\/select>/)[0]), 'v2.5.0 단위 선택지 — 원 · 백만원 · 천만원 · 억원(기본 억원 · USD · 천원 없음)');
+  ok(/function unitInit\(\)/.test(dj) && /localStorage\.getItem\(LS\.unit \+ '\.v'\) !== '2'/.test(dj) && /return C\.normUnit\(v\)/.test(dj), 'v2.5.0 예전 단위 저장값(올린 파일 단위)은 한 번만 기본 억원으로');
+  var body = dj.replace(/\/\/[^\r\n]*/g, '');
+  var mail = dj.slice(dj.indexOf('function ftaMailHtml'), dj.indexOf('function copyHtml'));
+  ok(!/\(억원\)|단위 억원|\+ '억|'\(억\)|물자대\(억\)/.test(body.replace(mail, '')) && /\(단위: 억원\)<\/p>/.test(mail) && mail.indexOf('eokT(') < 0 && /eokMail\(/.test(mail), 'v2.5.0 화면에 박힌 「억원」 없음 — 메일용 표만 늘 억원 · 소수 둘째(보고 양식)');
+  ok(/function eokT\(v\) \{ return v == null \? '—' : C\.fmtUnitNum\(v, state\.unit, 2\); \}/.test(dj) && /function eokU\(v\)/.test(dj), 'v2.5.0 FTA 탭 — 원 단위로 집계해 둔 값을 표시할 때만 고른 단위로(소수 둘째)');
+  ok(/C\.fmtUnitNum\(v, state\.unit\); \}; \}/.test(dj) && /if \(!fmtKind \|\| fmtKind === 'money'\) title = UT\(title\);/.test(dj) && /if \(fmt === money\) title = UT\(title\);/.test(dj) && (dj.match(/title = UT\(title\);/g) || []).length === 5, 'v2.5.0 금액 축 = 고른 단위 숫자 · 금액 차트 제목에 (단위: …)');
+  ok(!/n0\((?:[a-z]+\.)*(?:goods|duty|dutyExcl|amount|prev|ftaGoods|saving)\)/.test(dj) && /p\.months\.map\(m0\)/.test(dj) && /U\('물자대'\)/.test(dj) && /U\('FOB'\)/.test(dj) && /sp\(g\.diff, ms0\(g\.diff\)\)/.test(dj), 'v2.5.0 실적 · 환급 표 — 금액 칸은 고른 단위(건수는 그대로) · 머리글에 단위');
+  ok(dj.indexOf('금액 단위는 올린 파일 그대로') < 0 && /금액은 원화 원본을 고른 단위\(' \+ esc\(state\.unit\) \+ '\)로 나눠 보입니다/.test(dj), 'v2.5.0 조건 줄 문구 — 고른 단위로 나눠 보임');
 }
