@@ -135,17 +135,20 @@
       var mg = C.exftaRatesMerge(exRates(), r); r.coverage = mg.coverage; r.rateConflicts = mg.conflicts.length;
       try { localStorage.setItem(C.EXFTA_RATES_KEY, JSON.stringify(mg.table)); } catch (e) { r.warnings.push('세율표를 저장하지 못했습니다(용량).'); }
     } else { r.coverage = null; r.rateConflicts = 0; }
-    var old = state.exfta.filter(function (x) { return x.month === r.month && x.hq === r.hq; });
+    var mOf = function (x) { return x.months || [x.month]; }, rms = mOf(r);
+    var old = state.exfta.filter(function (x) { return x.file === r.file || (x.hq === r.hq && mOf(x).some(function (m) { return rms.indexOf(m) >= 0; })); });
     state.exfta = state.exfta.filter(function (x) { return old.indexOf(x) < 0; }).concat([r]);
-    var saved = exftaSave(), ck = r.check;
+    var saved = state.loadingSample || state.example ? true : exftaSave(), ck = r.check;   // (v2.8.0) 예제는 저장 안 함
     renderSettings();
     return { ok: true, note: '<span data-k="exfta-ok">' + esc(f.name) + ' — 수출 FTA ' + esc(r.hq) + ' ' + esc(C.monthLabel(r.month)) + (old.length ? ' (이전 파일 ' + esc(old.map(function (x) { return x.file; }).join(', ')) + ' 을 교체)' : '') + ': 「' + esc(r.pick.sheet) + '」 ' + C.fmtNum(r.rows.length) + '행 · 판가 ' + eokU(ck ? ck.total.ours.amount : 0) + ' · 절감 ' + eokU(ck ? ck.total.ours.saving : r.rows.reduce(function (a, x) { return a + x.saving; }, 0)) + ' · ' +
       (ck ? (ck.ok ? '담당자 피벗과 일치' : '<b>담당자 피벗과 ' + ck.rows.filter(function (q) { return !q.ok; }).length + '개 협정이 다름</b>') : '피벗 없음') + (r.coverage ? ' · 세율표 새로 ' + C.fmtNum(r.coverage.added) + '건' : ' · 예제라 세율표에 넣지 않음') + (r.warnings.length ? ' · <b>' + esc(r.warnings.join(' / ')) + '</b>' : '') + (saved ? '' : ' · <b>이 브라우저에 저장하지 못했습니다</b>') + '</span>' };
   }
   function addFiles(list) {
+    if (state.example && !state.loadingSample) endExample(true);   // (v2.8.0) 내 파일을 올리면 예제를 닫고 저장된 데이터 위에 올린다
     var notes = [], warn = false, names = {}, views = [], confirmedN = 0, erpItems = [];
     list.forEach(function (f) {
       var sheets = sheetsOf(f.wb);
+      if (C.isBlankTemplate(rawSheets(f.wb))) { notes.push('<span data-k="blank-tpl">' + esc(f.name) + ' — <b>' + esc(C.BLANK_TEMPLATE_MSG) + '</b></span>'); warn = true; return; }   // (v2.8.0)
       if (!sheets.length) { notes.push(esc(f.name) + ' — 읽을 표가 없습니다.'); warn = true; return; }
       // (v1.8.0) 같은 모양의 시트는 모두 읽어 합친다(RAW1~RAW10 등). 집계표 · 열이 다른 시트는 건너뛰고 이름을 남긴다 — 고르는 규칙은 C.pickSheets
       var pk = C.pickSheets(sheets, f.name), use = pk.use, best = { s: use[0], d: pk.detect };
@@ -168,7 +171,7 @@
       if (!kind) { state.pending.push(item); notes.push(esc(f.name) + ' — 어떤 자료인지 알아보지 못했습니다. 아래에서 종류를 골라 주세요.' + (C.skippedSheetNote(item.skippedSheets) ? ' ' + esc(C.skippedSheetNote(item.skippedSheets)) : '')); warn = true; return; }
       info.dataset = kind; item.reason = reason;
       info.warnings.forEach(function (w) { notes.push(esc(f.name) + ' — <b>' + esc(w) + '</b>'); warn = true; });
-      if (info.mode === 'view') { views.push({ kind: kind, item: item }); return; }
+      if (info.mode === 'view' || state.loadingSample) { views.push({ kind: kind, item: item }); return; }   // (v2.8.0) 예제는 늘 조회용(저장 안 함)
       if (!placeConfirmed(kind, item, state.base())) { notes.push(esc(item.file) + ' — 올리지 않았습니다(이전 파일 그대로).'); warn = true; return; }
       confirmedN++;
       if ((kind === 'import' || kind === 'export') && !state.loadingSample) erpItems.push({ kind: kind, item: item });
@@ -176,11 +179,11 @@
       names[kind] = names[kind] || {}; names[kind][item.file] = 1;
     });
     // 확정본을 올리면 조회 모드를 끝낸다(확정 데이터 화면으로). 조회용이 함께 있으면 그것만 조회 모드로 다시 연다.
-    if (confirmedN && state.view) endView(true);
+    if (confirmedN && state.view && !state.example) endView(true);
     if (views.length) {
       if (!state.view) { state.saved = state.sets; state.sets = {}; state.view = true; }
       views.forEach(function (v) { putFile(v.kind, v.item); });
-      notes.push('<b>조회 모드</b> — ' + esc(views.map(function (v) { return v.item.file; }).join(', ')) + ' 은(는) 저장하지 않고 화면에만 보입니다. 저장된 확정 데이터는 그대로입니다.');
+      if (!state.loadingSample) notes.push('<b>조회 모드</b> — ' + esc(views.map(function (v) { return v.item.file; }).join(', ')) + ' 은(는) 저장하지 않고 화면에만 보입니다. 저장된 확정 데이터는 그대로입니다.');
     }
     var note = rebuild(true);
     var en = recordErp(erpItems); if (en) notes.push(en);
@@ -222,7 +225,7 @@
   }
   // (v2.7.0) 예제 = samples/ 의 실제 구조 파일 9개(가상 데이터 · 2026년 9~10월). 실적 · FTA · 환급 · 결정문 7개는 탭으로,
   //   유니패스 오류점수 2개는 오류점수 화면과 같은 계산(errscore.summaryFrom)으로 요약을 만들어 오류점수 탭에. 신고번호가 이어져 지역 · 본부 · 관리대장도 채워짐.
-  var EXAMPLES = { dash: ['2026_예제(가상)_수입실적.xlsx', '2026_예제(가상)_수출실적.xlsx', '2026_예제(가상)_수입FTA.xlsx', '2026-10_예제(가상)_수출FTA_건기.xlsx', '2026-10_예제(가상)_수출FTA_엔진.xlsx', '2026_예제(가상)_관세환급.xlsx', '2026_예제(가상)_품목분류결정문.xlsx'], err: ['2026_예제(가상)_수입오류.xlsx', '2026_예제(가상)_수출오류.xlsx'] };
+  var EXAMPLES = { dash: ['2025-2026_예제(가상)_수입실적.xlsx', '2025-2026_예제(가상)_수출실적.xlsx', '2025-2026_예제(가상)_수입FTA.xlsx', '2025-2026_예제(가상)_수출FTA_건기.xlsx', '2025-2026_예제(가상)_수출FTA_엔진.xlsx', '2025-2026_예제(가상)_관세환급.xlsx', '2025-2026_예제(가상)_품목분류결정문.xlsx'], err: ['2025_예제(가상)_수입오류.xlsx', '2025_예제(가상)_수출오류.xlsx', '2026_예제(가상)_수입오류.xlsx', '2026_예제(가상)_수출오류.xlsx'] };
   function fetchBook(n) { return fetch('samples/' + encodeURIComponent(n)).then(function (r) { if (!r.ok) throw new Error(n + ' — ' + r.status); return r.arrayBuffer(); }).then(function (b) { return { name: n, wb: XLSX.read(new Uint8Array(b), { type: 'array' }) }; }); }
   // ERP 실적 예제 → 오류점수용 레코드(GN 포함 — 관세청 총신고건과 같은 기준)
   function erpRecordsOf(f, kind) {
@@ -237,19 +240,31 @@
     var fi = dashFiles.filter(function (f) { return /수입실적/.test(f.name); })[0], fe = dashFiles.filter(function (f) { return /수출실적/.test(f.name); })[0];
     var ri = fi ? erpRecordsOf(fi, 'import') : [], re = fe ? erpRecordsOf(fe, 'export') : [];
     var store = E.erpStoreFrom({ 수입: ri, 수출: re }, { files: [fi && { name: fi.name, kind: '수입', rows: ri.length }, fe && { name: fe.name, kind: '수출', rows: re.length }].filter(Boolean), src: 'example' });
-    var res = E.summaryFrom(books, store, { rule: rule });
-    try { localStorage.setItem(E.SUMMARY_KEY, JSON.stringify(res.saved)); localStorage.setItem(E.BOOKS_KEY, JSON.stringify(E.booksPack(books))); localStorage.setItem(E.ERP_KEY, JSON.stringify(store)); } catch (e) { return ' 오류점수 예제 결과를 저장하지 못했습니다(용량).'; }
-    return ' 유니패스 오류점수 예제(수입 · 수출)는 오류점수 화면과 같은 계산으로 오류점수 탭에 넣었습니다 — 오류점수 화면을 열면 지역 · 본부 · 관리대장도 예제로 보입니다.';
+    // (v2.8.0) 해마다 계산(오류점수는 월 1~12 로 묶어 한 해씩) · 저장하지 않고 이 화면에서만(state.sampleErr)
+    var res = E.summaryFromYears(books, store, { rule: rule });
+    state.sampleErr = res.saved;
+    return ' 유니패스 오류점수 예제(' + res.years.join(' · ') + '년 수입 · 수출)는 오류점수 화면과 같은 계산으로 오류점수 탭에 넣었습니다.';
+  }
+  // (v2.8.0) 예제 닫기 — 저장된 내 데이터(실적 · 수출 FTA · 오류점수 요약)로 돌아간다
+  function endExample(silent) {
+    if (!state.example) return;
+    state.example = false; state.sampleErr = null; state.exfta = state.exftaSaved || exftaLoad(); state.exftaSaved = null;
+    endView(true);
+    if (!silent) { var note = rebuild(true); msg('예제를 닫았습니다. 저장된 내 데이터를 보입니다.' + note, note ? 'warn' : 'ok'); }
   }
   function loadSample() {
-    msg('예제 파일 9개를 읽는 중…', 'note');
+    msg('예제 파일 11개를 읽는 중…', 'note');
     Promise.all(EXAMPLES.dash.concat(EXAMPLES.err).map(fetchBook)).then(function (list) {
       var dash = list.filter(function (f) { return EXAMPLES.dash.indexOf(f.name) >= 0; }), err = list.filter(function (f) { return EXAMPLES.err.indexOf(f.name) >= 0; });
-      state.sets = {}; state.pending = []; state.open = {}; state.view = false; state.saved = null; state.held = []; state.exfta = []; state.loadingSample = true;
+      endExample(true);
+      if (!state.view) { state.saved = state.sets; state.view = true; }
+      state.sets = {}; state.pending = []; state.open = {}; state.held = [];
+      state.example = true; state.exftaSaved = state.exfta; state.exfta = []; state.loadingSample = true;
       var en = sampleErrors(err, dash);
       addFiles(dash);
       state.loadingSample = false;
-      msg('<span data-k="sample-ok">예제 엑셀 9종(가상 데이터 · 2026년 9~10월)을 올렸습니다 — 수입실적 · 수출실적 · 수입FTA · 수출FTA(건기 · 엔진) · 관세환급 · 품목분류 결정문은 각 탭에.' + esc(en) + ' 예제 데이터는 실제 사내 데이터가 아닙니다.</span>', 'ok');
+      rebuild(true);
+      msg('<span data-k="sample-ok">예제 11종(가상 데이터 · 2025 ~ 2026)으로 결과 화면을 보여 드립니다 — <b>저장하지 않습니다.</b> 수입실적 · 수출실적 · 수입FTA · 수출FTA(건기 · 엔진) · 관세환급 · 품목분류 결정문은 각 탭에.' + esc(en) + ' 내 파일을 올리거나 「예제 닫기」를 누르면 저장된 내 데이터로 돌아갑니다. 예제 데이터는 실제 사내 데이터가 아닙니다.</span>', 'ok');
     }).catch(function (e) { state.loadingSample = false; msg('예제 파일을 읽지 못했습니다: ' + esc(e.message) + ' — 사이트 주소(http)로 열어야 합니다(파일을 바로 열면 읽지 못함).', 'warn'); });
   }
 
@@ -352,6 +367,12 @@
   function renderViewBar() {
     var bar = $('d-viewbar'), top = $('d-viewtop'); if (!bar) return;
     if (!state.view) { bar.hidden = true; bar.innerHTML = ''; if (top) { top.hidden = true; top.innerHTML = ''; } return; }
+    if (state.example) {   // (v2.8.0) 예제 — 저장 안 함 · 닫으면 저장된 내 데이터
+      var ex = '<b>예제(가상 데이터)를 보는 중 — 저장하지 않습니다.</b> 내 파일을 올리거나 「예제 닫기」를 누르면 저장된 내 데이터로 돌아갑니다.';
+      bar.hidden = false; bar.innerHTML = '<div class="note viewbar" data-k="examplebar">' + ex + '<div class="btnrow"><button class="btn" type="button" data-example-end>예제 닫기</button></div></div>';
+      if (top) { top.hidden = false; top.innerHTML = '<div class="note viewbar" data-k="exampletop">' + ex + ' <button class="x" type="button" data-example-end>예제 닫기</button></div>'; }
+      return;
+    }
     var lines = [], first = null;
     Object.keys(state.sets).forEach(function (k) {
       var s = state.sets[k]; s.files.forEach(function (f, i) {
@@ -1028,7 +1049,7 @@
   // (v1.10.0) 오류 비율은 분자 · 분모가 모두 있을 때만 — 그 달 오류점수 자료가 없으면 0% 가 아니라 「자료 없음」(미집계)
   // (v2.0.0) 오류점수 탭은 오류점수 화면(errors.html)이 저장한 요약(b2611-07.err.summary)을 읽기만 한다 — 계산은 errscore.js 한 곳.
   //   보이는 것: 종합(수입 + 수출) 신고건수 · 오류점수 · 비율(= 오류점수 ÷ 신고건수), 월별 추이. 지역 · 본부 · 관리대장은 오류점수 화면에만.
-  function errSummary() { try { var j = JSON.parse(localStorage.getItem('b2611-07.err.summary') || 'null'); return j && Array.isArray(j.rows) && j.rows.length ? j : null; } catch (e) { return null; } }
+  function errSummary() { if (state.example && state.sampleErr) return state.sampleErr; try { var j = JSON.parse(localStorage.getItem('b2611-07.err.summary') || 'null'); return j && Array.isArray(j.rows) && j.rows.length ? j : null; } catch (e) { return null; } }
   function errRate(v) { return v == null ? '자료 없음' : C.fmtPct(v / 100, 2); }
   function renderErrors() {
     var sum = errSummary(), ES = window.ErrScore;
@@ -1199,6 +1220,7 @@
     dlg.returnValue = ''; if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', '');
   }
   function doClear(sel) {
+    endExample(true);
     if (!sel.length) { msg('고른 항목이 없어 아무것도 지우지 않았습니다.', 'ok'); return; }
     sel.forEach(function (c) { c.keys().forEach(function (k) { try { localStorage.removeItem(k); } catch (e) { /* 지우지 못해도 화면은 계속 */ } }); });
     var ids = sel.map(function (c) { return c.id; });
@@ -1210,7 +1232,8 @@
   $('btn-dash-clear').addEventListener('click', clearDialog);
   // (v1.10.0) 조회 모드 띠의 버튼
   document.addEventListener('click', function (e) {
-    if (e.target.closest('[data-view-keep]')) keepView();
+    if (e.target.closest('[data-example-end]')) endExample(false);
+    else if (e.target.closest('[data-view-keep]')) keepView();
     else if (e.target.closest('[data-view-end]')) endView(false);
     else { var hb = e.target.closest('[data-drop-held]'); if (hb) { state.held.splice(+hb.dataset.dropHeld, 1); renderSets(); } }
   });

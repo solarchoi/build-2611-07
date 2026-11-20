@@ -474,6 +474,15 @@
     var erp = (erpStoreValid(erpStore) ? erpStore.files : []).map(function (x) { return { name: x.name, kind: x.kind, period: x.period || null, rows: x.rows, src: x.src }; });
     return { rows: rows, year: year, erpSum: erpSum, counts: counts, summary: summary, hq: hq, saved: buildSummary(summary, hq, books, { erp: erp }) };
   }
+  // (v2.8.0) 여러 해 — 오류점수 계산은 한 해씩(월 1~12 로 묶기 때문). 해마다 summaryFrom 을 돌려 저장할 요약 줄(ym = YYYY-MM)을 잇는다.
+  //   → { years, latest, byYear: { 해: summaryFrom 결과 }, saved: { updatedAt, basis, rows(모든 해), files } }
+  function summaryFromYears(books, erpStore, opts) {
+    var g = {}; (books || []).forEach(function (b) { var y = b.year || ((b.rows || []).map(function (r) { return r.year; }).filter(Boolean)[0]) || 0; (g[y] = g[y] || []).push(b); });
+    var years = Object.keys(g).map(Number).sort(), byYear = {}, rows = [], files = [];
+    years.forEach(function (y) { var res = summaryFrom(g[y], erpStore, opts); byYear[y] = res; rows = rows.concat(res.saved.rows); (res.saved.files || []).forEach(function (f) { if (!files.some(function (x) { return JSON.stringify(x) === JSON.stringify(f); })) files.push(f); }); });
+    var last = years.length ? byYear[years[years.length - 1]].saved : null;
+    return { years: years, latest: years[years.length - 1] || null, byYear: byYear, saved: last ? Object.assign({}, last, { rows: rows, files: files }) : null };
+  }
   // (v2.6.0) 상단 조회 기간으로 자른 요약 — 기간 안 달만 합산(종합 = 기간 합계), 당월 = 기간의 마지막 달, 자료 없는 달은 months 에만(추이 빈칸).
   //   신고건수는 기간 안 모든 달에 있어야 합계(한 달이라도 한쪽 자료뿐이면 null — 비율 「자료 없음」).
   function rangeSummary(sum, range) {
@@ -798,7 +807,7 @@
 
   var api = {
     RULE: RULE, THRESHOLD: THRESHOLD, KINDS: KINDS, CAMPUSES: CAMPUSES, FIELDS: FIELDS, LEDGER_HEAD: LEDGER_HEAD,
-    buildSummary: buildSummary, summaryFrom: summaryFrom, summaryMonthly: summaryMonthly, rangeSummary: rangeSummary, localTime: localTime, SUMMARY_KEY: SUMMARY_KEY, SUMMARY_BASIS: SUMMARY_BASIS, HQ_NOPLANT: HQ_NOPLANT, HQ_NOMATCH: HQ_NOMATCH, HQ_ORDER2: HQ_ORDER2,
+    buildSummary: buildSummary, summaryFrom: summaryFrom, summaryFromYears: summaryFromYears, summaryMonthly: summaryMonthly, rangeSummary: rangeSummary, localTime: localTime, SUMMARY_KEY: SUMMARY_KEY, SUMMARY_BASIS: SUMMARY_BASIS, HQ_NOPLANT: HQ_NOPLANT, HQ_NOMATCH: HQ_NOMATCH, HQ_ORDER2: HQ_ORDER2,
     noteKey: noteKey, migrateNotes: migrateNotes, ledgerRows: ledgerRows, ledgerProgress: ledgerProgress, ledgerAoa: ledgerAoa, DIV_SHORT: DIV_SHORT, LEDGER_INPUT: LEDGER_INPUT,
     parseDeclNo: parseDeclNo, statusCheck: statusCheck, campusOf: campusOf, normRule: normRule, UNREGION: UNREGION, erpSummary: erpSummary, erpStoreFrom: erpStoreFrom, erpStoreMerge: erpStoreMerge, erpStoreTrim: erpStoreTrim, erpSumFromStore: erpSumFromStore, erpStoreHas: erpStoreHas, erpStoreValid: erpStoreValid, erpSourceText: erpSourceText, booksPack: booksPack, booksUnpack: booksUnpack, utf8Len: utf8Len, ERP_KEY: ERP_KEY, ERP_LIMIT: ERP_LIMIT, BOOKS_KEY: BOOKS_KEY, NOTES_KEY: 'build-2611-07.err.notes', HQ_CODE: HQ_CODE, HQ_NOJOIN: HQ_NOJOIN, hqBreakdown: hqBreakdown, regionChecks: regionChecks, declKey: declKey, HQ_ORDER: HQ_ORDER, parseDate: parseDate, monthOfName: monthOfName, classifySheet: classifySheet,
     mapHeaders: mapHeaders, findHeaderRow: findHeaderRow, readDetail: readDetail, readStatus: readStatus, readWorkbook: readWorkbook, readHandSummary: readHandSummary, applyRule: applyRule, brokers: brokers, countsFromBooks: countsFromBooks, compare: compare,

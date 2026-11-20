@@ -52,6 +52,7 @@
     { type: 4, re: new RegExp(B + '(\\d{4})-(\\d{2})~(\\d{4})-(\\d{2})' + E) },
     { type: 5, re: new RegExp(B + '(\\d{4})-(\\d{2})~(\\d{2})' + E) },
     { type: 6, re: new RegExp(B + '(\\d{4})-(\\d{2})' + E) },
+    { type: 8, re: new RegExp(B + '(20\\d{2})-(20\\d{2})' + E) },   // (v2.8.0) 2025-2026 = 연 범위(2025-01 ~ 2026-12)
     { type: 7, re: new RegExp(B + '(20\\d{2})' + E) }
   ];
   // → { type(1~7), text, from, to(YYYY-MM-DD), months[YYYY-MM], unit('day'|'month'|'year'), confirmed, single(한 달이면 그 YYYY-MM) } 또는 null
@@ -73,6 +74,7 @@
     else if (type === 4) { y1 = n[0]; m1 = n[1]; y2 = n[2]; m2 = n[3]; if (!okYear(y1) || !okYear(y2) || !okMonth(m1) || !okMonth(m2)) return null; d1 = 1; d2 = lastDay(y2, m2); }
     else if (type === 5) { y1 = y2 = n[0]; m1 = n[1]; m2 = n[2]; if (!okYear(y1) || !okMonth(m1) || !okMonth(m2)) return null; d1 = 1; d2 = lastDay(y2, m2); }
     else if (type === 6) { y1 = y2 = n[0]; m1 = m2 = n[1]; if (!okYear(y1) || !okMonth(m1)) return null; d1 = 1; d2 = lastDay(y1, m1); }
+    else if (type === 8) { y1 = n[0]; y2 = n[1]; if (!okYear(y1) || !okYear(y2) || y2 <= y1 || y2 - y1 > 10) return null; m1 = 1; m2 = 12; d1 = 1; d2 = 31; }
     else { y1 = y2 = n[0]; m1 = 1; m2 = 12; d1 = 1; d2 = 31; }
     var from = ymd(y1, m1, d1), to = ymd(y2, m2, d2);
     if (from > to) return null;
@@ -80,7 +82,7 @@
     var fullMonth = type === 2 && d1 === 1 && d2 === lastDay(y1, m1);
     var confirmed = type >= 4 || fullMonth;
     var months = monthsBetween(ym(y1, m1), ym(y2, m2));
-    return { type: type, from: from, to: to, months: months, unit: type === 7 ? 'year' : type >= 4 || fullMonth ? 'month' : 'day', confirmed: confirmed, single: months.length === 1 && confirmed ? months[0] : null, promoted: fullMonth };
+    return { type: type, from: from, to: to, months: months, unit: type === 7 || type === 8 ? 'year' : type >= 4 || fullMonth ? 'month' : 'day', confirmed: confirmed, single: months.length === 1 && confirmed ? months[0] : null, promoted: fullMonth };
   }
 
   /* ---------- 확정본 / 조회용 · 월 귀속 기준 ---------- */

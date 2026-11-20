@@ -663,6 +663,12 @@
   function exHs(v) { var d = clean(v).replace(/\.0+$/, '').replace(/\D/g, ''); if (d.length === 9) d = '0' + d; return d; }
   function exftaHqOfName(name) { var s = String(name || ''); return /건기/.test(s) ? '건기본부' : /엔진/.test(s) ? '엔진본부' : null; }
   function exftaHqOfRow(bg, bgName) { var b = clean(bg).toUpperCase(), n = clean(bgName).toUpperCase().split(' ')[0]; return EXFTA_BG[b] || EXFTA_BGNAME[n] || null; }
+  function exftaCiMonth(v) { var mm = clean(v).match(/(20\d{2})(0[1-9]|1[0-2])/); return mm ? mm[1] + '-' + mm[2] : null; }
+  // (v2.8.0) 빈 양식 — 시트 맨 위 첫 칸이 「(빈 양식)」으로 시작하면 양식 파일(머리글 + 예시 한 줄). 집계에 올리지 않는다.
+  function isBlankTemplate(sheets) {
+    return (sheets || []).some(function (sh) { var r = (sh.aoa || []).filter(function (x) { return (x || []).some(function (c) { return clean(c); }); })[0]; var c = r ? r.filter(function (x) { return clean(x); })[0] : ''; return /^\(빈 양식\)/.test(clean(c)); });
+  }
+  var BLANK_TEMPLATE_MSG = '예시 행만 있습니다. 데이터를 채워 다시 올려 주세요(빈 양식 — 맨 위 안내 줄과 예시 한 줄을 지우고 내 데이터를 채워 올립니다).';
   function headerRowOf(aoa) { for (var i = 0; i < Math.min(6, aoa.length); i++) if ((aoa[i] || []).some(function (c) { return hn(c) === hn('대상FTA'); })) return i; return -1; }
   // 피벗 블록 — 「행 레이블 | 합계 : 판가 | 합계 : FTA절감관세금액2(판가)」 … 「총합계」. 합계가 0 인 블록(필터가 걸린 채 남은 것)은 뺀다.
   function exftaPivots(name, aoa) {
@@ -715,13 +721,20 @@
       if (hq) hqs[hq] = (hqs[hq] || 0) + 1; if (d) months[d.month] = (months[d.month] || 0) + 1;
       return { fta: clean(r[m.fta]) || '(협정 없음)', invoice: m.invoice >= 0 ? clean(r[m.invoice]) : '', bg: m.bg >= 0 ? clean(r[m.bg]) : '', hq: hq, country: m.country >= 0 ? clean(r[m.country]) || '(국가 없음)' : '(국가 없음)',
         buyer: m.buyer >= 0 ? clean(r[m.buyer]) : '', hs: m.hs >= 0 ? exHs(r[m.hs]) : '', amount: exNum(r[m.amount]), saving: exNum(r[m.saving]), baseRate: exNum(r[m.baseRate]), ftaRate: m.ftaRate >= 0 ? exNum(r[m.ftaRate]) : 0,
-        coFinal: m.coFinal >= 0 ? clean(r[m.coFinal]) : '', judged: m.judged >= 0 ? clean(r[m.judged]) : '', boardMonth: d ? d.month : null };
+        coFinal: m.coFinal >= 0 ? clean(r[m.coFinal]) : '', judged: m.judged >= 0 ? clean(r[m.judged]) : '', boardMonth: d ? d.month : null,
+        // (v2.8.0) 행마다 월 — 파일 이름이 한 달이면 그 달, 아니면 On Board Date, 없으면 Commercial Invoice 번호 안의 연월(E202501… → 2025-01)
+        month: forceMonth || (d ? d.month : null) || exftaCiMonth(m.invoice >= 0 ? r[m.invoice] : '') };
     });
     var rowHq = Object.keys(hqs).sort(function (a, b) { return hqs[b] - hqs[a]; })[0] || null;
     if (nameHq && rowHq && nameHq !== rowHq) warnings.push('파일 이름은 ' + nameHq + '인데 BG 열은 ' + rowHq + '입니다 — 파일 이름을 따릅니다. 확인이 필요합니다.');
     res.hq = nameHq || rowHq || '본부 미분류'; res.rowHq = rowHq;
-    if (!res.month) { var bm = Object.keys(months).sort(function (a, b) { return months[b] - months[a]; })[0]; res.month = bm || null; if (bm) warnings.push('파일 이름에 월이 없어 On Board Date 로 ' + bm + ' 로 봤습니다.'); }
-    if (!res.month) { res.reason = '월을 정하지 못함 — 파일 이름(2026-10_수출FTA_건기)이나 On Board Date 가 필요합니다.'; return res; }
+    var noMonth = res.rows.filter(function (r) { return !r.month; }).length;
+    res.rows = res.rows.filter(function (r) { return r.month; });
+    res.months = res.rows.map(function (r) { return r.month; }).filter(function (x, i, a) { return a.indexOf(x) === i; }).sort();
+    if (!res.months.length) { res.reason = '월을 정하지 못함 — 파일 이름(2026-10_수출FTA_건기) · On Board Date · Commercial Invoice 번호의 연월(E202610…) 중 하나가 필요합니다.'; return res; }
+    res.month = res.months[res.months.length - 1];
+    if (!forceMonth) warnings.push('파일 이름에 한 달이 없어 행마다 ' + (m.date >= 0 ? 'On Board Date' : 'Commercial Invoice 번호의 연월') + '로 월을 정했습니다(' + (res.months.length > 1 ? res.months[0] + ' ~ ' + res.month : res.month) + ').');
+    if (noMonth) warnings.push('월을 정하지 못한 행 ' + noMonth + '개는 집계에서 뺐습니다.');
     if (!pivots.length) warnings.push('담당자 피벗(행 레이블 · 합계 : 판가 · 합계 : FTA절감관세금액2(판가))을 찾지 못해 대조하지 않았습니다.');
     res.ok = true; res.check = exftaCheck(res);
     return res;
@@ -747,18 +760,19 @@
     opts = opts || {}; var ok = (files || []).filter(function (f) { return f && f.ok; }), ms = {};
     var ho = function (h) { var i = FTA_HQ_ORDER.indexOf(h); return i < 0 ? 99 : i; };
     ok = ok.slice().sort(function (a, b) { return a.month.localeCompare(b.month) || ho(a.hq) - ho(b.hq); });   // 본부 고정 순서(부품 · 건기 · 엔진)
-    ok.forEach(function (f) { ms[f.month] = 1; });
+    var rm = function (f, r) { return r.month || f.month; };   // (v2.8.0) 행의 월(예전 저장값은 파일 월)
+    ok.forEach(function (f) { f.rows.forEach(function (r) { ms[rm(f, r)] = 1; }); });
     var months = Object.keys(ms).sort(), month = opts.month && ms[opts.month] ? opts.month : months[months.length - 1] || null;
     // (v2.6.0) 상단 조회 기간 — 당월 = 기간의 마지막 달, 누적 · 협정 · 국가 · 파일 = 기간 전체. 옛 방식(month)은 그대로.
     var rg = opts.range && opts.range.from && opts.range.to ? opts.range : null;
     if (rg) month = rg.to;
     if (!month) return { month: null, months: [], files: ok };
     var year = month.slice(0, 4), cumFrom = rg ? rg.from : year + '-01', cur = [], cum = [];
-    ok.forEach(function (f) { f.rows.forEach(function (r) { var x = Object.assign({ fileHq: f.hq }, r); if (f.month === month) cur.push(x); if (f.month >= cumFrom && f.month <= month) cum.push(x); }); });
+    ok.forEach(function (f) { f.rows.forEach(function (r) { var mo = rm(f, r), x = Object.assign({ fileHq: f.hq, month: mo }, r); if (mo === month) cur.push(x); if (mo >= cumFrom && mo <= month) cum.push(x); }); });
     function sum(rows) { var a = 0, s = 0; rows.forEach(function (r) { a += r.amount; s += r.saving; }); return { lines: rows.length, amount: a, saving: s, rate: ratio(s, a) }; }
     var hqs = FTA_HQ_ORDER.slice(); ok.forEach(function (f) { if (hqs.indexOf(f.hq) < 0) hqs.push(f.hq); });
     var series = rg ? monthsBetween(rg.from, rg.to) : months;
-    var monthlyHq = series.map(function (m) { return { month: m, rows: hqs.map(function (h) { var rs = []; ok.forEach(function (f) { if (f.month === m && f.hq === h) rs = rs.concat(f.rows); }); return Object.assign({ hq: h }, sum(rs)); }).filter(function (q) { return q.lines; }) }; });
+    var monthlyHq = series.map(function (m) { return { month: m, rows: hqs.map(function (h) { var rs = []; ok.forEach(function (f) { if (f.hq === h) rs = rs.concat(f.rows.filter(function (r) { return rm(f, r) === m; })); }); return Object.assign({ hq: h }, sum(rs)); }).filter(function (q) { return q.lines; }) }; });
     var calc = opts.rates ? function (rows) { return exftaCalc(rows, opts.rates, month); } : null;
     var base = rg ? cum : cur, agree = exftaGroup(base, 'fta'), agreeCum = exftaGroup(cum, 'fta');
     if (calc) { agree.forEach(function (a) { a.calc = calc(base.filter(function (r) { return r.fta === a.key; })); }); }
@@ -767,7 +781,7 @@
       current: Object.assign(sum(cur), { byHq: hqs.map(function (h) { return Object.assign({ hq: h }, sum(cur.filter(function (r) { return r.fileHq === h; }))); }).filter(function (q) { return q.lines; }), calc: calc ? calc(cur) : null }),
       cumulative: Object.assign(sum(cum), { calc: calc ? calc(cum) : null }), monthlyHq: monthlyHq, agreements: agree, agreementsCum: agreeCum,
       countries: exftaGroup(base, 'country').slice(0, 10),
-      files: ok.filter(function (f) { return rg ? f.month >= rg.from && f.month <= rg.to : f.month === month; }), allFiles: files || []
+      files: ok.filter(function (f) { return f.rows.some(function (r) { var mo = rm(f, r); return rg ? mo >= rg.from && mo <= rg.to : mo === month; }); }), allFiles: files || []
     };
   }
   /* ---------- [8] A단계로 가는 다리 — 분석본에서 세율을 거꾸로 모아 세율표를 키운다(localStorage b2611-07.exfta.rates) ----------
@@ -779,15 +793,15 @@
     var t = exftaRatesValid(table) ? JSON.parse(JSON.stringify(table)) : { v: 1, updatedAt: null, rates: {} }, seen = {}, existed = 0, added = 0, conflicts = [];
     (file.rows || []).forEach(function (r) {
       if (!r.hs || !(r.baseRate > 0)) return;
-      var k = exftaRateKey(r), v = [r.baseRate, r.ftaRate];
+      var mo = r.month || file.month, k = exftaRateKey(r), v = [r.baseRate, r.ftaRate];
       if (!seen[k]) { seen[k] = 1; if (t.rates[k]) existed++; else added++; }
-      var o = t.rates[k] || (t.rates[k] = { fta: r.fta, hs: r.hs, country: r.country, months: {}, conflict: false, firstSeen: file.month, lastSeen: file.month });
-      var cur = o.months[file.month];
-      if (!cur) o.months[file.month] = v;
-      else if (cur[0] !== v[0] || cur[1] !== v[1]) { if (!o.conflict) conflicts.push({ key: k, month: file.month, a: cur, b: v }); o.conflict = true; o.conflictWhy = file.month + ' 안에서 ' + cur.join('/') + ' ↔ ' + v.join('/'); }
-      if (file.month < o.firstSeen) o.firstSeen = file.month; if (file.month > o.lastSeen) o.lastSeen = file.month;
+      var o = t.rates[k] || (t.rates[k] = { fta: r.fta, hs: r.hs, country: r.country, months: {}, conflict: false, firstSeen: mo, lastSeen: mo });
+      var cur = o.months[mo];
+      if (!cur) o.months[mo] = v;
+      else if (cur[0] !== v[0] || cur[1] !== v[1]) { if (!o.conflict) conflicts.push({ key: k, month: mo, a: cur, b: v }); o.conflict = true; o.conflictWhy = mo + ' 안에서 ' + cur.join('/') + ' ↔ ' + v.join('/'); }
+      if (mo < o.firstSeen) o.firstSeen = mo; if (mo > o.lastSeen) o.lastSeen = mo;
       var vals = Object.keys(o.months).map(function (m) { return o.months[m].join('/'); }).filter(function (x, i, a) { return a.indexOf(x) === i; });
-      if (vals.length > 1 && !o.conflict) { o.conflict = true; o.conflictWhy = '달마다 다름: ' + Object.keys(o.months).sort().map(function (m) { return m + ' ' + o.months[m].join('/'); }).join(' · '); conflicts.push({ key: k, month: file.month }); }
+      if (vals.length > 1 && !o.conflict) { o.conflict = true; o.conflictWhy = '달마다 다름: ' + Object.keys(o.months).sort().map(function (m) { return m + ' ' + o.months[m].join('/'); }).join(' · '); conflicts.push({ key: k, month: mo }); }
     });
     t.updatedAt = new Date().toISOString();
     var total = existed + added;
@@ -809,7 +823,7 @@
       .sort(function (a, b) { return (b.conflict ? 1 : 0) - (a.conflict ? 1 : 0) || a.fta.localeCompare(b.fta) || a.hs.localeCompare(b.hs) || a.country.localeCompare(b.country); });
   }
   // 저장(대시보드) — 원본 엑셀이 아니라 읽은 결과만. 줄은 열 이름 한 번 + 값 배열.
-  var EXFTA_ROWCOLS = ['fta', 'invoice', 'bg', 'hq', 'country', 'buyer', 'hs', 'amount', 'saving', 'baseRate', 'ftaRate', 'coFinal', 'judged', 'boardMonth'];
+  var EXFTA_ROWCOLS = ['fta', 'invoice', 'bg', 'hq', 'country', 'buyer', 'hs', 'amount', 'saving', 'baseRate', 'ftaRate', 'coFinal', 'judged', 'boardMonth', 'month'];
   function exftaPack(files) { return { v: 1, files: (files || []).map(function (f) { var o = Object.assign({}, f); o.rows = (f.rows || []).map(function (r) { return EXFTA_ROWCOLS.map(function (c) { return r[c] == null ? null : r[c]; }); }); o.rowCols = EXFTA_ROWCOLS; return o; }) }; }
   function exftaUnpack(j) { if (!j || j.v !== 1 || !Array.isArray(j.files)) return []; return j.files.map(function (o) { var f = Object.assign({}, o), cols = o.rowCols || EXFTA_ROWCOLS; f.rows = (o.rows || []).map(function (a) { var r = {}; cols.forEach(function (c, i) { r[c] = a[i]; }); return r; }); delete f.rowCols; return f; }); }
   // 내용만으로 수출 FTA 분석본인지 — 대상FTA · 판가 · FTA기본관세율 · FTA절감관세금액2(판가) 머리글이 있는 시트가 있으면
@@ -1924,7 +1938,7 @@
     exportBook: exportBook,
     libValidate: libValidate, libAdd: libAdd, libRemove: libRemove, libSearch: libSearch, libCounts: libCounts, libToAoa: libToAoa,
     libFromRows: libFromRows, libSample: libSample, libLocationKind: libLocationKind,
-    readExportFta: readExportFta, exportFtaReport: exportFtaReport, exftaRatesMerge: exftaRatesMerge, exftaCalc: exftaCalc, exftaRatesList: exftaRatesList, exftaPack: exftaPack, exftaUnpack: exftaUnpack, isExportFtaBook: isExportFtaBook, exftaMap: exftaMap, exftaHqOfName: exftaHqOfName, EXFTA_DATA_KEY: EXFTA_DATA_KEY, EXFTA_RATES_KEY: EXFTA_RATES_KEY, EXFTA_BASIS: EXFTA_BASIS, EXFTA_MIN_FILL: EXFTA_MIN_FILL,
+    readExportFta: readExportFta, isBlankTemplate: isBlankTemplate, BLANK_TEMPLATE_MSG: BLANK_TEMPLATE_MSG, exportFtaReport: exportFtaReport, exftaRatesMerge: exftaRatesMerge, exftaCalc: exftaCalc, exftaRatesList: exftaRatesList, exftaPack: exftaPack, exftaUnpack: exftaUnpack, isExportFtaBook: isExportFtaBook, exftaMap: exftaMap, exftaHqOfName: exftaHqOfName, EXFTA_DATA_KEY: EXFTA_DATA_KEY, EXFTA_RATES_KEY: EXFTA_RATES_KEY, EXFTA_BASIS: EXFTA_BASIS, EXFTA_MIN_FILL: EXFTA_MIN_FILL,
     ftaImportReport: ftaImportReport, ftaAgreeGroups: ftaAgreeGroups, ftaHs6: ftaHs6, prevMonthOf: prevMonthOf, HQ_COLORS: HQ_COLORS, hqColor: hqColor, FTA_AGREE_TOP: FTA_AGREE_TOP, ftaSnapshot: ftaSnapshot, ftaCompare: ftaCompare, ftaApplied: ftaApplied, eok: eok, FTA_NA_NAMES: FTA_NA_NAMES, FTA_AGREEMENTS: FTA_AGREEMENTS, FTA_HQ_ORDER: FTA_HQ_ORDER, FTA_BASIS: FTA_BASIS,
     sampleFiles: sampleFiles, aoaToRows: aoaToRows, skippedSheetNote: skippedSheetNote
   };

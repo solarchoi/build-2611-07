@@ -15,14 +15,16 @@
     list.forEach(function (x) { var k = x.kind === 'import' ? '수입' : '수출'; recs[k] = recs[k].concat(x.records); files.push({ name: x.file, kind: k, period: x.period ? x.period.from + '~' + x.period.to : null, rows: x.records.length }); });
     var part = E.erpStoreFrom(recs, { files: files, src: 'errors' }), t = E.erpStoreTrim(E.erpStoreMerge(state.erpStore, part));
     state.erpStore = t.store; state.erpDropped = t.dropped;
+    if (state.example) return;   // (v2.8.0) 예제는 저장 안 함
     try { localStorage.setItem(E.ERP_KEY, JSON.stringify(t.store)); state.erpSaveOk = true; } catch (e) { state.erpSaveOk = false; }
   }
-  function saveBooks() { try { localStorage.setItem(E.BOOKS_KEY, JSON.stringify(E.booksPack(state.books))); state.booksSaveOk = true; } catch (e) { state.booksSaveOk = false; } }
+  function saveBooks() { if (state.example) return; try { localStorage.setItem(E.BOOKS_KEY, JSON.stringify(E.booksPack(state.books))); state.booksSaveOk = true; } catch (e) { state.booksSaveOk = false; } }
   function renderSrc() { var t = E.erpSourceText(state.erpStore); $('e-erpsrc').innerHTML = t ? '<b>' + esc(t) + '</b>' : 'ERP 실적이 아직 없습니다 — 인천 신고건수 · 본부는 ERP 수입실적 · 수출실적(여기서 또는 대시보드에서)을 올리면 채워집니다.'; }
   // (v2.0.0) 요약 저장 — 집계가 바뀔 때마다 덮어쓴다(원본 행은 넣지 않음). 대시보드 오류점수 탭은 이것을 읽기만 한다.
   function saveSummary() {
     var erp = (E.erpStoreValid(state.erpStore) ? state.erpStore.files : []).map(function (x) { return { name: x.name, kind: x.kind, period: x.period || null, rows: x.rows, src: x.src }; });
     state.saved = E.buildSummary(state.summary, state.hq, state.books, { erp: erp });
+    if (state.example) return;   // (v2.8.0) 예제 요약은 대시보드가 읽는 저장값에 쓰지 않음
     try { localStorage.setItem(E.SUMMARY_KEY, JSON.stringify(state.saved)); state.savedOk = true; } catch (e) { state.savedOk = false; }
   }
   function saveNotes() { try { localStorage.setItem(LS.notes, JSON.stringify(state.notes)); return true; } catch (e) { return false; } }
@@ -84,7 +86,12 @@
     var warn = x.missing && x.missing.length ? '<span class="bad">못 찾은 열: ' + esc(x.missing.join(', ')) + '</span>' : '—';
     return '<tr><td>' + esc(x.file) + '</td><td>' + esc(lab) + '</td><td>' + esc(x.period ? x.period.from + ' ~ ' + x.period.to : '—') + '</td><td>' + esc(basis) + '</td><td class="num">' + esc(n(x.records.length) + (x.gn ? ' (GN ' + n(x.gn) + ')' : '')) + '</td><td>' + warn + '</td></tr>';
   }
-  function setBooks(raw) {
+  function setBooks(raw, opts) {
+    opts = opts || {};
+    if (!opts.example && state.example) { state.example = false; state.books = E.booksUnpack(load(E.BOOKS_KEY, null)); state.erpStore = E.erpStoreValid(load(E.ERP_KEY, null)); }   // (v2.8.0) 예제를 닫고 저장된 내 결과로
+    var blanks = raw.filter(function (b) { return C && C.isBlankTemplate(b.sheets); });   // (v2.8.0) 빈 양식(머리글 + 예시 한 줄)은 집계에 올리지 않음
+    raw = raw.filter(function (b) { return blanks.indexOf(b) < 0; });
+    if (blanks.length && !raw.length) { $('e-msg').innerHTML = '<div class="warn" data-k="blank-tpl">' + blanks.map(function (b) { return esc(b.name) + ' — <b>' + esc(C.BLANK_TEMPLATE_MSG) + '</b>'; }).join('<br>') + '</div>'; return; }
     var errs = [], erps = [];
     raw.forEach(function (b) { var k = C && FR ? erpKindOf(b) : null; if (k) erps.push({ b: b, k: k }); else errs.push(b); });
     erps.forEach(function (x) { state.erp[x.k === 'import' ? '수입' : '수출'] = readErp(x.b, x.k); });
@@ -103,6 +110,8 @@
     $('e-msg').innerHTML = '<div class="' + (ok && !diff.length ? 'ok' : 'warn') + '">' + list + chkTxt + erpTxt + (diff.length ? '<p><b>현황목록과 상세목록의 오류점수가 다릅니다</b> — 위 차액을 확인해 주세요.</p>' : '') + '</div>';
     if (state.booksSaveOk === false || state.erpSaveOk === false) $('e-msg').innerHTML += '<div class="warn" data-k="save-fail">이 브라우저에 결과를 저장하지 못했습니다(용량) — 새로고침하면 다시 올려야 합니다.</div>';
     if (state.erpDropped && state.erpDropped.length) $('e-msg').innerHTML += '<div class="warn">저장 용량(1MB)을 넘어 오래된 달의 본부 조인표를 지웠습니다: ' + esc(state.erpDropped.map(function (x) { return x.month + ' ' + x.kind; }).join(', ')) + ' — 신고건수는 남아 있습니다.</div>';
+    if (blanks.length) $('e-msg').innerHTML += '<div class="warn" data-k="blank-tpl">' + blanks.map(function (b) { return esc(b.name) + ' — <b>' + esc(C.BLANK_TEMPLATE_MSG) + '</b>'; }).join('<br>') + '</div>';
+    if (state.example) $('e-msg').innerHTML = '<div class="note" data-k="example-note"><b>예제(가상 데이터)를 보는 중 — 저장하지 않습니다.</b> 내 파일을 올리면 예제는 닫히고 저장된 내 결과로 돌아갑니다.</div>' + $('e-msg').innerHTML;
     renderSrc();
     ['e-rule', 'e-view', 'e-ledger', 'e-mail'].forEach(function (id) { $(id).hidden = !ok; });
     if (ok) recompute();
@@ -240,11 +249,12 @@
 
   $('e-file').addEventListener('change', function (e) { var fs = [].slice.call(e.target.files); if (!fs.length) return; Promise.all(fs.map(readFile)).then(setBooks).catch(function (er) { $('e-msg').innerHTML = '<div class="warn">파일을 읽지 못했습니다: ' + esc(er.message) + '</div>'; }); e.target.value = ''; });
   // (v2.7.0) 예제 = samples/ 의 실제 구조 파일(가상 데이터) — 유니패스 수입 · 수출 오류점수 + ERP 수입 · 수출 실적(신고번호가 서로 이어져 지역 · 본부 · 관리대장이 채워짐)
-  var EXAMPLES = ['2026_예제(가상)_수입오류.xlsx', '2026_예제(가상)_수출오류.xlsx', '2026_예제(가상)_수입실적.xlsx', '2026_예제(가상)_수출실적.xlsx'];
+  // (v2.8.0) 오류점수 화면은 한 해씩 — 예제는 최근 해(2026) 유니패스 수입 · 수출 + ERP 실적(2025~2026). 저장하지 않는다.
+  var EXAMPLES = ['2026_예제(가상)_수입오류.xlsx', '2026_예제(가상)_수출오류.xlsx', '2025-2026_예제(가상)_수입실적.xlsx', '2025-2026_예제(가상)_수출실적.xlsx'];
   function fetchRaw(n) { return fetch('samples/' + encodeURIComponent(n)).then(function (rs) { if (!rs.ok) throw new Error(n + ' — ' + rs.status); return rs.arrayBuffer(); }).then(function (buf) { var wb = XLSX.read(new Uint8Array(buf), { type: 'array' }); return { name: n, sheets: wb.SheetNames.map(function (s) { return { name: s, aoa: XLSX.utils.sheet_to_json(wb.Sheets[s], { header: 1, raw: true, defval: '' }) }; }) }; }); }
-  $('e-sample').addEventListener('click', function () { Promise.all(EXAMPLES.map(fetchRaw)).then(setBooks).catch(function (er) { $('e-msg').innerHTML = '<div class="warn">예제 파일을 읽지 못했습니다: ' + esc(er.message) + ' — 사이트 주소(http)로 열어야 합니다.</div>'; }); });
+  $('e-sample').addEventListener('click', function () { Promise.all(EXAMPLES.map(fetchRaw)).then(function (raw) { state.example = true; state.books = []; state.erpStore = null; state.erp = { 수입: null, 수출: null }; setBooks(raw, { example: true }); }).catch(function (er) { $('e-msg').innerHTML = '<div class="warn">예제 파일을 읽지 못했습니다: ' + esc(er.message) + ' — 사이트 주소(http)로 열어야 합니다.</div>'; }); });
   // 「비우기」 — 올린 파일과 그 요약(대시보드가 읽는 값)을 비운다. 관리대장 입력값은 지우지 않는다.
-  $('e-clear').addEventListener('click', function () { state.books = []; state.erp = { 수입: null, 수출: null }; state.erpStore = null; state.erpSum = null; try { [E.SUMMARY_KEY, E.ERP_KEY, E.BOOKS_KEY].forEach(function (k) { localStorage.removeItem(k); }); } catch (e) { /* 지우지 못해도 화면은 비움 */ } renderSrc(); ['e-rule', 'e-view', 'e-ledger', 'e-mail'].forEach(function (id) { $(id).hidden = true; }); $('e-msg').innerHTML = ''; });
+  $('e-clear').addEventListener('click', function () { state.example = false; state.books = []; state.erp = { 수입: null, 수출: null }; state.erpStore = null; state.erpSum = null; try { [E.SUMMARY_KEY, E.ERP_KEY, E.BOOKS_KEY].forEach(function (k) { localStorage.removeItem(k); }); } catch (e) { /* 지우지 못해도 화면은 비움 */ } renderSrc(); ['e-rule', 'e-view', 'e-ledger', 'e-mail'].forEach(function (id) { $(id).hidden = true; }); $('e-msg').innerHTML = ''; });
   $('e-brokers').addEventListener('change', function (e) { var b = e.target.dataset.broker; if (b) setRegion(b, e.target.value); });
   $('e-brokers').addEventListener('click', function (e) {
     if (e.target.id === 'e-addbtn') { var c = ($('e-addcode').value || '').replace(/\D/g, ''); if (c.length !== 5) { $('e-addcode').focus(); return; } setRegion(c, $('e-addreg').value); }
