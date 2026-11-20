@@ -352,15 +352,8 @@ eq(sis.groups.reduce(function (t, g) { return t + g.goods; }, 0), sis.goods, '�
 var ses = C.exportStats(sn[1].records, { from: '2025-01', to: '2025-10' }, 'country');
 ok(ses.hasPrev && ses.groups.some(function (g) { return g.prev == null && g.amount > 0; }), '예제 수출: 올해 새로 생긴 국가(전년 없음)가 있다');
 ok(JSON.stringify(files).indexOf('(가상)') > 0, '예제 업체·본부에 「가상」 표기');
-// samples/ 의 실제 엑셀이 sampleFiles() 와 같은지(tools/make-samples.mjs 로 다시 만든다) — 수입 파일은 제목 2줄이 위에 있다
+// (v2.7.0) samples/ 는 실제 구조 예제 9개(가상 데이터) — sampleFiles() 는 계산 규칙 시험 데이터로만 남고 파일로 쓰지 않는다(새 예제 시험은 v270)
 var XLSX = require('../lib/xlsx.full.min.js'), fsx = require('fs'), px = require('path');
-files.forEach(function (f, i) {
-  var wb = XLSX.read(fsx.readFileSync(px.join(__dirname, '..', 'samples', f.name)), { type: 'buffer' });
-  var aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' }), hr = C.findHeaderRow(aoa);
-  var n = C.normalize(C.aoaToRows(aoa.slice(hr)), f.kind, C.mapColumns(aoa[hr].map(String), f.kind).map, hr);
-  eq([hr, n.records.length, C.sum(n.records, f.kind === 'import' ? 'goods' : f.kind === 'errors' ? 'decl' : 'amount')],
-    [f.kind === 'import' ? 2 : 0, sn[i].records.length, C.sum(sn[i].records, f.kind === 'import' ? 'goods' : f.kind === 'errors' ? 'decl' : 'amount')], 'samples/ ' + f.name + ' = 예제 정의');
-});
 eq(sn[0].skipped[0].row, 222, '예제 수입 합계 줄 = 엑셀 222행(머리글 1행 + 220줄 다음)');
 
 /* ===================== v1.2 — 양식 6절 · 결정문 현황 · 수입보세화물 추적 ===================== */
@@ -1166,6 +1159,7 @@ var v220c = passed + failed; v230(); console.log('v2.3.0 ' + (passed + failed - 
 var v230c = passed + failed; v240(); console.log('v2.4.0 ' + (passed + failed - v230c) + '개 검사');
 var v240c = passed + failed; v250(); console.log('v2.5.0 ' + (passed + failed - v240c) + '개 검사');
 var v250c = passed + failed; v260(); console.log('v2.6.0 ' + (passed + failed - v250c) + '개 검사');
+var v260c = passed + failed; v270(); console.log('v2.7.0 ' + (passed + failed - v260c) + '개 검사');
 console.log('v1.9.0 ' + (v190 - v180) + '개 검사');
 console.log('v1.8.0 ' + (v180 - v170) + '개 검사');
 console.log('v1.7.0 ' + (v170 - v160) + '개 검사');
@@ -1505,9 +1499,7 @@ function v200() {
   rb.forEach(function (b) { b.rows.forEach(function (r) { codes[r.broker] = r.campus; }); });
   eq(Object.keys(codes).sort().map(function (c) { return c + codes[c]; }), ['15553인천', '22356인천', '22371인천', '42158인천', '43908울산', '44788울산', '44924울산'].filter(function (x) { return Object.keys(codes).indexOf(x.slice(0, 5)) >= 0; }), 'v2.0.0 예제 신고번호 앞 5자리는 실제 부호 체계(인천 · 울산 모두)');
   ok(Object.keys(codes).length >= 5 && rb.every(function (b) { return b.rows.every(function (r) { return r.campus === '인천' || r.campus === '울산'; }); }), 'v2.0.0 예제에 지역 미분류 없음 · 부호 5개 이상');
-  var wb = XLSX.read(fsx.readFileSync(px.join(__dirname, '..', 'samples', b0.name)), { type: 'buffer' });
-  eq([wb.SheetNames, XLSX.utils.sheet_to_json(wb.Sheets['요약'], { header: 1, raw: true, defval: '' })[0][0]], [b0.sheets.map(function (x) { return x.name; }), b0.sheets[0].aoa[0][0]], 'v2.0.0 samples/ 유니패스 예제 파일 = 예제 정의');
-  ok(!fsx.existsSync(px.join(__dirname, '..', 'samples', '예제_수출입오류점수.xlsx')) && /예제_유니패스수입오류점수\(가상\)\.xlsx/.test(dh), 'v2.0.0 집계표 형식 예제를 없애고 유니패스 예제로 안내');
+  ok(!fsx.existsSync(px.join(__dirname, '..', 'samples', '예제_수출입오류점수.xlsx')) && !fsx.existsSync(px.join(__dirname, '..', 'samples', b0.name)) && /2026_예제\(가상\)_수입오류\.xlsx/.test(dh) && /2026_예제\(가상\)_수출오류\.xlsx/.test(dh), 'v2.0.0 집계표 형식 예제 없음 → v2.7.0 유니패스 예제는 samples/ 의 실제 구조 파일(수입 · 수출)');
 }
 // ---------- v2.1.0 수입 FTA 탭 — ERP 수입FTA 파일 ----------
 function v210() {
@@ -1858,4 +1850,50 @@ function v260() {
   ok(/function extraPeriods\(\)/.test(dj) && /C\.unionPeriod\(\[basePeriod\]\.concat\(extraPeriods\(\)\)\)/.test(dj) && /C\.defaultRange\(basePeriod \|\| period\)/.test(dj), 'v2.6.0 기간 선택지에 수입 FTA · 수출 FTA · 오류점수 달을 더함 · 기본 기간은 실적이 있으면 실적 기준(v2.1.0 기준월 문제 방지)');
   ok(/수리일자 기준 · 조회 기간 ' \+ esc\(rangeText\(r\.range\)\)/.test(dj) && /판가\(원화\) · 조회 기간 ' \+ esc\(rgT\)/.test(dj) && /data-k="err-basis">조회 기간 ' \+ esc\(rgT\)/.test(dj), 'v2.6.0 세 탭 상단 · 기준에 「조회 기간 …」');
   ok(/선택 기간\(' \+ esc\(rangeText\(r\.range\)\) \+ '\)에 자료가 없습니다/.test(dj) && /data-k="exfta-empty"/.test(dj) && /data-k="err-empty"/.test(dj) && /function mailCumTitle\(rep\)/.test(dj), 'v2.6.0 기간에 자료가 없으면 「선택 기간에 자료가 없습니다」 · 메일 표 누적 제목은 기간으로');
+}
+// ---------- v2.7.0 예제 = samples/ 의 실제 구조 파일 9개(가상 데이터 · 2026년 9~10월) ----------
+function v270() {
+  var CU = require('../js/customs.js'), FRr = require('../js/filerules.js'), ES = require('../js/errscore.js'), XL = require('../lib/xlsx.full.min.js'), S = __dirname + '/../samples/';
+  var EX = ['2026_예제(가상)_수입실적.xlsx', '2026_예제(가상)_수출실적.xlsx', '2026_예제(가상)_수입FTA.xlsx', '2026-10_예제(가상)_수출FTA_건기.xlsx', '2026-10_예제(가상)_수출FTA_엔진.xlsx', '2026_예제(가상)_수입오류.xlsx', '2026_예제(가상)_수출오류.xlsx', '2026_예제(가상)_관세환급.xlsx', '2026_예제(가상)_품목분류결정문.xlsx'];
+  ok(EX.every(function (n) { return fsx.existsSync(S + n); }), 'v2.7.0 samples/ 에 예제 9개');
+  function raw(n) { var wb = XL.read(fsx.readFileSync(S + n), { type: 'buffer' }); return wb.SheetNames.map(function (s) { return { name: s, aoa: XL.utils.sheet_to_json(wb.Sheets[s], { header: 1, raw: true, defval: '' }) }; }); }
+  function load(n) { var sh = raw(n).map(function (s) { var hr = CU.findHeaderRow(s.aoa); return { name: s.name, aoa: s.aoa.slice(hr), offset: hr }; }).filter(function (x) { return x.aoa.length > 1; }); var pk = CU.pickSheets(sh, n), u = pk.use[0], info = FRr.describe(n, pk.detect); return { info: info, kind: pk.detect.kind, item: { name: n, file: n, headers: CU.uniqueHeaders(u.aoa[0]), aoa: u.aoa, offset: u.offset, override: {}, meta: info } }; }
+  var want = { '2026_예제(가상)_수입실적.xlsx': 'import', '2026_예제(가상)_수출실적.xlsx': 'export', '2026_예제(가상)_수입FTA.xlsx': 'ftaImport', '2026_예제(가상)_관세환급.xlsx': 'refund', '2026_예제(가상)_품목분류결정문.xlsx': 'ruling' }, got = {}, rec = {};
+  Object.keys(want).forEach(function (n) { var L = load(n), m = CU.mergeFiles(L.info.dataset, [L.item], CU.exportSettings(null)); rec[n] = m; got[n] = [L.kind, L.info.dataset, L.info.mode, m.ok, m.files[0].res.missing.length, m.records.length > 0, m.period.to]; });
+  eq(Object.keys(want).map(function (n) { return got[n]; }), Object.keys(want).map(function (n) { return [want[n], want[n], 'confirmed', true, 0, true, /결정문/.test(n) ? '2026-09' : '2026-10']; }), 'v2.7.0 대시보드 예제 5개 — 내용 · 이름 모두 맞는 종류 · 확정본 · 필수 열 다 찾음 · 2026-10 까지(결정문 예제는 9월까지)');
+  eq(['2026_예제(가상)_수입실적.xlsx', '2026_예제(가상)_수출실적.xlsx', '2026_예제(가상)_관세환급.xlsx', '2026_예제(가상)_수입FTA.xlsx'].map(function (n) { return rec[n].period.from + '~' + rec[n].period.to; }), ['2026-09~2026-10', '2026-09~2026-10', '2026-09~2026-10', '2026-09~2026-10'], 'v2.7.0 예제 기간 2026년 9~10월');
+  var xg = CU.readExportFta(raw('2026-10_예제(가상)_수출FTA_건기.xlsx'), '2026-10_예제(가상)_수출FTA_건기.xlsx', '2026-10'), xe = CU.readExportFta(raw('2026-10_예제(가상)_수출FTA_엔진.xlsx'), '2026-10_예제(가상)_수출FTA_엔진.xlsx', '2026-10');
+  eq([xg.ok, xg.hq, xg.pick.sheet, xg.pick.fill, xg.check.ok, xg.excluded.rows.length, xe.ok, xe.hq, xe.pick.sheet, xe.check.ok, FRr.describe('2026-10_예제(가상)_수출FTA_건기.xlsx', null).dataset],
+    [true, '건기본부', 'Sheet2', 1, true, 2, true, '엔진본부', 'Sheet2', true, 'ftaExport'], 'v2.7.0 수출FTA 예제(담당자 분석본) — Sheet2 를 내용으로 골라 집계 · 담당자 피벗과 일치 · 제외 건');
+  // 오류점수 예제 — 유니패스 수입 · 수출 + ERP 실적(GN 포함)이 신고번호로 이어짐
+  var rule = ES.normRule(null), books = ['2026_예제(가상)_수입오류.xlsx', '2026_예제(가상)_수출오류.xlsx'].map(function (n) { return ES.readWorkbook(raw(n), n, rule); });
+  var gn = CU.exportSettings(null); gn.excludeGN = false;
+  var ri = CU.mergeFiles('import', [load('2026_예제(가상)_수입실적.xlsx').item], gn).records, re = CU.mergeFiles('export', [load('2026_예제(가상)_수출실적.xlsx').item], gn).records;
+  var store = ES.erpStoreFrom({ 수입: ri, 수출: re }, { files: [{ name: 'i', kind: '수입', rows: ri.length }, { name: 'e', kind: '수출', rows: re.length }], src: 'example' });
+  var res = ES.summaryFrom(books, store, { rule: rule });
+  eq([books.map(function (b) { return b.kind; }), res.year, res.hq.notFound.length, Object.keys(res.summary.kinds.수출.months).sort(), res.saved.rows.length > 0], [['수입', '수출'], 2026, 0, ['10', '9'], true], 'v2.7.0 유니패스 예제(수입 · 수출) — 오류 신고번호가 모두 ERP 실적에 있음(ERP 미매칭 0)');
+  var hqs = {}; ['수입', '수출'].forEach(function (k) { [9, 10].forEach(function (m) { (res.hq.kinds[k][m] || []).forEach(function (x) { if (x.region === '인천') hqs[x.hq] = 1; }); }); });
+  var L = ES.ledgerRows(ES.byDecl(res.rows), {}, res.erpSum, {});
+  eq([Object.keys(hqs).sort(), L.length, L.every(function (r) { return ['건기', '엔진', '부품'].indexOf(r.div) >= 0; })], [['건기본부', '부품센터', '엔진본부'], 6, true], 'v2.7.0 예제에서도 지역 · 본부 · 관리대장이 채워짐(사업부 건기 · 엔진 · 부품)');
+  // summaryFrom = 예전 오류점수 화면 계산(erpSummary 경로)과 같은 요약
+  var old = ES.erpSummary({ 수입: ri, 수출: re }, 2026), cnt = { 수입: {}, 수출: {} }; ['수입', '수출'].forEach(function (k) { Object.keys(old.counts[k]).forEach(function (m) { cnt[k][m] = old.counts[k][m]; }); });
+  ok(JSON.stringify(ES.summarize(books, cnt, {})) === JSON.stringify(res.summary), 'v2.7.0 summaryFrom(계산 한 곳) = 예전 계산과 같은 요약');
+  ok(/예제\(가상 데이터\)/.test(ES.erpSourceText(store)), 'v2.7.0 예제로 넣은 ERP 결과의 출처 표기');
+  // ZIP — 9개 · 이름 UTF-8
+  var z = fsx.readFileSync(S + '예제데이터.zip'), eocd = z.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06])), n = z.readUInt16LE(eocd + 10), cdo = z.readUInt32LE(eocd + 16), names = [];
+  for (var i = 0, p = cdo; i < n; i++) { var fl = z.readUInt16LE(p + 8), nl = z.readUInt16LE(p + 28), xl = z.readUInt16LE(p + 30), cl = z.readUInt16LE(p + 32); names.push((fl & 0x0800 ? 'u:' : '') + z.slice(p + 46, p + 46 + nl).toString('utf8')); p += 46 + nl + xl + cl; }
+  eq(names, EX.map(function (x) { return 'u:' + x; }), 'v2.7.0 samples/예제데이터.zip = 예제 9개(한글 이름 UTF-8 표시)');
+  var tool = fsx.readFileSync(__dirname + '/../tools/make-samples.mjs', 'utf8');
+  ok(tool.indexOf('C.sampleFiles()') < 0 && tool.indexOf('sampleBooks()') < 0 && /예제데이터\.zip/.test(tool) && EX.every(function (x) { return tool.indexOf("'" + x + "'") > 0; }), 'v2.7.0 tools/make-samples.mjs — 예전 예제를 samples/ 에 다시 쓰지 않고 9개를 ZIP 으로 묶음');
+  // 화면
+  var dj = fsx.readFileSync(__dirname + '/../js/dash.js', 'utf8'), ej = fsx.readFileSync(__dirname + '/../js/errors.js', 'utf8'), dh = fsx.readFileSync(__dirname + '/../dashboard.html', 'utf8'), ih = fsx.readFileSync(__dirname + '/../index.html', 'utf8'), eh = fsx.readFileSync(__dirname + '/../errors.html', 'utf8');
+  ok(dj.indexOf('C.sampleFiles()') < 0 && EX.every(function (x) { return dj.indexOf("'" + x + "'") > 0; }) && /E\.summaryFrom\(books, store, \{ rule: rule \}\)/.test(dj) && /fetch\('samples\/' \+ encodeURIComponent\(n\)\)/.test(dj), 'v2.7.0 대시보드 「예제로 해보기」 = samples/ 의 9개(오류점수 2개는 summaryFrom 으로 요약)');
+  ok(/if \(!state\.loadingSample\) \{   \/\/ \(v2\.7\.0\) 예제\(가상\)의 세율은 세율표에 쌓지 않음/.test(dj), 'v2.7.0 예제의 세율은 수출 FTA 세율표에 쌓지 않음');
+  ok(['2026_예제(가상)_수입오류.xlsx', '2026_예제(가상)_수출오류.xlsx', '2026_예제(가상)_수입실적.xlsx', '2026_예제(가상)_수출실적.xlsx'].every(function (x) { return ej.indexOf("'" + x + "'") > 0; }) && ej.indexOf('setBooks(E.sampleBooks())') < 0 && /E\.summaryFrom\(state\.books/.test(ej) && /예제로 해보기\(가상 데이터\)/.test(eh), 'v2.7.0 오류점수 화면 「예제로 해보기」 = 유니패스 수입 · 수출 + ERP 실적 2 · 계산은 summaryFrom');
+  [['dashboard.html', dh], ['index.html', ih]].forEach(function (p) {
+    var h = p[1];
+    ok(/<b>예제 엑셀 9종\(가상 데이터\)<\/b> — 수입실적 · 수출실적 · 수입FTA · 수출FTA\(건기·엔진\) · 관세환급 · 품목분류 결정문 · 유니패스 오류점수\(수입·수출\)/.test(h) && /수출FTA 는 FTA 담당자 분석본 형식/.test(h) && /href="samples\/예제데이터\.zip" download/.test(h) &&
+      EX.every(function (x) { return h.indexOf('href="samples/' + x + '" download>' + x.replace(/\.xlsx$/, '').replace(/_/g, ' ') + '<') > 0; }) && h.indexOf('data-ex5') < 0 && h.indexOf('예제 엑셀 5') < 0, 'v2.7.0 ' + p[0] + ' — 예제 엑셀 9종 · 묶음 설명 · 하나씩 받기 9개 · ZIP 하나(겹치던 「모두 내려받기」 단추 없앰)');
+  });
+  ok(/모든 예제는 가상 데이터이며, 실제 거래처·회사명·신고번호와 무관합니다\./.test(dh) && /모든 예제는 가상 데이터이며, 실제 거래처·회사명·신고번호와 무관합니다\./.test(ih) && dh.indexOf('2024-01~2025-10') < 0 && EX.every(function (x) { return /\(가상\)/.test(x); }), 'v2.7.0 안내 문구 · 예제 파일 이름과 내려받기 이름에 「(가상)」 그대로');
 }

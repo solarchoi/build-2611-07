@@ -233,13 +233,11 @@ srv.listen(0, async function () {
     ok(/예전형식/.test(await pg.textContent('#d-sets tr[data-kind="refund"]')) && /기억한 데이터/.test(await pg.textContent('#d-msg')), 'v1.5.0 예전 형식으로 기억한 자료도 오류 없이 읽힌다');
     await pg.click('#btn-dash-clear'); await pg.click('#d-clear-dlg [data-clear-ok]');
     ok(/실적 데이터 · 오류점수 요약을\(를\) 지웠습니다/.test(await pg.textContent('#d-msg')) && (await pg.$$('#d-sets tr[data-kind]')).length === 0, '저장된 데이터 지우기 — 고른 항목만 지우고 알림(v2.3.0 탭은 그대로 보임)');
-    // 실제 samples/ 엑셀 4종 올리기 — 수입 파일은 맨 위 제목 2줄을 건너뛰고 머리글을 찾는다
+    // (v2.7.0) 실제 구조 예제(samples/ — 실적 · FTA · 환급 · 결정문 7개)를 올리면 못 찾은 열 없이 집계된다(유니패스 오류점수 2개는 오류점수 화면 몫)
     var sdir = path.join(ROOT, 'samples');
-    await pg.setInputFiles('#d-file', fs.readdirSync(sdir).filter(function (n) { return /\.xlsx$/.test(n); }).map(function (n) { return path.join(sdir, n); }));
-    await pg.waitForSelector('#d-sets tr[data-kind="errors"]', { timeout: 5000 });
-    var impRow = await pg.$$eval('#d-sets tr[data-kind="import"] td', function (t) { return t.map(function (x) { return x.textContent; }); });
-    ok(impRow[4] === '220' && impRow[5] === '1', 'samples/ 수입 파일 220줄 · 합계 줄 1개 건너뜀', impRow.join('|'));
-    ok(await pg.$$eval('#d-sets tr[data-kind].flag', function (t) { return t.length; }) === 0 && await kv('imp-goods') === ex.goods, 'samples/ 4종이 예제와 같은 값', await kv('imp-goods'));
+    await pg.setInputFiles('#d-file', fs.readdirSync(sdir).filter(function (n) { return /.xlsx$/.test(n) && !/오류/.test(n); }).map(function (n) { return path.join(sdir, n); }));
+    await pg.waitForSelector('#d-sets tr[data-kind="import"]', { timeout: 8000 });
+    ok(await pg.$$eval('#d-sets tr[data-kind].flag', function (t) { return t.length; }) === 0 && /원$/.test(await kv('imp-goods')), 'samples/ 예제 7개 — 못 찾은 열 없이 집계', await kv('imp-goods'));
     await pg.setViewportSize({ width: 360, height: 800 });
     for (var tb of ['trade', 'export', 'fta', 'refund', 'errors']) {
       await pg.click('.tab[data-tab="' + tb + '"]');

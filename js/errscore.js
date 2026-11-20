@@ -374,7 +374,7 @@
     var s = erpStoreValid(store); if (!erpStoreHas(s)) return '';
     var ms = []; KINDS.forEach(function (k) { Object.keys(s.counts[k]).forEach(function (m) { if (ms.indexOf(m) < 0) ms.push(m); }); }); ms.sort();
     var srcs = s.files.slice().sort(function (a, b) { return String(b.at).localeCompare(String(a.at)); }), last = srcs[0];
-    var where = srcs.map(function (f) { return f.src === 'dashboard' ? '대시보드에서 올림' : '오류점수 화면에서 올림'; }).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(' · ');
+    var where = srcs.map(function (f) { return f.src === 'dashboard' ? '대시보드에서 올림' : f.src === 'example' ? '예제(가상 데이터)' : '오류점수 화면에서 올림'; }).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(' · ');
     var t = last && last.at ? new Date(last.at) : null, p = function (v) { return (v < 10 ? '0' : '') + v; };
     return '인천 신고건수 · 본부: ERP 실적 ' + ms.join(', ') + ' (' + where + (t && !isNaN(t) ? ' · ' + (t.getMonth() + 1) + '/' + t.getDate() + ' ' + p(t.getHours()) + ':' + p(t.getMinutes()) : '') + ')';
   }
@@ -462,6 +462,18 @@
   // 요약의 갱신 시각(ISO · 세계 표준시) → 이 PC 시각 「YYYY-MM-DD HH:MM」
   function localTime(iso) { var d = new Date(iso); if (isNaN(d)) return String(iso || ''); var p = function (v) { return (v < 10 ? '0' : '') + v; }; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); }
   // 요약 → 월별 종합(수입 + 수출) · 수입 · 수출 — 대시보드가 읽기만 할 때 쓴다(계산은 더하기와 오류점수 ÷ 신고건수뿐)
+  // (v2.7.0) 오류점수 계산 순서 한 곳 — 지역 표 → 행 · 연도 → ERP 저장값 → 인천 신고건수(ERP 만) → 요약 → 본부 → 저장할 요약.
+  //   오류점수 화면(recompute)과 대시보드 「예제로 해보기」가 같은 함수를 쓴다(대시보드가 따로 계산하지 않게).
+  function summaryFrom(books, erpStore, opts) {
+    opts = opts || {}; applyRule(books, opts.rule || normRule(null));
+    var rows = [].concat.apply([], books.map(function (b) { return b.rows; })).filter(function (r) { return r.month; });
+    var year = (books.filter(function (b) { return b.year; })[0] || {}).year || (rows.map(function (r) { return r.year; }).filter(Boolean).sort()[0]) || null;
+    var erpSum = erpStoreHas(erpStore) ? erpSumFromStore(erpStore, year) : null, counts = { 수입: {}, 수출: {} };
+    if (erpSum) KINDS.forEach(function (k) { Object.keys(erpSum.counts[k]).forEach(function (m) { counts[k][m] = erpSum.counts[k][m]; }); });
+    var summary = summarize(books, counts, { threshold: opts.threshold }), hq = hqBreakdown(summary, books, erpSum);
+    var erp = (erpStoreValid(erpStore) ? erpStore.files : []).map(function (x) { return { name: x.name, kind: x.kind, period: x.period || null, rows: x.rows, src: x.src }; });
+    return { rows: rows, year: year, erpSum: erpSum, counts: counts, summary: summary, hq: hq, saved: buildSummary(summary, hq, books, { erp: erp }) };
+  }
   // (v2.6.0) 상단 조회 기간으로 자른 요약 — 기간 안 달만 합산(종합 = 기간 합계), 당월 = 기간의 마지막 달, 자료 없는 달은 months 에만(추이 빈칸).
   //   신고건수는 기간 안 모든 달에 있어야 합계(한 달이라도 한쪽 자료뿐이면 null — 비율 「자료 없음」).
   function rangeSummary(sum, range) {
@@ -786,7 +798,7 @@
 
   var api = {
     RULE: RULE, THRESHOLD: THRESHOLD, KINDS: KINDS, CAMPUSES: CAMPUSES, FIELDS: FIELDS, LEDGER_HEAD: LEDGER_HEAD,
-    buildSummary: buildSummary, summaryMonthly: summaryMonthly, rangeSummary: rangeSummary, localTime: localTime, SUMMARY_KEY: SUMMARY_KEY, SUMMARY_BASIS: SUMMARY_BASIS, HQ_NOPLANT: HQ_NOPLANT, HQ_NOMATCH: HQ_NOMATCH, HQ_ORDER2: HQ_ORDER2,
+    buildSummary: buildSummary, summaryFrom: summaryFrom, summaryMonthly: summaryMonthly, rangeSummary: rangeSummary, localTime: localTime, SUMMARY_KEY: SUMMARY_KEY, SUMMARY_BASIS: SUMMARY_BASIS, HQ_NOPLANT: HQ_NOPLANT, HQ_NOMATCH: HQ_NOMATCH, HQ_ORDER2: HQ_ORDER2,
     noteKey: noteKey, migrateNotes: migrateNotes, ledgerRows: ledgerRows, ledgerProgress: ledgerProgress, ledgerAoa: ledgerAoa, DIV_SHORT: DIV_SHORT, LEDGER_INPUT: LEDGER_INPUT,
     parseDeclNo: parseDeclNo, statusCheck: statusCheck, campusOf: campusOf, normRule: normRule, UNREGION: UNREGION, erpSummary: erpSummary, erpStoreFrom: erpStoreFrom, erpStoreMerge: erpStoreMerge, erpStoreTrim: erpStoreTrim, erpSumFromStore: erpSumFromStore, erpStoreHas: erpStoreHas, erpStoreValid: erpStoreValid, erpSourceText: erpSourceText, booksPack: booksPack, booksUnpack: booksUnpack, utf8Len: utf8Len, ERP_KEY: ERP_KEY, ERP_LIMIT: ERP_LIMIT, BOOKS_KEY: BOOKS_KEY, NOTES_KEY: 'build-2611-07.err.notes', HQ_CODE: HQ_CODE, HQ_NOJOIN: HQ_NOJOIN, hqBreakdown: hqBreakdown, regionChecks: regionChecks, declKey: declKey, HQ_ORDER: HQ_ORDER, parseDate: parseDate, monthOfName: monthOfName, classifySheet: classifySheet,
     mapHeaders: mapHeaders, findHeaderRow: findHeaderRow, readDetail: readDetail, readStatus: readStatus, readWorkbook: readWorkbook, readHandSummary: readHandSummary, applyRule: applyRule, brokers: brokers, countsFromBooks: countsFromBooks, compare: compare,

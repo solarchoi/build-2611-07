@@ -1,10 +1,12 @@
-// 예제 엑셀 만들기(대시보드 4종 + 유니패스 오류점수 예제) — node tools/make-samples.mjs [폴더=samples]
-// js/customs.js 의 sampleFiles() 로 실제 xlsx 를 쓴다. 가짜 데이터입니다(실제 사내 데이터가 아닙니다).
-// 대시보드의 「예제로 해보기」와 같은 내용이다. 수입 파일은 ERP 처럼 맨 위에 제목·조회 조건 줄을 붙인다.
+// 예제 데이터 묶기 · 시험용 파일 만들기 — node tools/make-samples.mjs [폴더=samples]
+// (v2.7.0) 대시보드 · 오류점수 화면의 예제는 samples/ 에 넣어 둔 실제 구조 파일 9개(가상 데이터 · 2026년 9~10월)를 그대로 쓴다.
+//   이 도구는 그 9개를 samples/예제데이터.zip 한 파일로 묶고(이름은 UTF-8), 시험용 파일(samples/시험용/)을 만든다.
+//   customs.js 의 sampleFiles() 는 계산 규칙 시험용으로만 남는다(예전처럼 samples/ 에 쓰지 않음).
 import { createRequire } from 'node:module';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { deflateRawSync } from 'node:zlib';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -13,24 +15,30 @@ const C = require(join(ROOT, 'js/customs.js'));
 
 const dir = process.argv[2] || join(ROOT, 'samples');
 mkdirSync(dir, { recursive: true });
-for (const f of C.sampleFiles()) {
-  const aoa = f.kind === 'import'
-    ? [['수입 통관 실적 조회(예제 — 가짜 데이터)'], ['조회기간: 2024-01-01 ~ 2025-10-31']].concat(f.aoa)
-    : f.aoa;
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), '데이터');
-  wb.Props = { Title: '예제(가짜 데이터)', CreatedDate: new Date(Date.UTC(2026, 10, 3)) };
-  writeFileSync(join(dir, f.name), XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', compression: true }));
-  console.log('썼습니다:', f.name, (aoa.length - 1) + '줄');
+export const EXAMPLES = ['2026_예제(가상)_수입실적.xlsx', '2026_예제(가상)_수출실적.xlsx', '2026_예제(가상)_수입FTA.xlsx', '2026-10_예제(가상)_수출FTA_건기.xlsx', '2026-10_예제(가상)_수출FTA_엔진.xlsx',
+  '2026_예제(가상)_수입오류.xlsx', '2026_예제(가상)_수출오류.xlsx', '2026_예제(가상)_관세환급.xlsx', '2026_예제(가상)_품목분류결정문.xlsx'];
+// 작은 ZIP 쓰기(deflate · 이름 UTF-8 표시 0x0800 — 한글 파일 이름이 깨지지 않게). 날짜는 고정(같은 파일이면 같은 ZIP).
+const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(b) { let c = 0xffffffff; for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
+function zip(files) {
+  const parts = [], central = []; let off = 0; const time = 0, date = ((2026 - 1980) << 9) | (11 << 5) | 21;
+  for (const f of files) {
+    const name = Buffer.from(f.name, 'utf8'), data = f.data, comp = deflateRawSync(data, { level: 9 }), crc = crc32(data);
+    const lh = Buffer.alloc(30); lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(20, 4); lh.writeUInt16LE(0x0800, 6); lh.writeUInt16LE(8, 8); lh.writeUInt16LE(time, 10); lh.writeUInt16LE(date, 12);
+    lh.writeUInt32LE(crc, 14); lh.writeUInt32LE(comp.length, 18); lh.writeUInt32LE(data.length, 22); lh.writeUInt16LE(name.length, 26); lh.writeUInt16LE(0, 28);
+    const ch = Buffer.alloc(46); ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(20, 4); ch.writeUInt16LE(20, 6); ch.writeUInt16LE(0x0800, 8); ch.writeUInt16LE(8, 10); ch.writeUInt16LE(time, 12); ch.writeUInt16LE(date, 14);
+    ch.writeUInt32LE(crc, 16); ch.writeUInt32LE(comp.length, 20); ch.writeUInt32LE(data.length, 24); ch.writeUInt16LE(name.length, 28); ch.writeUInt32LE(off, 42);
+    parts.push(lh, name, comp); central.push(ch, name); off += 30 + name.length + comp.length;
+  }
+  const cd = Buffer.concat(central), end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(files.length, 8); end.writeUInt16LE(files.length, 10); end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(off, 16);
+  return Buffer.concat(parts.concat([cd, end]));
 }
-// (v2.0.0) 오류점수 예제 — 유니패스 형식(요약 · 현황목록_N월 · 상세목록_N월). 대시보드가 아니라 오류점수 화면에서 올린다.
 {
-  const ES = require(join(ROOT, 'js/errscore.js'));
-  const b = ES.sampleBooks()[0], wb = XLSX.utils.book_new();
-  b.sheets.forEach((sh) => XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sh.aoa), sh.name));
-  wb.Props = { Title: '예제(가짜 데이터)', CreatedDate: new Date(Date.UTC(2026, 10, 20)) };
-  writeFileSync(join(dir, b.name), XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', compression: true }));
-  console.log('썼습니다:', b.name, b.sheets.length + '시트');
+  const miss = EXAMPLES.filter((n) => !existsSync(join(dir, n)));
+  if (miss.length) { console.error('예제 파일이 없습니다: ' + miss.join(', ')); process.exit(1); }
+  const z = zip(EXAMPLES.map((n) => ({ name: n, data: readFileSync(join(dir, n)) })));
+  writeFileSync(join(dir, '예제데이터.zip'), z);
+  console.log('썼습니다: 예제데이터.zip', EXAMPLES.length + '개', z.length + ' bytes');
 }
 // (v1.4.6) 시험용 — 건수 열이 없는 관세환급 신청 현황 73줄 + 합계 줄. 예제 5종과 부딪히지 않게 하위 폴더에 둔다
 // (브라우저 시험은 samples/ 바로 아래 파일만 한꺼번에 올린다).

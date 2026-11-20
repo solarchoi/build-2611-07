@@ -131,14 +131,16 @@
     r.uploadedAt = now();
     if (!r.ok) return { ok: false, note: '<span data-k="exfta-fail">' + esc(f.name) + ' — <b>수출 FTA: ' + esc(r.reason) + '</b>' + (r.pick ? ' 고른 시트 근거: ' + esc(r.pick.why) : '') + '</span>' };
     // 세율표 — 담당자가 채운 (협정 · HS · 국가 · 기본 · FTA) 를 쌓는다. 커버리지는 쌓기 전 기준.
-    var mg = C.exftaRatesMerge(exRates(), r); r.coverage = mg.coverage; r.rateConflicts = mg.conflicts.length;
-    try { localStorage.setItem(C.EXFTA_RATES_KEY, JSON.stringify(mg.table)); } catch (e) { r.warnings.push('세율표를 저장하지 못했습니다(용량).'); }
+    if (!state.loadingSample) {   // (v2.7.0) 예제(가상)의 세율은 세율표에 쌓지 않음
+      var mg = C.exftaRatesMerge(exRates(), r); r.coverage = mg.coverage; r.rateConflicts = mg.conflicts.length;
+      try { localStorage.setItem(C.EXFTA_RATES_KEY, JSON.stringify(mg.table)); } catch (e) { r.warnings.push('세율표를 저장하지 못했습니다(용량).'); }
+    } else { r.coverage = null; r.rateConflicts = 0; }
     var old = state.exfta.filter(function (x) { return x.month === r.month && x.hq === r.hq; });
     state.exfta = state.exfta.filter(function (x) { return old.indexOf(x) < 0; }).concat([r]);
     var saved = exftaSave(), ck = r.check;
     renderSettings();
     return { ok: true, note: '<span data-k="exfta-ok">' + esc(f.name) + ' — 수출 FTA ' + esc(r.hq) + ' ' + esc(C.monthLabel(r.month)) + (old.length ? ' (이전 파일 ' + esc(old.map(function (x) { return x.file; }).join(', ')) + ' 을 교체)' : '') + ': 「' + esc(r.pick.sheet) + '」 ' + C.fmtNum(r.rows.length) + '행 · 판가 ' + eokU(ck ? ck.total.ours.amount : 0) + ' · 절감 ' + eokU(ck ? ck.total.ours.saving : r.rows.reduce(function (a, x) { return a + x.saving; }, 0)) + ' · ' +
-      (ck ? (ck.ok ? '담당자 피벗과 일치' : '<b>담당자 피벗과 ' + ck.rows.filter(function (q) { return !q.ok; }).length + '개 협정이 다름</b>') : '피벗 없음') + ' · 세율표 새로 ' + C.fmtNum(r.coverage.added) + '건' + (r.warnings.length ? ' · <b>' + esc(r.warnings.join(' / ')) + '</b>' : '') + (saved ? '' : ' · <b>이 브라우저에 저장하지 못했습니다</b>') + '</span>' };
+      (ck ? (ck.ok ? '담당자 피벗과 일치' : '<b>담당자 피벗과 ' + ck.rows.filter(function (q) { return !q.ok; }).length + '개 협정이 다름</b>') : '피벗 없음') + (r.coverage ? ' · 세율표 새로 ' + C.fmtNum(r.coverage.added) + '건' : ' · 예제라 세율표에 넣지 않음') + (r.warnings.length ? ' · <b>' + esc(r.warnings.join(' / ')) + '</b>' : '') + (saved ? '' : ' · <b>이 브라우저에 저장하지 못했습니다</b>') + '</span>' };
   }
   function addFiles(list) {
     var notes = [], warn = false, names = {}, views = [], confirmedN = 0, erpItems = [];
@@ -218,14 +220,37 @@
       rd.readAsArrayBuffer(f);
     });
   }
+  // (v2.7.0) 예제 = samples/ 의 실제 구조 파일 9개(가상 데이터 · 2026년 9~10월). 실적 · FTA · 환급 · 결정문 7개는 탭으로,
+  //   유니패스 오류점수 2개는 오류점수 화면과 같은 계산(errscore.summaryFrom)으로 요약을 만들어 오류점수 탭에. 신고번호가 이어져 지역 · 본부 · 관리대장도 채워짐.
+  var EXAMPLES = { dash: ['2026_예제(가상)_수입실적.xlsx', '2026_예제(가상)_수출실적.xlsx', '2026_예제(가상)_수입FTA.xlsx', '2026-10_예제(가상)_수출FTA_건기.xlsx', '2026-10_예제(가상)_수출FTA_엔진.xlsx', '2026_예제(가상)_관세환급.xlsx', '2026_예제(가상)_품목분류결정문.xlsx'], err: ['2026_예제(가상)_수입오류.xlsx', '2026_예제(가상)_수출오류.xlsx'] };
+  function fetchBook(n) { return fetch('samples/' + encodeURIComponent(n)).then(function (r) { if (!r.ok) throw new Error(n + ' — ' + r.status); return r.arrayBuffer(); }).then(function (b) { return { name: n, wb: XLSX.read(new Uint8Array(b), { type: 'array' }) }; }); }
+  // ERP 실적 예제 → 오류점수용 레코드(GN 포함 — 관세청 총신고건과 같은 기준)
+  function erpRecordsOf(f, kind) {
+    var sh = sheetsOf(f.wb), pk = C.pickSheets(sh, f.name), u = pk.use[0]; if (!u) return [];
+    var m = C.mergeFiles(kind, [{ name: f.name, file: f.name, headers: C.uniqueHeaders(u.aoa[0]), aoa: u.aoa, offset: u.offset, override: {} }], Object.assign({}, state.settings, { excludeGN: false }));
+    return m.ok ? m.records : [];
+  }
+  function sampleErrors(errFiles, dashFiles) {
+    var E = window.ErrScore; if (!E) return '';
+    var rule = E.normRule((function () { try { return JSON.parse(localStorage.getItem('build-2611-07.err.rule') || 'null'); } catch (e) { return null; } })());
+    var books = errFiles.map(function (f) { return E.readWorkbook(rawSheets(f.wb), f.name, rule); });
+    var fi = dashFiles.filter(function (f) { return /수입실적/.test(f.name); })[0], fe = dashFiles.filter(function (f) { return /수출실적/.test(f.name); })[0];
+    var ri = fi ? erpRecordsOf(fi, 'import') : [], re = fe ? erpRecordsOf(fe, 'export') : [];
+    var store = E.erpStoreFrom({ 수입: ri, 수출: re }, { files: [fi && { name: fi.name, kind: '수입', rows: ri.length }, fe && { name: fe.name, kind: '수출', rows: re.length }].filter(Boolean), src: 'example' });
+    var res = E.summaryFrom(books, store, { rule: rule });
+    try { localStorage.setItem(E.SUMMARY_KEY, JSON.stringify(res.saved)); localStorage.setItem(E.BOOKS_KEY, JSON.stringify(E.booksPack(books))); localStorage.setItem(E.ERP_KEY, JSON.stringify(store)); } catch (e) { return ' 오류점수 예제 결과를 저장하지 못했습니다(용량).'; }
+    return ' 유니패스 오류점수 예제(수입 · 수출)는 오류점수 화면과 같은 계산으로 오류점수 탭에 넣었습니다 — 오류점수 화면을 열면 지역 · 본부 · 관리대장도 예제로 보입니다.';
+  }
   function loadSample() {
-    state.sets = {}; state.pending = []; state.open = {}; state.view = false; state.saved = null; state.held = []; state.loadingSample = true;
-    addFiles(C.sampleFiles().map(function (f) {
-      var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(f.aoa), '데이터');
-      return { name: f.name, wb: wb };
-    }));
-    state.loadingSample = false;
-    msg('예제 엑셀 5종(가짜 데이터)을 올렸습니다. 예제 데이터는 실제 사내 데이터가 아닙니다.', 'ok');
+    msg('예제 파일 9개를 읽는 중…', 'note');
+    Promise.all(EXAMPLES.dash.concat(EXAMPLES.err).map(fetchBook)).then(function (list) {
+      var dash = list.filter(function (f) { return EXAMPLES.dash.indexOf(f.name) >= 0; }), err = list.filter(function (f) { return EXAMPLES.err.indexOf(f.name) >= 0; });
+      state.sets = {}; state.pending = []; state.open = {}; state.view = false; state.saved = null; state.held = []; state.exfta = []; state.loadingSample = true;
+      var en = sampleErrors(err, dash);
+      addFiles(dash);
+      state.loadingSample = false;
+      msg('<span data-k="sample-ok">예제 엑셀 9종(가상 데이터 · 2026년 9~10월)을 올렸습니다 — 수입실적 · 수출실적 · 수입FTA · 수출FTA(건기 · 엔진) · 관세환급 · 품목분류 결정문은 각 탭에.' + esc(en) + ' 예제 데이터는 실제 사내 데이터가 아닙니다.</span>', 'ok');
+    }).catch(function (e) { state.loadingSample = false; msg('예제 파일을 읽지 못했습니다: ' + esc(e.message) + ' — 사이트 주소(http)로 열어야 합니다(파일을 바로 열면 읽지 못함).', 'warn'); });
   }
 
   /* ---------- 계산 묶기(엔진 호출) ---------- */
