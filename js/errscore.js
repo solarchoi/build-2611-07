@@ -17,7 +17,9 @@
 (function (root) {
   'use strict';
 
-  var RULE = { ulsan: ['43908'] };                      // 울산캠퍼스 신고대행 관세사부호
+  // (v1.11.0) 지역 표 — 신고인부호(신고번호 앞 5자리). 실제 데이터로 비교해 팀 숫자와 맞은 방식. 설정 화면에서 고친다.
+  var RULE = { ulsan: ['43908', '44924', '44788'], incheon: ['22356', '22371', '42158', '15553'] };
+  var UNREGION = '미분류';                                 // 화면 이름 「지역 미분류」
   var THRESHOLD = 300;                                   // 분기 오류점수 경계(실물서류 제출)
   var KINDS = ['수입', '수출'];
   var CAMPUSES = ['인천', '울산'];
@@ -41,10 +43,18 @@
     if (!m) return null;
     return { no: s, raw: raw, broker: m[1], year: 2000 + Number(m[2]), seq: m[3], kind: m[4] ? LETTER[m[4]] : null, bonded: m[4] === 'B' };
   }
+  // (v1.11.0) 지역 = 신고번호 앞 5자리(신고인부호)로만. 표에 없는 부호는 「지역 미분류」(임의로 인천 · 울산에 넣지 않는다).
   function campusOf(declNo, rule) {
     var p = parseDeclNo(declNo); if (!p) return null;
-    var list = (rule || RULE).ulsan || [];
-    return list.indexOf(p.broker) >= 0 ? '울산' : '인천';
+    var r = normRule(rule);
+    return r.ulsan.indexOf(p.broker) >= 0 ? '울산' : r.incheon.indexOf(p.broker) >= 0 ? '인천' : UNREGION;
+  }
+  // 저장된 지역 표 정리 — 예전 형식({ ulsan } 만, 「울산 아니면 인천」)이면 새 기본 표에 예전에 고른 울산 부호를 더한다
+  function normRule(rule) {
+    var codes = function (a) { return uniq((a || []).map(function (x) { return String(x).replace(/\D/g, ''); }).filter(function (x) { return x.length === 5; })); };
+    if (!rule) return { ulsan: RULE.ulsan.slice(), incheon: RULE.incheon.slice() };
+    if (!rule.incheon) { var u = uniq(RULE.ulsan.concat(codes(rule.ulsan))); return { ulsan: u, incheon: RULE.incheon.filter(function (x) { return u.indexOf(x) < 0; }) }; }
+    var ul = codes(rule.ulsan); return { ulsan: ul, incheon: codes(rule.incheon).filter(function (x) { return ul.indexOf(x) < 0; }) };
   }
 
   /* ---------- 날짜 ---------- */
@@ -238,15 +248,106 @@
   /* ---------- 규칙 다시 적용 · 부호표 · 인천 건수 · 대장 대조 ---------- */
   function applyRule(books, rule) { books.forEach(function (b) { b.rows.forEach(function (r) { r.campus = campusOf(r.declNo, rule); }); }); return books; }
   function brokers(rows, rule) {
-    var g = {}, list = (rule || RULE).ulsan || [];
+    var g = {}, r0 = normRule(rule);
     rows.forEach(function (r) { var x = g[r.broker] || (g[r.broker] = { broker: r.broker, decls: {}, score: 0 }); x.decls[r.declNo] = 1; x.score += r.score || 0; });
-    return Object.keys(g).sort().map(function (k) { return { broker: k, err: Object.keys(g[k].decls).length, score: round(g[k].score, 2), campus: list.indexOf(k) >= 0 ? '울산' : '인천' }; });
+    return Object.keys(g).sort().map(function (k) { return { broker: k, err: Object.keys(g[k].decls).length, score: round(g[k].score, 2), campus: r0.ulsan.indexOf(k) >= 0 ? '울산' : r0.incheon.indexOf(k) >= 0 ? '인천' : UNREGION }; });
   }
   // 요약 시트에 있는 인천 신고건수를 기본값으로(메일: 인천 건수는 수출입실적분석에서, 울산 = 총신고건 − 인천)
   function countsFromBooks(books) {
     var c = { 수입: {}, 수출: {} };
     books.forEach(function (b) { if (!b.kind || !b.hand) return; Object.keys(b.hand).forEach(function (m) { var x = b.hand[m].인천; if (x && x.decl != null) c[b.kind][m] = x.decl; }); });
     return c;
+  }
+
+  /* ---------- (v1.11.0) 인천 분모 = ERP 실적 · 본부(PLANT) 세부 · 검증 ---------- */
+  var HQ_NONE = '본부 미분류', HQ_ULSAN = '건기본부', HQ_REGION = '지역 미분류';
+  var HQ_ORDER = ['건기본부', '엔진본부', '부품센터', HQ_NONE, HQ_REGION];
+  function declKey(v) { return clean(v).toUpperCase().replace(/[\s\-]/g, ''); }
+  // erp = { 수입: [레코드], 수출: [레코드] } — customs.js 가 읽은 ERP 실적(수입 수리일자 · 수출 Declaration Date 로 month, Plant → hq).
+  //   GN(무환)을 포함한 레코드를 넘긴다(관세청 총신고건에 GN 이 들어 있음 — 실적 탭의 GN 제외 설정과 무관).
+  //   → { counts: { 수입: { 월: 인천 신고건수 } }, byHq: { 수입: { 월: { 본부: 건수 } } }, index: { 신고번호: { kind, hq, plant, month } } }
+  function erpSummary(erp, year) {
+    // countsNoGN = GN(무환)을 뺀 인천 신고건수 — 분모로는 쓰지 않고, 팀 수기 자료(요약 시트, GN 제외로 적음)와 대조할 때만 쓴다
+    var out = { counts: { 수입: {}, 수출: {} }, countsNoGN: { 수입: {}, 수출: {} }, byHq: { 수입: {}, 수출: {} }, index: {}, rows: { 수입: 0, 수출: 0 } };
+    KINDS.forEach(function (k) {
+      var seen = {}, gnDecl = {}, list = (erp || {})[k] || [];
+      list.forEach(function (r) { if (String(r.payment || '').toUpperCase() === 'GN') gnDecl[declKey(r.declNo)] = 1; });
+      list.forEach(function (r) {
+        var key = declKey(r.declNo); if (!key) return;
+        out.rows[k]++;
+        if (!out.index[key]) out.index[key] = { kind: k, hq: r.hq || HQ_NONE, plant: r.plant || '', month: r.month || '' };
+        if (!r.month || (year && String(r.month).slice(0, 4) !== String(year))) return;
+        var m = +String(r.month).slice(5, 7), mk = m + '|' + key;
+        if (seen[mk]) return; seen[mk] = 1;
+        out.counts[k][m] = (out.counts[k][m] || 0) + 1;
+        if (!gnDecl[key]) out.countsNoGN[k][m] = (out.countsNoGN[k][m] || 0) + 1;
+        var h = out.byHq[k][m] || (out.byHq[k][m] = {}), hq = r.hq || HQ_NONE;
+        h[hq] = (h[hq] || 0) + 1;
+      });
+    });
+    return out;
+  }
+  // 본부 세부: 인천 건은 ERP 와 신고번호로 조인해 본부(월과 무관 — 오류 달과 수리 달이 다를 수 있음), 못 찾으면 본부 미분류(버리지 않음).
+  //   울산 건은 세부 자료가 없어 전부 건기본부. 지역 미분류 건은 따로. 분모: 인천 본부 = ERP 본부별 건수, 건기본부에 울산 신고건수를 더함.
+  function hqBreakdown(summary, books, erpSum) {
+    // uncovered = ERP 실적이 없는 달(그 달 인천 건은 본부 미분류 — 「못 찾음」 경고와 구분)
+    var idx = erpSum ? erpSum.index : {}, out = { kinds: {}, notFound: [], uncovered: [], hqs: HQ_ORDER.slice(), ulsanNote: '울산은 세부 자료가 없어 전량 건기본부로 집계' };
+    var all = []; (books || []).forEach(function (b) { if (b.kind) all = all.concat(b.rows.filter(function (r) { return r.month; })); });
+    KINDS.forEach(function (k) {
+      out.kinds[k] = {};
+      summary.months.forEach(function (m) {
+        var g = {}, rows = all.filter(function (r) { return r.kind === k && r.month === m; });
+        rows.forEach(function (r) {
+          var hq;
+          if (r.campus === '울산') hq = HQ_ULSAN;
+          else if (r.campus === '인천') {
+            var e = idx[declKey(r.declNo)], covered = !!(erpSum && erpSum.counts[k][m] != null);
+            hq = e ? e.hq : HQ_NONE;
+            if (!e && covered && !out.notFound.some(function (x) { return x.declNo === r.declNo && x.month === m; })) out.notFound.push({ kind: k, month: m, declNo: r.declNo });
+            if (!e && !covered && !out.uncovered.some(function (x) { return x.kind === k && x.month === m; })) out.uncovered.push({ kind: k, month: m });
+          }
+          else hq = HQ_REGION;
+          if (out.hqs.indexOf(hq) < 0) out.hqs.splice(out.hqs.length - 2, 0, hq);
+          (g[hq] = g[hq] || []).push(r);
+        });
+        var mm = summary.kinds[k].months[m], byHq = erpSum && erpSum.byHq[k][m] ? erpSum.byHq[k][m] : null;
+        out.kinds[k][m] = out.hqs.filter(function (h) { return g[h] || (byHq && byHq[h]) || (h === HQ_ULSAN && mm.울산.decl); }).map(function (h) {
+          var decl = null;
+          if (byHq) { decl = byHq[h] || 0; if (h === HQ_ULSAN && mm.울산.decl != null) decl += mm.울산.decl; }
+          if (h === HQ_REGION) decl = null;
+          return Object.assign({ hq: h }, cell(g[h] || [], decl));
+        });
+      });
+    });
+    return out;
+  }
+  // 검증: 인천 + 울산 신고건수 = 현황 총신고건, 인천 + 울산 오류점수 = 현황 오류점수 — 계산 결과와 요약 시트(팀 수기 자료) 둘 다.
+  function regionChecks(summary, books, erpSum) {
+    var out = [];
+    function add(k, m, source, item, inc, uls, expect, extra) {
+      if (inc == null || uls == null || expect == null) return;
+      var sumv = round(inc + uls, 2), diff = round(sumv - expect, 2);
+      out.push(Object.assign({ kind: k, month: m, source: source, item: item, incheon: inc, ulsan: uls, sum: sumv, expect: expect, diff: diff, ok: diff === 0 && uls >= 0 }, extra || {}));
+    }
+    KINDS.forEach(function (k) {
+      summary.months.forEach(function (m) {
+        var mm = summary.kinds[k].months[m];
+        add(k, m, '계산', '신고건수', mm.인천.decl, mm.울산.decl, mm.statusTotal);
+        add(k, m, '계산', '오류점수', mm.인천.score, mm.울산.score, mm.statusScore, { unregion: mm.미분류.score });
+      });
+    });
+    (books || []).forEach(function (b) {
+      if (!b.kind || !b.hand) return;
+      Object.keys(b.hand).map(Number).forEach(function (m) {
+        var h = b.hand[m], mm = summary.kinds[b.kind].months[m]; if (!h || !mm) return;
+        add(b.kind, m, '요약 시트', '신고건수', h.인천 && h.인천.decl, h.울산 && h.울산.decl, mm.statusTotal);
+        add(b.kind, m, '요약 시트', '오류점수', h.인천 && h.인천.score, h.울산 && h.울산.score, mm.statusScore);
+        // 요약 시트는 울산을 「총신고건 − 인천」으로 적어 위 검사로는 인천 입력 오류가 안 잡힌다 → 인천 건수를 ERP(GN 제외 — 팀 수기 기준)와 대조
+        var eg = erpSum && erpSum.countsNoGN[b.kind] ? erpSum.countsNoGN[b.kind][m] : null, hi = h.인천 && h.인천.decl;
+        if (eg != null && hi != null) out.push({ kind: b.kind, month: m, source: '요약 시트 ↔ ERP', item: '인천 신고건수(GN 제외)', incheon: hi, ulsan: null, sum: hi, expect: eg, diff: round(hi - eg, 2), ok: hi === eg });
+      });
+    });
+    return out.sort(function (a, b) { return a.month - b.month || a.kind.localeCompare(b.kind) || a.source.localeCompare(b.source); });
   }
   // 엔진 계산 ↔ 담당자 요약 표. 점수 차이가 먼저고, 건수 차이는 따로 센다(대장에 0점 신고번호를 뺀 달이 있다).
   function compare(books, summary) {
@@ -269,7 +370,9 @@
   function distinct(rows) { return uniq(rows.map(function (r) { return r.declNo; })).length; }
   function sum(rows) { return round(rows.reduce(function (a, r) { return a + (r.score || 0); }, 0), 2); }
   function rateOf(score, decl) { return decl > 0 && score != null ? round(score / decl * 100, 2) : null; }
-  function cell(rows, decl) { var s = sum(rows); return { decl: decl == null ? null : decl, err: distinct(rows), score: s, rate: rateOf(s, decl) }; }
+  // (v1.11.0) scored = 점수 발생 건수(신고번호별 오류점수 합 > 0). err(오류건수)는 0점 건도 포함 — 팀 자료와 대조하기 쉽게 둘 다
+  function scoredOf(rows) { var g = {}; rows.forEach(function (r) { g[r.declNo] = (g[r.declNo] || 0) + (r.score || 0); }); return Object.keys(g).filter(function (k) { return g[k] > 0; }).length; }
+  function cell(rows, decl) { var s = sum(rows); return { decl: decl == null ? null : decl, err: distinct(rows), scored: scoredOf(rows), score: s, rate: rateOf(s, decl) }; }
   // books: readWorkbook 결과들 · counts: { 수입: { 9: 1002 }, 수출: {...} } 인천 신고건수(수출입실적분석)
   function summarize(books, counts, opts) {
     opts = opts || {}; counts = counts || {};
@@ -285,16 +388,17 @@
         var mr = kr.filter(function (r) { return r.month === m; }), st = status[k][m], total = st ? st.total : null;
         var inc = counts[k] && counts[k][m] != null ? toNum(counts[k][m]) : null;
         var uls = total != null && inc != null ? total - inc : null;
-        per[m] = { 종합: cell(mr, total), 인천: cell(mr.filter(function (r) { return r.campus === '인천'; }), inc), 울산: cell(mr.filter(function (r) { return r.campus === '울산'; }), uls), statusScore: st ? st.score : null };
+        per[m] = { 종합: cell(mr, total), 인천: cell(mr.filter(function (r) { return r.campus === '인천'; }), inc), 울산: cell(mr.filter(function (r) { return r.campus === '울산'; }), uls),
+          미분류: cell(mr.filter(function (r) { return r.campus === UNREGION; }), null), statusScore: st ? st.score : null, statusTotal: total };
       });
       out.kinds[k] = { months: per, cum: cumOf(per, months) };
     });
     months.forEach(function (m) {
       var t = {};
-      ['종합', '인천', '울산'].forEach(function (c) {
+      ['종합', '인천', '울산', UNREGION].forEach(function (c) {
         var a = out.kinds.수입.months[m][c], b = out.kinds.수출.months[m][c];
         var decl = a.decl != null && b.decl != null ? a.decl + b.decl : null, score = round(a.score + b.score, 2);
-        t[c] = { decl: decl, err: a.err + b.err, score: score, rate: rateOf(score, decl) };
+        t[c] = { decl: decl, err: a.err + b.err, scored: a.scored + b.scored, score: score, rate: rateOf(score, decl) };
       });
       out.total[m] = t;
     });
@@ -304,10 +408,10 @@
   }
   function cumOf(per, months) {
     var c = {};
-    ['종합', '인천', '울산'].forEach(function (cp) {
-      var decl = 0, dk = true, err = 0, score = 0;
-      months.forEach(function (m) { var x = per[m][cp]; if (x.decl == null) dk = false; else decl += x.decl; err += x.err; score += x.score; });
-      c[cp] = { decl: dk && months.length ? decl : null, err: err, score: round(score, 2), rate: dk ? rateOf(round(score, 2), decl) : null };
+    ['종합', '인천', '울산', UNREGION].forEach(function (cp) {
+      var decl = 0, dk = true, err = 0, scored = 0, score = 0;
+      months.forEach(function (m) { var x = per[m][cp]; if (x.decl == null) dk = false; else decl += x.decl; err += x.err; scored += x.scored || 0; score += x.score; });
+      c[cp] = { decl: dk && months.length ? decl : null, err: err, scored: scored, score: round(score, 2), rate: dk ? rateOf(round(score, 2), decl) : null };
     });
     return c;
   }
@@ -413,7 +517,7 @@
     rows.push(line('종합', '', function (m) { return summary.total[m].종합; }, summary.totalCum.종합));
     CAMPUSES.forEach(function (c) { rows.push(line('수출입', c, function (m) { return summary.total[m][c]; }, summary.totalCum[c])); });
     KINDS.forEach(function (k) { rows.push([]); rows.push(line(k, '종합', function (m) { return summary.kinds[k].months[m].종합; }, summary.kinds[k].cum.종합)); CAMPUSES.forEach(function (c) { rows.push(line(k, c, function (m) { return summary.kinds[k].months[m][c]; }, summary.kinds[k].cum[c])); }); });
-    rows.push([]); rows.push(['규칙', '인천/울산 = 신고번호 앞 5자리 관세사부호(' + RULE.ulsan.join(',') + ' → 울산) · 오류건수 = 신고번호 수 · 비율 = 오류점수 ÷ 신고건수 · 인천 신고건수는 수출입실적분석에서 입력, 울산 = 총신고건 − 인천']);
+    rows.push([]); rows.push(['규칙', '지역 = 신고번호 앞 5자리 신고인부호(울산 ' + RULE.ulsan.join(',') + ' · 인천 ' + RULE.incheon.join(',') + ', 그 밖 지역 미분류 — 설정에서 바꿀 수 있음) · 오류건수 = 신고번호 수(0점 포함) · 점수 발생 건수 = 오류점수 > 0 · 비율 = 오류점수 ÷ 신고건수 · 인천 신고건수 = ERP 실적 신고번호 고유 개수(GN 포함, 없으면 요약 시트 · 입력), 울산 = 총신고건 − 인천']);
     return rows;
   }
   function exportBook(ctx) {
@@ -464,7 +568,7 @@
 
   var api = {
     RULE: RULE, THRESHOLD: THRESHOLD, KINDS: KINDS, CAMPUSES: CAMPUSES, FIELDS: FIELDS, LEDGER_HEAD: LEDGER_HEAD,
-    parseDeclNo: parseDeclNo, statusCheck: statusCheck, campusOf: campusOf, parseDate: parseDate, monthOfName: monthOfName, classifySheet: classifySheet,
+    parseDeclNo: parseDeclNo, statusCheck: statusCheck, campusOf: campusOf, normRule: normRule, UNREGION: UNREGION, erpSummary: erpSummary, hqBreakdown: hqBreakdown, regionChecks: regionChecks, declKey: declKey, HQ_ORDER: HQ_ORDER, parseDate: parseDate, monthOfName: monthOfName, classifySheet: classifySheet,
     mapHeaders: mapHeaders, findHeaderRow: findHeaderRow, readDetail: readDetail, readStatus: readStatus, readWorkbook: readWorkbook, readHandSummary: readHandSummary, applyRule: applyRule, brokers: brokers, countsFromBooks: countsFromBooks, compare: compare,
     summarize: summarize, quarters: quarters, topItems: topItems, byDecl: byDecl, ledger: ledger, mailDraft: mailDraft,
     summaryAoa: summaryAoa, exportBook: exportBook, sampleBooks: sampleBooks, round: round, toNum: toNum

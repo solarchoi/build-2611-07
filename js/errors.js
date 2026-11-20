@@ -1,10 +1,12 @@
 /* 오류점수 화면 — 판정은 errscore.js 가 한다. 여기서는 읽고, 고르고, 그린다. */
 (function () {
   'use strict';
-  var $ = function (id) { return document.getElementById(id); }, E = window.ErrScore;
+  var $ = function (id) { return document.getElementById(id); }, E = window.ErrScore, C = window.Customs, FR = window.FileRules;
   var LS = { rule: 'build-2611-07.err.rule', notes: 'build-2611-07.err.notes', th: 'build-2611-07.err.th' };
   function load(k, d) { try { return JSON.parse(localStorage.getItem(k)) || d; } catch (e) { return d; } }
-  var state = { books: [], rule: load(LS.rule, { ulsan: E.RULE.ulsan.slice() }), notes: load(LS.notes, {}), th: load(LS.th, E.THRESHOLD), counts: { 수입: {}, 수출: {} }, summary: null, rows: [], decls: [] };
+  // (v1.11.0) rule = 지역 표({ ulsan, incheon } — 예전 { ulsan } 저장값은 새 기본 표로 옮김) · erp = ERP 실적(인천 분모 · 본부 조인, 저장하지 않음) · manual = 직접 넣은 인천 건수
+  var state = { books: [], rule: E.normRule(load(LS.rule, null)), notes: load(LS.notes, {}), th: load(LS.th, E.THRESHOLD), counts: { 수입: {}, 수출: {} }, countSrc: { 수입: {}, 수출: {} }, manual: { 수입: {}, 수출: {} }, erp: { 수입: null, 수출: null }, erpSum: null, hq: null, checks: [], summary: null, rows: [], decls: [] };
+  function saveRule() { try { localStorage.setItem(LS.rule, JSON.stringify(state.rule)); } catch (e) { /* 기억 못 해도 이번 화면에는 반영 */ } }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function n(v) { return v == null ? '—' : Number(v).toLocaleString('ko-KR'); }
   function pc(v) { return v == null ? '—' : v + '%'; }
@@ -16,10 +18,39 @@
   function recompute() {
     E.applyRule(state.books, state.rule);
     state.rows = [].concat.apply([], state.books.map(function (b) { return b.rows; })).filter(function (r) { return r.month; });
+    var year = (state.books.filter(function (b) { return b.year; })[0] || {}).year || (state.rows.map(function (r) { return r.year; }).filter(Boolean).sort()[0]) || null;
+    state.erpSum = E.erpSummary({ 수입: state.erp.수입 ? state.erp.수입.records : [], 수출: state.erp.수출 ? state.erp.수출.records : [] }, year);
+    var hand = E.countsFromBooks(state.books);
+    E.KINDS.forEach(function (k) {
+      state.counts[k] = {}; state.countSrc[k] = {};
+      var put = function (src, obj) { Object.keys(obj || {}).forEach(function (m) { if (state.counts[k][m] == null && obj[m] != null) { state.counts[k][m] = obj[m]; state.countSrc[k][m] = src; } }); };
+      if (state.erp[k]) put('ERP', state.erpSum.counts[k]);
+      put('요약 시트', hand[k]); put('직접 입력', state.manual[k]);
+    });
     state.summary = E.summarize(state.books, state.counts, { threshold: state.th });
+    state.hq = E.hqBreakdown(state.summary, state.books, state.erp.수입 || state.erp.수출 ? state.erpSum : null);
+    state.checks = E.regionChecks(state.summary, state.books, state.erp.수입 || state.erp.수출 ? state.erpSum : null);
     state.decls = E.byDecl(state.rows);
     fillMonths();
     render();
+  }
+  // (v1.11.0) ERP 실적(수입 · 수출) 읽기 — customs.js 그대로, GN 포함으로 고정(실적 탭의 GN 제외 설정과 무관)
+  function erpSettings() { var raw = null; try { raw = JSON.parse(localStorage.getItem('b2611-07.dash.settings') || 'null'); } catch (e) { raw = null; } var o = C.exportSettings(raw); o.excludeGN = false; return o; }
+  function erpKindOf(b) {
+    var byName = FR.kindByName(b.name);
+    if (byName && (byName.group === 'errscore' || byName.group === 'fta' || byName.group === 'refund' || byName.group === 'ruling')) return null;
+    if (byName && byName.dataset) return byName.dataset;
+    var sh = b.sheets.map(function (x) { var hr = C.findHeaderRow(x.aoa); return { name: x.name, aoa: x.aoa.slice(hr), offset: hr }; }).filter(function (x) { return x.aoa.length > 1; });
+    var d = C.pickSheets(sh, b.name).detect; return d.kind === 'import' || d.kind === 'export' ? d.kind : null;
+  }
+  function readErp(b, kind) {
+    var sh = b.sheets.map(function (x) { var hr = C.findHeaderRow(x.aoa); return { name: x.name, aoa: x.aoa.slice(hr), offset: hr }; }).filter(function (x) { return x.aoa.length > 1; });
+    var pk = C.pickSheets(sh, b.name), u = pk.use[0];
+    if (!u) return { file: b.name, kind: kind, records: [], missing: ['읽을 표 없음'] };
+    var item = { name: b.name, file: b.name, headers: C.uniqueHeaders(u.aoa[0]), aoa: u.aoa, offset: u.offset, override: {} };
+    if (pk.use.length > 1) item.parts = pk.use.map(function (x) { return { sheet: x.name, aoa: x.aoa, offset: x.offset }; });
+    var m = C.mergeFiles(kind, [item], erpSettings()), p = m.files[0];
+    return { file: b.name, kind: kind, records: m.ok ? m.records : [], missing: p.res.missing, period: m.period, gn: m.records.filter(function (r) { return String(r.payment || '').toUpperCase() === 'GN'; }).length, dateCol: m.map.date, declCol: m.map.declNo };
   }
   // (v1.10.0) 올린 파일 목록 — 파일명 / 인식된 종류 / 기간 / 월 귀속 기준 / 읽은 행 수 / 경고. 현황 · 상세가 둘 다 있으면 오류점수 합계를 맞춰 보고 차액을 보인다.
   function fileRow(b) {
@@ -34,22 +65,43 @@
     var nrows = b.rows.length + (b.hasStatus ? ' (현황 ' + Object.keys(b.status).length + '줄)' : '') + (b.blankRows ? ' · 빈 줄 ' + b.blankRows : '') + (b.totalRows ? ' · 합계 · 소계 줄 ' + b.totalRows + ' 제외' : '') + (b.sheetRows ? ' / 시트 ' + b.sheetRows + '행' : '');
     return '<tr><td>' + esc(b.fileName) + '</td><td>' + esc((b.kind || '구분 모름') + ' 오류점수 · ' + part) + '</td><td>' + esc(period) + '</td><td>' + esc(basis) + '</td><td class="num">' + esc(nrows) + '</td><td>' + (warn.length ? '<span class="bad">' + esc(warn.join(' / ')) + '</span>' : '—') + '</td></tr>';
   }
+  function erpRow(x) {
+    var lab = x.kind === 'import' ? '수입 실적(ERP · GN 포함)' : '수출 실적(ERP · GN 포함)', basis = x.kind === 'import' ? '행 날짜 — 수리일자(Acceptance date)' : '행 날짜 — 신고일자(Declaration Date)';
+    var warn = x.missing && x.missing.length ? '<span class="bad">못 찾은 열: ' + esc(x.missing.join(', ')) + '</span>' : '—';
+    return '<tr><td>' + esc(x.file) + '</td><td>' + esc(lab) + '</td><td>' + esc(x.period ? x.period.from + ' ~ ' + x.period.to : '—') + '</td><td>' + esc(basis) + '</td><td class="num">' + esc(n(x.records.length) + (x.gn ? ' (GN ' + n(x.gn) + ')' : '')) + '</td><td>' + warn + '</td></tr>';
+  }
   function setBooks(raw) {
-    state.books = raw.map(function (b) { return E.readWorkbook(b.sheets, b.name, state.rule); });
-    state.counts = E.countsFromBooks(state.books);
+    var errs = [], erps = [];
+    raw.forEach(function (b) { var k = C && FR ? erpKindOf(b) : null; if (k) erps.push({ b: b, k: k }); else errs.push(b); });
+    erps.forEach(function (x) { state.erp[x.k === 'import' ? '수입' : '수출'] = readErp(x.b, x.k); });
+    if (errs.length || !erps.length) state.books = errs.map(function (b) { return E.readWorkbook(b.sheets, b.name, state.rule); });
     var chk = E.statusCheck(state.books), diff = chk.filter(function (c) { return c.diff !== 0; });
-    var list = table(['파일명', '인식된 종류', '기간', '월 귀속 기준', '읽은 행 수', '경고'], state.books.map(fileRow), 'e-files');
+    var erpList = ['수입', '수출'].filter(function (k) { return state.erp[k]; }).map(function (k) { return erpRow(state.erp[k]); });
+    var list = table(['파일명', '인식된 종류', '기간', '월 귀속 기준', '읽은 행 수', '경고'], state.books.map(fileRow).concat(erpList), 'e-files');
     var chkTxt = chk.length ? '<p class="sub">현황목록 총 오류점수 ↔ 상세목록 오류점수 합계: ' + chk.map(function (c) { return esc(c.month + '월 ' + c.kind + ' ' + n(c.status) + '점 ↔ ' + n(c.detail) + '점' + (c.diff ? ' (차액 ' + (c.diff > 0 ? '+' : '') + c.diff + '점)' : ' (같음)')); }).join(' · ') + '</p>' : '';
+    var erpTxt = '<p class="sub" data-k="erp-note">인천 신고건수 = ERP 실적의 신고번호 고유 개수(수입 수리일자 · 수출 신고일자 기준, <b>GN 포함</b> — 관세청 총신고건에 GN 이 들어 있어서 실적 탭의 「GN 제외」 설정을 따르지 않습니다). ' + (erpList.length ? '' : 'ERP 수입실적 · 수출실적 파일을 함께 올리면 인천 건수와 본부(PLANT)를 자동으로 채웁니다.') + '</p>';
     var ok = state.books.some(function (b) { return b.rows.length || b.hasStatus; });
-    $('e-msg').innerHTML = '<div class="' + (ok && !diff.length ? 'ok' : 'warn') + '">' + list + chkTxt + (diff.length ? '<p><b>현황목록과 상세목록의 오류점수가 다릅니다</b> — 위 차액을 확인해 주세요.</p>' : '') + '</div>';
+    $('e-msg').innerHTML = '<div class="' + (ok && !diff.length ? 'ok' : 'warn') + '">' + list + chkTxt + erpTxt + (diff.length ? '<p><b>현황목록과 상세목록의 오류점수가 다릅니다</b> — 위 차액을 확인해 주세요.</p>' : '') + '</div>';
     ['e-rule', 'e-view', 'e-ledger', 'e-mail'].forEach(function (id) { $(id).hidden = !ok; });
     if (ok) recompute();
   }
-  function render() { renderBrokers(); renderCards(); renderTable(); renderQuarters(); renderCompare(); renderCounts(); fillScope(); renderItems(); renderLedger(); renderMail(); }
+  function render() { renderBrokers(); renderCards(); renderChecks(); renderTable(); renderHq(); renderQuarters(); renderCompare(); renderCounts(); fillScope(); renderItems(); renderLedger(); renderMail(); }
+  var REG = { 인천: '인천', 울산: '울산' }; REG[E.UNREGION] = '지역 미분류';
+  function regLabel(c) { return REG[c] || c; }
   function renderBrokers() {
-    $('e-brokers').innerHTML = table(['관세사부호', '캠퍼스', '신고번호 수', '오류점수'], E.brokers(state.rows, state.rule).map(function (b) {
-      return '<tr><td>' + b.broker + '</td><td><label><input type="checkbox" data-broker="' + b.broker + '"' + (b.campus === '울산' ? ' checked' : '') + '> 울산</label></td><td class="num">' + n(b.err) + '</td><td class="num">' + n(b.score) + '</td></tr>';
-    }), 'brokers');
+    var list = E.brokers(state.rows, state.rule), un = list.filter(function (b) { return b.campus === E.UNREGION; });
+    var opt = function (b, v, t) { return '<option value="' + v + '"' + (b.campus === v ? ' selected' : '') + '>' + t + '</option>'; };
+    $('e-brokers').innerHTML = (un.length ? '<div class="warn" data-k="unregion"><b>지역 미분류 부호 ' + un.length + '개</b> — ' + esc(un.map(function (b) { return b.broker + '(' + b.err + '건 · ' + b.score + '점)'; }).join(', ')) + '. 인천 · 울산 어느 쪽에도 넣지 않았습니다. 아래에서 지역을 골라 주세요(새 관세사일 수 있음).</div>' : '') +
+      table(['관세사부호(신고인부호)', '지역', '신고번호 수', '오류점수'], list.map(function (b) {
+        return '<tr' + (b.campus === E.UNREGION ? ' class="flag"' : '') + '><td>' + b.broker + '</td><td><select data-broker="' + b.broker + '" aria-label="' + b.broker + ' 지역">' + opt(b, '인천', '인천') + opt(b, '울산', '울산') + opt(b, E.UNREGION, '지역 미분류') + '</select></td><td class="num">' + n(b.err) + '</td><td class="num">' + n(b.score) + '</td></tr>';
+      }), 'brokers') +
+      '<p class="sub" data-k="rule-now">지금 표 — 울산 ' + esc(state.rule.ulsan.join(' · ') || '없음') + ' / 인천 ' + esc(state.rule.incheon.join(' · ') || '없음') + '</p>' +
+      '<div class="ctrl"><label>부호 더하기 <input type="text" id="e-addcode" inputmode="numeric" maxlength="5" style="width:6em" placeholder="5자리"></label> <select id="e-addreg"><option value="인천">인천</option><option value="울산">울산</option></select> <button class="btn" type="button" id="e-addbtn">더하기</button> <button class="btn" type="button" id="e-rulereset">기본 표로</button></div>';
+  }
+  function setRegion(code, reg) {
+    var r = state.rule; r.ulsan = r.ulsan.filter(function (x) { return x !== code; }); r.incheon = r.incheon.filter(function (x) { return x !== code; });
+    if (reg === '울산') r.ulsan.push(code); else if (reg === '인천') r.incheon.push(code);
+    state.rule = E.normRule(r); saveRule(); recompute();
   }
   function renderCards() {
     var S = state.summary, c = S.totalCum, over = S.quarters.filter(function (q) { return q.over; }), last = S.months[S.months.length - 1];
@@ -62,11 +114,39 @@
   function renderTable() {
     var S = state.summary, rows = [];
     S.months.slice().reverse().forEach(function (m) {
-      [['수출입', S.total[m]], ['수입', S.kinds.수입.months[m]], ['수출', S.kinds.수출.months[m]]].forEach(function (p) {
-        ['종합', '인천', '울산'].forEach(function (cp) { var x = p[1][cp]; rows.push('<tr' + (cp === '종합' ? ' class="sum"' : '') + '><td>' + m + '월 ' + p[0] + '</td><td>' + cp + '</td><td class="num">' + n(x.decl) + '</td><td class="num">' + n(x.err) + '</td><td class="num">' + n(x.score) + '</td><td class="num">' + rt(x.rate) + '</td></tr>'); });
+      [['수출입', S.total[m], null], ['수입', S.kinds.수입.months[m], '수입'], ['수출', S.kinds.수출.months[m], '수출']].forEach(function (p) {
+        ['종합', '인천', '울산', E.UNREGION].forEach(function (cp) {
+          var x = p[1][cp]; if (cp === E.UNREGION && !x.err) return;
+          var src = cp === '인천' && p[2] && state.countSrc[p[2]][m] ? ' <small class="sub">(' + esc(state.countSrc[p[2]][m]) + ')</small>' : '';
+          rows.push('<tr' + (cp === '종합' ? ' class="sum"' : cp === E.UNREGION ? ' class="flag"' : '') + '><td>' + m + '월 ' + p[0] + '</td><td>' + regLabel(cp) + '</td><td class="num">' + n(x.decl) + src + '</td><td class="num">' + n(x.err) + '</td><td class="num">' + n(x.scored) + '</td><td class="num">' + n(x.score) + '</td><td class="num">' + rt(x.rate) + '</td></tr>');
+        });
       });
     });
-    $('e-table').innerHTML = table(['월 · 구분', '캠퍼스', '신고건수', '오류건수', '오류점수', '비율'], rows, 'err-months');
+    $('e-table').innerHTML = table(['월 · 구분', '지역', '신고건수', '오류건수(0점 포함)', '점수 발생 건수', '오류점수', '비율'], rows, 'err-months');
+  }
+  // (v1.11.0) 검증 — 인천 + 울산 = 현황목록(신고건수 · 오류점수), 계산과 요약 시트(팀 수기) 둘 다
+  function renderChecks() {
+    var c = state.checks, bad = c.filter(function (x) { return !x.ok; });
+    $('e-checks').innerHTML = (c.length ? (bad.length ? '<div class="warn" data-k="checks-bad"><b>맞지 않는 곳 ' + bad.length + '개</b> — 인천 + 울산이 현황목록과 다릅니다. 팀 수기 자료(요약 시트)의 입력 오류이거나, 지역 미분류 부호 · 인천 건수 출처를 확인해 주세요.</div>' : '<div class="ok" data-k="checks-ok">모두 맞습니다 — 인천 + 울산 = 현황목록(신고건수 · 오류점수).</div>') + '<p class="sub">요약 시트(팀 수기)는 울산을 「총신고건 − 인천」으로 적어 합계 검사로는 인천 입력 오류가 잡히지 않습니다. 그래서 요약 시트의 인천 건수를 ERP 인천 건수(GN 제외 — 팀 수기 기준)와도 대조합니다. 분모로는 늘 GN 포함 값을 씁니다.</p>' + ('') : '<p class="sub">인천 신고건수가 없어 아직 검증하지 못했습니다.</p>') +
+      (c.length ? table(['월 · 구분', '출처', '항목', '인천', '울산', '인천 + 울산', '기준(현황목록 · ERP)', '차이'], c.map(function (x) {
+        return '<tr' + (x.ok ? '' : ' class="over"') + '><td>' + x.month + '월 ' + x.kind + '</td><td>' + esc(x.source) + '</td><td>' + esc(x.item) + '</td><td class="num">' + n(x.incheon) + '</td><td class="num">' + n(x.ulsan) + '</td><td class="num">' + n(x.sum) + '</td><td class="num">' + n(x.expect) + '</td><td class="num">' + (x.ok ? '0' : '<b>' + (x.diff > 0 ? '+' : '') + n(x.diff) + '</b>' + (x.unregion ? ' <small>(지역 미분류 ' + n(x.unregion) + '점)</small>' : '') + (x.ulsan < 0 ? ' <small>(울산이 음수 — 인천 건수가 총신고건보다 큼)</small>' : '')) + '</td></tr>';
+      }), 'checks') : '');
+  }
+  // (v1.11.0) 본부별(PLANT) — 인천은 ERP 신고번호 조인, 울산은 전량 건기본부
+  function renderHq() {
+    var H = state.hq, rows = [];
+    if (!H) { $('e-hq').innerHTML = ''; return; }
+    state.summary.months.slice().reverse().forEach(function (m) {
+      ['수입', '수출'].forEach(function (k) {
+        (H.kinds[k][m] || []).forEach(function (x) { rows.push('<tr' + (x.hq === '본부 미분류' || x.hq === '지역 미분류' ? ' class="flag"' : '') + '><td>' + m + '월 ' + k + '</td><td>' + esc(x.hq) + '</td><td class="num">' + n(x.decl) + '</td><td class="num">' + n(x.err) + '</td><td class="num">' + n(x.scored) + '</td><td class="num">' + n(x.score) + '</td><td class="num">' + rt(x.rate) + '</td></tr>'); });
+      });
+    });
+    var nf = H.notFound;
+    $('e-hq').innerHTML = '<p class="sub" data-k="ulsan-note"><b>' + esc(H.ulsanNote) + '</b>. 인천은 ERP 실적과 신고번호로 조인해 PLANT → 본부(1000 · 1100 · 1111 건기본부, 1130 · 1131 엔진본부, 6000 부품센터, 빈칸 · 미등록 본부 미분류). 신고건수는 ERP 본부별 신고번호 수(GN 포함), 건기본부에는 울산 신고건수를 더합니다.</p>' +
+      (state.erp.수입 || state.erp.수출 ? '' : '<div class="warn">ERP 실적 파일이 없어 인천 건은 모두 본부 미분류입니다 — ERP 수입실적 · 수출실적을 함께 올려 주세요.</div>') +
+      (H.uncovered.length && (state.erp.수입 || state.erp.수출) ? '<p class="sub" data-k="hq-uncovered">ERP 실적이 없는 달 — 그 달 인천 건은 본부 미분류: ' + esc(H.uncovered.map(function (x) { return x.month + '월 ' + x.kind; }).join(', ')) + ' (그 달 ERP 실적을 함께 올리면 본부로 나뉩니다)</p>' : '') +
+      (nf.length ? '<div class="warn" data-k="hq-notfound">ERP 에서 신고번호를 못 찾은 인천 건 ' + nf.length + '개 — 본부 미분류로 남겼습니다: ' + esc(nf.map(function (x) { return x.month + '월 ' + x.kind + ' ' + x.declNo; }).join(', ')) + '</div>' : '') +
+      table(['월 · 구분', '본부', '신고건수', '오류건수(0점 포함)', '점수 발생 건수', '오류점수', '비율'], rows, 'err-hq');
   }
   function renderQuarters() {
     var qs = state.summary.quarters, hot = qs.filter(function (q) { return q.over || q.near; });
@@ -81,7 +161,10 @@
       (diff.length ? table(['구분 · 월', '캠퍼스', '계산 건수', '대장 건수', '계산 점수', '대장 점수', '점수 차이'], diff.map(function (x) { return '<tr' + (x.scoreDiff ? ' class="over"' : '') + '><td>' + x.kind + ' ' + x.month + '월</td><td>' + x.campus + '</td><td class="num">' + x.calcErr + '</td><td class="num">' + x.handErr + '</td><td class="num">' + n(x.calcScore) + '</td><td class="num">' + n(x.handScore) + '</td><td class="num">' + x.scoreDiff + '</td></tr>'; }), 'compare') : '');
   }
   function renderCounts() {
-    $('e-counts').innerHTML = table(['구분', '월', '인천 신고건수'], [].concat.apply([], E.KINDS.map(function (k) { return state.summary.months.map(function (m) { var v = state.counts[k][m]; return '<tr><td>' + k + '</td><td>' + m + '월</td><td class="num"><input type="text" inputmode="numeric" style="width:7em" data-count="' + k + '" data-m="' + m + '" value="' + (v == null ? '' : v) + '"></td></tr>'; }); })), 'counts');
+    $('e-counts').innerHTML = table(['구분', '월', '인천 신고건수', '출처'], [].concat.apply([], E.KINDS.map(function (k) { return state.summary.months.map(function (m) {
+      var v = state.counts[k][m], src = state.countSrc[k][m] || '';
+      var cellv = src === 'ERP' || src === '요약 시트' ? n(v) : '<input type="text" inputmode="numeric" style="width:7em" data-count="' + k + '" data-m="' + m + '" value="' + (v == null ? '' : v) + '">';
+      return '<tr><td>' + k + '</td><td>' + m + '월</td><td class="num">' + cellv + '</td><td>' + esc(src || '없음 — 넣어 주세요') + '</td></tr>'; }); })), 'counts');
   }
   function fillScope() { var sel = $('e-scope'); if (sel.options.length) return; sel.innerHTML = ['전체', '수입', '수출', '인천', '울산'].map(function (s) { return '<option>' + s + '</option>'; }).join(''); }
   function fillMonths() {   // 파일을 바꾸면 달 목록도 바뀐다 — 없어진 달이 선택에 남지 않게 하되, 남아 있는 달은 그대로 둔다
@@ -107,11 +190,15 @@
 
   $('e-file').addEventListener('change', function (e) { var fs = [].slice.call(e.target.files); if (!fs.length) return; Promise.all(fs.map(readFile)).then(setBooks).catch(function (er) { $('e-msg').innerHTML = '<div class="warn">파일을 읽지 못했습니다: ' + esc(er.message) + '</div>'; }); e.target.value = ''; });
   $('e-sample').addEventListener('click', function () { setBooks(E.sampleBooks()); });
-  $('e-clear').addEventListener('click', function () { state.books = []; ['e-rule', 'e-view', 'e-ledger', 'e-mail'].forEach(function (id) { $(id).hidden = true; }); $('e-msg').innerHTML = ''; });
-  $('e-brokers').addEventListener('change', function (e) { var b = e.target.dataset.broker; if (!b) return; var l = state.rule.ulsan.filter(function (x) { return x !== b; }); if (e.target.checked) l.push(b); state.rule.ulsan = l; localStorage.setItem(LS.rule, JSON.stringify(state.rule)); recompute(); });
+  $('e-clear').addEventListener('click', function () { state.books = []; state.erp = { 수입: null, 수출: null }; state.manual = { 수입: {}, 수출: {} }; ['e-rule', 'e-view', 'e-ledger', 'e-mail'].forEach(function (id) { $(id).hidden = true; }); $('e-msg').innerHTML = ''; });
+  $('e-brokers').addEventListener('change', function (e) { var b = e.target.dataset.broker; if (b) setRegion(b, e.target.value); });
+  $('e-brokers').addEventListener('click', function (e) {
+    if (e.target.id === 'e-addbtn') { var c = ($('e-addcode').value || '').replace(/\D/g, ''); if (c.length !== 5) { $('e-addcode').focus(); return; } setRegion(c, $('e-addreg').value); }
+    else if (e.target.id === 'e-rulereset') { state.rule = E.normRule(null); saveRule(); recompute(); }
+  });
   $('e-th').value = state.th;
   $('e-th').addEventListener('change', function () { var v = E.toNum(this.value); if (v == null || v <= 0) { this.value = state.th; return; } state.th = v; localStorage.setItem(LS.th, JSON.stringify(v)); recompute(); });
-  $('e-counts').addEventListener('change', function (e) { var k = e.target.dataset.count; if (!k) return; var v = E.toNum(e.target.value); if (v == null) delete state.counts[k][e.target.dataset.m]; else state.counts[k][e.target.dataset.m] = v; recompute(); });
+  $('e-counts').addEventListener('change', function (e) { var k = e.target.dataset.count; if (!k) return; var v = E.toNum(e.target.value); if (v == null) delete state.manual[k][e.target.dataset.m]; else state.manual[k][e.target.dataset.m] = v; recompute(); });
   $('e-scope').addEventListener('change', renderItems);
   $('e-lmonth').addEventListener('change', renderLedger);
   $('e-mmonth').addEventListener('change', renderMail);

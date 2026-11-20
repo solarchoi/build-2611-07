@@ -71,7 +71,7 @@
 
 <section id="e-rule" class="card" hidden>
   <h2 style="margin-top:0">2. 인천 · 울산 구분과 경계</h2>
-  <p class="sub">신고번호 앞 5자리(신고대행 관세사부호)가 고른 부호이면 울산, 아니면 인천입니다. 기본값은 기획 메일의 43908 하나입니다. 이 자료에 나온 부호를 전부 보여 주니 필요한 부호를 더 고르세요.</p>
+  <p class="sub">지역은 신고번호 앞 5자리(신고인부호)로만 가릅니다 — 기본 표: 울산 43908 · 44924 · 44788, 인천 22356 · 22371 · 42158 · 15553. 표에 없는 부호는 「지역 미분류」로 두고 경고합니다(임의로 인천 · 울산에 넣지 않음). 이 자료에 나온 부호마다 지역을 고칠 수 있고, 새 부호를 더할 수 있습니다(이 브라우저에 기억).</p>
   <div id="e-brokers"></div>
   <div class="ctrl" style="margin-top:12px"><label>분기 오류점수 경계 <input type="text" id="e-th" inputmode="numeric" value="300" style="width:6em"></label><span class="sub">분기 300점 이상이면 실물서류 제출 대상(기획 메일). 어느 범위에 적용되는지 확정 전이라 모든 범위를 보입니다.</span></div>
 </section>
@@ -79,11 +79,13 @@
 <section id="e-view" class="card" hidden>
   <h2 style="margin-top:0">3. 현황</h2>
   <div id="e-cards"></div>
+  <h3 class="tb-h">검증 — 인천 + 울산 = 현황목록</h3><div id="e-checks"></div>
   <h3 class="tb-h">월별 표</h3><div id="e-table"></div>
+  <h3 class="tb-h">본부별(PLANT)</h3><div id="e-hq"></div>
   <h3 class="tb-h">분기 경계</h3><div id="e-quarters"></div>
   <h3 class="tb-h">담당자 요약 표와 대조</h3><div id="e-compare"></div>
   <h3 class="tb-h">인천 신고건수</h3>
-  <p class="sub">요약 시트에 있으면 그 값을 씁니다. 새 달은 수출입실적분석의 건수를 넣으세요. 울산 = 총신고건 − 인천입니다.</p>
+  <p class="sub">ERP 수입실적 · 수출실적을 함께 올리면 그 신고번호 고유 개수(GN 포함)를 씁니다. 없으면 요약 시트(팀 수기) 값, 그것도 없으면 직접 넣은 값을 씁니다. 울산 = 총신고건 − 인천입니다.</p>
   <div id="e-counts"></div>
   <h3 class="tb-h">항목별 원인</h3>
   <div class="ctrl"><label>범위 <select id="e-scope"></select></label></div>
@@ -109,6 +111,7 @@
 </div></main>
 <footer><div class="wrap">생성형 AI 업무자동화 전문가과정 2차수 · 프로젝트 07 · 기획 최창섭 · 예제는 가짜 데이터이며 실제 사내 데이터가 아닙니다.</div></footer>
 <script src="lib/xlsx.full.min.js"></script>
+<script src="js/customs.js"></script>
 <script src="js/filerules.js"></script>
 <script src="js/errscore.js"></script>
 <script src="js/errors.js"></script>
