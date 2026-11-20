@@ -106,7 +106,9 @@
         { key: 'saving', label: '절감액', type: 'num', req: true, exact: ['Tariff Reductions'], aliases: ['tariffreductions', '감면액', '절감액'] },
         { key: 'naCode', label: 'FTA 미적용 사유', type: 'text', keepBlank: true, exact: ['FTA N/A Code'], aliases: ['ftanacode', '미적용사유코드'] },
         { key: 'naReason', label: '미적용 사유 설명', type: 'text', keepBlank: true, exact: ['N/A Reason'], aliases: ['nareason', '미적용사유'] },
-        { key: 'country', label: '원산지', type: 'text', exact: ['Origin'], exclude: ['shcountry'], aliases: ['원산지', 'origin'] }
+        { key: 'country', label: '원산지', type: 'text', exact: ['Origin'], exclude: ['shcountry'], aliases: ['원산지', 'origin'] },
+        // (v2.2.0) HS 6단위 절감액 상위 10 — 없어도 됨(그 표만 빠짐)
+        { key: 'hs', label: 'HS 코드', type: 'text', keepBlank: true, exact: ['HS-Code', 'HS Code'], aliases: ['hscode', 'hs코드', '세번부호', '품목번호'] }
       ]
     }
     // (v2.0.0) 「errors」(사람이 집계한 기간 · 구분 · 본부 · 신고건수 · 오류건수 · 오류점수 표) 종류를 없앴다.
@@ -500,6 +502,11 @@
   var FTA_NA_NAMES = { '01': '기타세율 적용', '02': '비특혜 원산지', '03': 'CO 발급 불가·미발행', '04': '긴급건 사후적용', '05': 'PSR·세번 상이', '06': '개별 원산지', '07': '양허대상 아님·불량품 등' };
   var FTA_AGREEMENTS = { FCN1: '한중', FEU1: '한EU', FUS1: '한미', FIN1: '한인도', FGB1: '한영', FRCJP1: 'RCEP(일본)', FCA1: '한캐나다', FAS1: '한아세안', FEF1: '한EFTA' };
   var FTA_HQ_ORDER = ['부품센터', '건기본부', '엔진본부'];
+  // (v2.2.0) 본부 고정색 — 모든 탭(수입 · 수출 · 관세환급 · 수입 FTA)에서 같은 본부는 같은 색. 이름으로 정하므로 조건을 바꿔 본부가 빠져도 남은 본부 색은 그대로.
+  //   노랑(조치 필요) · 초록/빨강(증가/감소)과 겹치지 않는 파랑 · 보라 · 청록 · 회색. 밝은 · 어두운 바탕 모두 3:1 이상.
+  var HQ_COLORS = { '건기본부': '#3a6fb5', '엔진본부': '#8257b8', '부품센터': '#1a8a9e', '본부 미분류': '#8a95a1' };
+  function hqColor(name) { return HQ_COLORS[clean(name)] || HQ_COLORS['본부 미분류']; }
+  var FTA_AGREE_TOP = 5;   // (v2.2.0) 협정별 절감액 — 큰 순서 5개 + 「기타 N개 협정」
   var FTA_BASIS = '최신 ERP 기준 · GN 제외 · 수리일자 기준. 사후적용이 완료되면 과거 월 실적이 소급해 늘어납니다.';
   // FTA 적용 = Duty Type 이 F 로 시작하고 4자 이상(FCN1 · FEU1 · FRCJP1 …). 「F」 한 글자는 넣지 않는다. N/A 코드가 붙어 있어도 F 로 적용됐으면 적용분.
   function ftaApplied(dt) { var d = clean(dt).toUpperCase(); return d.charAt(0) === 'F' && d.length >= 4; }
@@ -555,20 +562,63 @@
         if (!filter(r) || ftaApplied(r.dutyType)) return;
         var c = ftaNaCode(r.naCode); if (c === '04') return;
         var dt = clean(r.dutyType).toUpperCase(), key = c || '사유 없음(' + (dt || '빈칸') + ')';
-        var o = g[key] || (g[key] = { code: c || '', key: key, name: c ? (na[c] || '(이름 없음)') : key, goods: 0, saving: 0, lines: 0 });
+        var o = g[key] || (g[key] = { code: c || '', key: key, name: c ? (na[c] || '(이름 없음)') : key, goods: 0, saving: 0, lines: 0, d: {} });
         o.goods += r.goods || 0; o.lines++;
+        // (v2.2.0) 사유별 신고번호 목록 — 행을 누르면 보임
+        var dk = r.declNo || '(신고번호 없음)', q = o.d[dk] || (o.d[dk] = { declNo: dk, hq: r.hq, date: r.date, goods: 0, lines: 0 });
+        q.goods += r.goods || 0; q.lines++; if (r.date && (!q.date || r.date < q.date)) q.date = r.date;
       });
-      return Object.keys(g).map(function (k) { return g[k]; }).sort(function (a, b) { return (a.code ? 0 : 1) - (b.code ? 0 : 1) || (a.code < b.code ? -1 : a.code > b.code ? 1 : b.goods - a.goods); });
+      return Object.keys(g).map(function (k) { var o = g[k]; o.decls = Object.keys(o.d).map(function (x) { return o.d[x]; }).sort(function (a, b) { return b.goods - a.goods; }); delete o.d; return o; })
+        .sort(function (a, b) { return (a.code ? 0 : 1) - (b.code ? 0 : 1) || (a.code < b.code ? -1 : a.code > b.code ? 1 : b.goods - a.goods); });
+    }
+    // (v2.2.0) HS 6단위 절감액 — 절감액이 있는 HS 만, 큰 순서 10개
+    function hsTop(filter) {
+      var g = {};
+      use.forEach(function (r) {
+        if (!filter(r) || !(r.saving > 0)) return;
+        var k = ftaHs6(r.hs), o = g[k] || (g[k] = { hs6: k, saving: 0, ftaGoods: 0, lines: 0 });
+        o.saving += r.saving; o.lines++; if (ftaApplied(r.dutyType)) o.ftaGoods += r.goods || 0;
+      });
+      return Object.keys(g).map(function (k) { return g[k]; }).sort(function (a, b) { return b.saving - a.saving; }).slice(0, 10);
     }
     var isMonth = function (r) { return r.month === month; };
+    var cur = month ? table(isMonth) : [], cum = month ? table(inCum) : [], pc = month ? pending(inCum) : null;
+    // (v2.2.0) 카드 — 당월 절감액 · 전월 대비(달력상 전월, 자료가 없으면 null) · 누적 · 월평균 · 활용률 · 미활용 · 협정국 수입 비중 · 사후적용 대기
+    var kpi = null;
+    if (month) {
+      var ct = cur[cur.length - 1], cu = cum[cum.length - 1], pmo = prevMonthOf(month), prow = monthly.filter(function (q) { return q.month === pmo; })[0] || null;
+      var cms = ms.filter(function (m) { return m >= year + '-01' && m <= month; }).length;
+      kpi = {
+        saving: ct.saving, prevMonth: pmo, prevSaving: prow ? prow.saving : null, momPct: prow && prow.saving ? ct.saving / prow.saving - 1 : null,
+        cumSaving: cu.saving, cumMonths: cms, avgSaving: cms ? cu.saving / cms : null,
+        rate: ct.rate, unused: ct.poss - ct.fta, possShare: ratio(ct.poss, ct.all), cumRate: cu.rate, cumPossShare: ratio(cu.poss, cu.all),
+        all: ct.all, poss: ct.poss, fta: ct.fta, pendingAmount: pc.amount, pendingDecls: pc.decls, pendingLines: pc.lines
+      };
+    }
     return {
       month: month, months: ms, year: year, basis: FTA_BASIS,
-      current: month ? table(isMonth) : [], cumulative: month ? table(inCum) : [], monthly: monthly,
+      current: cur, cumulative: cum, monthly: monthly, kpi: kpi,
+      // (v2.2.0) 월별 본부별 절감액(쌓은 막대) · 월별 사후적용 대기 금액(지금도 대기 중인 란을 수리월에)
+      monthlyHq: ms.map(function (m) { return { month: m, rows: table(function (r) { return r.month === m; }).filter(function (q) { return !q.total; }) }; }),
+      pendingMonthly: ms.map(function (m) { var p = pending(function (r) { return r.month === m; }); return { month: m, amount: p.amount, lines: p.lines, decls: p.decls }; }),
       agreements: { month: month ? agree(isMonth) : [], cumulative: month ? agree(inCum) : [] },
-      pending: { month: month ? pending(isMonth) : null, cumulative: month ? pending(inCum) : null },
+      pending: { month: month ? pending(isMonth) : null, cumulative: pc },
       reasons: { month: month ? reasons(isMonth) : [], cumulative: month ? reasons(inCum) : [] },
+      hs: { month: month ? hsTop(isMonth) : [], cumulative: month ? hsTop(inCum) : [], has: use.some(function (r) { return clean(r.hs); }) },
       excluded: ex, used: use.length
     };
+  }
+  function prevMonthOf(m) { var y = +m.slice(0, 4), mo = +m.slice(5, 7) - 1; if (mo < 1) { y--; mo = 12; } return y + '-' + (mo < 10 ? '0' : '') + mo; }
+  // HS 10단위(숫자로 읽혀 앞 0 이 빠진 9자리 포함) → 6단위 「8481.80」. 못 읽으면 「(HS 없음)」.
+  function ftaHs6(v) { var d = clean(v).replace(/\.0+$/, '').replace(/\D/g, ''); if (d.length === 9 || d.length === 5) d = '0' + d; return d.length >= 6 ? d.slice(0, 4) + '.' + d.slice(4, 6) : '(HS 없음)'; }
+  // (v2.2.0) 협정별 절감액 — 절감액 큰 순서 n개 + 나머지를 「기타 N개 협정」 한 줄로(협정이 n+1개 이하면 묶지 않음)
+  function ftaAgreeGroups(list, n) {
+    n = n || FTA_AGREE_TOP;
+    var s = (list || []).slice().sort(function (a, b) { return b.saving - a.saving; });
+    if (s.length <= n + 1) return { top: s, other: null };
+    var rest = s.slice(n), o = { code: '', name: '기타 ' + rest.length + '개 협정', count: rest.length, codes: rest.map(function (a) { return a.code; }), goods: 0, saving: 0, lines: 0 };
+    rest.forEach(function (a) { o.goods += a.goods; o.saving += a.saving; o.lines += a.lines; });
+    return { top: s.slice(0, n), other: o };
   }
   // [6] 월 확정 — 본부별 다섯 지표만(원본 행 없음). 저장은 화면이 localStorage b2611-07.fta.snapshots 에.
   function ftaSnapshot(rep, now) {
@@ -1673,7 +1723,7 @@
     exportBook: exportBook,
     libValidate: libValidate, libAdd: libAdd, libRemove: libRemove, libSearch: libSearch, libCounts: libCounts, libToAoa: libToAoa,
     libFromRows: libFromRows, libSample: libSample, libLocationKind: libLocationKind,
-    ftaImportReport: ftaImportReport, ftaSnapshot: ftaSnapshot, ftaCompare: ftaCompare, ftaApplied: ftaApplied, eok: eok, FTA_NA_NAMES: FTA_NA_NAMES, FTA_AGREEMENTS: FTA_AGREEMENTS, FTA_HQ_ORDER: FTA_HQ_ORDER, FTA_BASIS: FTA_BASIS,
+    ftaImportReport: ftaImportReport, ftaAgreeGroups: ftaAgreeGroups, ftaHs6: ftaHs6, prevMonthOf: prevMonthOf, HQ_COLORS: HQ_COLORS, hqColor: hqColor, FTA_AGREE_TOP: FTA_AGREE_TOP, ftaSnapshot: ftaSnapshot, ftaCompare: ftaCompare, ftaApplied: ftaApplied, eok: eok, FTA_NA_NAMES: FTA_NA_NAMES, FTA_AGREEMENTS: FTA_AGREEMENTS, FTA_HQ_ORDER: FTA_HQ_ORDER, FTA_BASIS: FTA_BASIS,
     sampleFiles: sampleFiles, aoaToRows: aoaToRows, skippedSheetNote: skippedSheetNote
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

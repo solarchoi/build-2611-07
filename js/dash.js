@@ -430,6 +430,8 @@
     return frame(title, '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(title) + '">' + b + '</svg>');
   }
   // 가로 막대 — 상위 N
+  // (v2.2.0) color 는 색 하나 또는 함수(줄 → 색). 본부로 묶으면 본부 고정색(C.hqColor) — 탭이 달라도 · 조건을 바꿔도 같은 본부는 같은 색
+  function hqFill(r) { return C.hqColor(r.label); }
   function hbar(title, rows, fmt, color) {
     var W = 640, rowH = 26, L = 170, R = 110, T = 8, H = T + rows.length * rowH + 8;
     var max = niceMax(Math.max.apply(null, [0].concat(rows.map(function (r) { return r.value || 0; }))));
@@ -438,7 +440,7 @@
       var yy = T + i * rowH, w = r.value > 0 ? (r.value / max) * (W - L - R) : 0, lab = String(r.label);
       if (lab.length > 13) lab = lab.slice(0, 12) + '…';
       b += '<text x="' + (L - 8) + '" y="' + (yy + 17) + '" class="ax lab" text-anchor="end"><title>' + esc(r.label) + '</title>' + esc(lab) + '</text>' +
-        '<rect x="' + L + '" y="' + (yy + 5) + '" width="' + w.toFixed(1) + '" height="16" rx="3" fill="' + (color || COL[0]) + '"/>' +
+        '<rect x="' + L + '" y="' + (yy + 5) + '" width="' + w.toFixed(1) + '" height="16" rx="3" fill="' + (typeof color === 'function' ? color(r) : color || COL[0]) + '"/>' +
         '<text x="' + (L + w + 6).toFixed(1) + '" y="' + (yy + 17) + '" class="ax">' + esc(fmt(r.value)) + '</text>';
     });
     if (!rows.length) b = '<text x="20" y="24" class="ax">데이터 없음</text>';
@@ -552,7 +554,7 @@
     $('kpi-trade').innerHTML = k; $('ch-trade').innerHTML = ch; $('tb-trade-report').innerHTML = tb;
     // 묶음별 물자대 · 관세(v1.8.0 까지의 수입 표) — 그대로 아래에 둔다
     var t = C.topN(s.groups, top);
-    $('ch-trade-by').innerHTML = hbar(BYL + '별 수입 물자대 상위 ' + top, t.rows.map(function (g) { return { label: g.key, value: g.goods }; }), money, COL[0]);
+    $('ch-trade-by').innerHTML = hbar(BYL + '별 수입 물자대 상위 ' + top, t.rows.map(function (g) { return { label: g.key, value: g.goods }; }), money, by === 'hq' ? hqFill : COL[0]);
     $('tb-trade').innerHTML = '<h3 class="tb-h">수입 — ' + esc(BYL) + '별 물자대 · 관세 · 관세부담율</h3>' +
       table([esc(BYL), '건수', '물자대', '관세', '관세부담율'], t.rows.concat(t.rest ? [t.rest] : []).map(function (g) { return { cls: g === t.rest ? 'rest' : '', cells: [esc(g.key), n0(g.n), n0(g.goods), n0(g.duty), pct2(g.burden)] }; }),
         ['합계', n0(s.n), n0(s.goods), n0(s.duty), pct2(s.burden)], 'trade-imp');
@@ -629,7 +631,7 @@
     // 묶음별 전년 동기 대비(v1.6.0 까지의 수출 표) — 그대로 아래에 둔다
     var months = C.monthsBetween(state.range.from, state.range.to), te = C.topN(e.groups, top), cb = '';
     cb += monthChart('월별 수출금액 — 올해와 전년 동기', months, [{ name: '올해', color: COL[2], values: e.monthly.map(function (x) { return x.amount; }), fmt: money }, { name: '전년 동기', color: PREV, dash: true, values: e.monthly.map(function (x) { return x.prev; }), fmt: money }], 'line');
-    cb += hbar(BYL + '별 수출금액 상위 ' + top, te.rows.map(function (g) { return { label: g.key, value: g.amount }; }), money, COL[2]);
+    cb += hbar(BYL + '별 수출금액 상위 ' + top, te.rows.map(function (g) { return { label: g.key, value: g.amount }; }), money, by === 'hq' ? hqFill : COL[2]);
     $('ch-export-by').innerHTML = cb;
     $('tb-export').innerHTML = '<h3 class="tb-h">' + esc(BYL) + '별 수출금액 전년 동기 대비</h3>' + (e.hasPrev ? '' : '<p class="sub">전년 동기 자료가 없습니다.</p>') +
       table([esc(BYL), '건수', '수출금액', '전년 동기', '증감', '증감률'], te.rows.concat(te.rest ? [te.rest] : []).map(function (g) {
@@ -715,51 +717,117 @@
     if (navigator.clipboard && window.ClipboardItem) return navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([html], { type: 'text/html' }), 'text/plain': new Blob([text], { type: 'text/plain' }) })]).then(function () { return true; }, function () { return fallback(); });
     return Promise.resolve(fallback());
   }
-  // 절감액(막대) + 비율(선) — 한 그래프
-  function ftaCombo(title, rows) {
-    var W = 640, H = 250, L = 62, R = 46, T = 30, B = 30, iw = W - L - R, ih = H - T - B, n = rows.length;
-    var max = niceMax(Math.max.apply(null, [0].concat(rows.map(function (r) { return r.saving || 0; })))), step = iw / Math.max(1, n), y = function (v) { return T + ih - (v / max) * ih; }, yr = function (v) { return T + ih - v * ih; };
-    var b = legend([{ name: '절감액(FTA)', color: COL[3] }, { name: '비율(FTA ÷ 가능)', color: COL[4] }], L);
-    for (var g = 0; g <= 4; g++) { var gv = max * g / 4; b += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(gv) + '" y2="' + y(gv) + '" class="grid"/><text x="' + (L - 6) + '" y="' + (y(gv) + 4) + '" class="ax" text-anchor="end">' + esc(eokT(gv)) + '</text><text x="' + (W - R + 6) + '" y="' + (yr(g / 4) + 4) + '" class="ax">' + (g * 25) + '%</text>'; }
-    var bw = Math.min(40, step * 0.6), pts = [];
-    rows.forEach(function (r, i) {
-      var cx = L + step * i + step / 2, h = ((r.saving || 0) / max) * ih;
-      b += '<rect x="' + (cx - bw / 2).toFixed(1) + '" y="' + (T + ih - h).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + h.toFixed(1) + '" fill="' + COL[3] + '"><title>' + esc(C.monthLabel(r.month) + ' 절감액 ' + eokT(r.saving) + '억') + '</title></rect>';
-      b += '<text x="' + cx + '" y="' + (H - 10) + '" class="ax" text-anchor="middle">' + esc(r.month.slice(2, 4) + '.' + r.month.slice(5)) + '</text>';
-      if (r.rate != null) pts.push([cx, yr(r.rate), r]);
+  // (v2.2.0) 화면 순서: [5-1] 상단 줄 → [5-2] 카드 4 → [5-3] 월별 절감액(본부별 쌓은 막대) → [5-4] 활용 흐름 → [5-5] 협정별 → [5-6] 사후적용 대기 → [5-7] 표
+  //   두 축 차트는 만들지 않는다(비율 선을 막대에 겹치지 않음). 본부 색 = C.hqColor(고정), 노랑은 사후적용 대기(조치 필요)에만.
+  var FTA_WARN = '#d9a400', FTA_WARN_LINE = '#8a6500', FTA_FLOW = ['#154b6e', '#2f6f99', '#4f8fba'], FTA_OTHER = '#8a95a1';
+  function ftaHqOrder(rows) { var o = C.FTA_HQ_ORDER.slice(); rows.forEach(function (q) { if (o.indexOf(q.hq) < 0) o.push(q.hq); }); return o; }
+  function monTick(m) { return m.slice(2, 4) + '.' + m.slice(5); }
+  // 월별 막대 — series = 쌓을 [{ name, color, get(month) }]. 숫자 라벨은 합계가 가장 큰 달과 고른 달에만. 마우스를 올리면 그 달 전체 내역(title).
+  function ftaBars(title, months, series, sel, key, legendOn) {
+    var W = 640, H = 250, L = 56, R = 12, T = legendOn ? 30 : 18, B = 30, iw = W - L - R, ih = H - T - B, n = months.length, step = iw / Math.max(1, n), bw = Math.min(40, step * 0.62);
+    var tots = months.map(function (m) { return series.reduce(function (a, s) { return a + (s.get(m) || 0); }, 0); });
+    var max = niceMax(Math.max.apply(null, [0].concat(tots))), y = function (v) { return T + ih - (v / max) * ih; }, peak = tots.indexOf(Math.max.apply(null, tots));
+    var b = legendOn ? legend(series.map(function (s) { return { name: s.name, color: s.color }; }), L) : '';
+    for (var g = 0; g <= 4; g++) { var gv = max * g / 4; b += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(gv).toFixed(1) + '" y2="' + y(gv).toFixed(1) + '" class="grid"/><text x="' + (L - 6) + '" y="' + (y(gv) + 4).toFixed(1) + '" class="ax" text-anchor="end">' + esc(eokT(gv)) + '</text>'; }
+    months.forEach(function (m, i) {
+      var cx = L + step * i + step / 2, acc = 0, tip = C.monthLabel(m) + (series.length > 1 ? ' 합계 ' + eokT(tots[i]) + '억' : '');
+      if (m === sel) b += '<rect x="' + (L + step * i + 1).toFixed(1) + '" y="' + T + '" width="' + (step - 2).toFixed(1) + '" height="' + ih + '" class="sel-band"/>';
+      series.forEach(function (s) {
+        var v = s.get(m) || 0; tip += '\n' + s.name + ' ' + eokT(v) + '억'; if (v <= 0) return;
+        b += '<rect x="' + (cx - bw / 2).toFixed(1) + '" y="' + y(acc + v).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + (y(acc) - y(acc + v)).toFixed(1) + '" fill="' + s.color + '"' + (s.stroke ? ' stroke="' + s.stroke + '"' : '') + '/>';
+        acc += v;
+      });
+      if ((i === peak && tots[i] > 0) || (m === sel && tots[i] > 0)) b += '<text x="' + cx.toFixed(1) + '" y="' + (y(tots[i]) - 5).toFixed(1) + '" class="ax val" text-anchor="middle" data-lab="' + m + '">' + esc(eokT(tots[i])) + '</text>';
+      b += '<text x="' + cx.toFixed(1) + '" y="' + (H - 10) + '" class="ax' + (m === sel ? ' val' : '') + '" text-anchor="middle">' + esc(monTick(m)) + '</text>';
+      b += '<rect x="' + (L + step * i).toFixed(1) + '" y="' + T + '" width="' + step.toFixed(1) + '" height="' + ih + '" fill="transparent" class="hit"><title>' + esc(tip) + '</title></rect>';
     });
-    if (pts.length) { b += '<polyline fill="none" stroke="' + COL[4] + '" stroke-width="2.2" points="' + pts.map(function (p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' ') + '"/>'; pts.forEach(function (p) { b += '<circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="3.2" fill="' + COL[4] + '"><title>' + esc(C.monthLabel(p[2].month) + ' 비율 ' + pctT(p[2].rate)) + '</title></circle>'; }); }
-    return frame(title, '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(title) + '">' + b + '</svg>');
+    return frame(title, '<svg class="chart" data-k="' + key + '" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(title) + '">' + b + '</svg>');
+  }
+  // 가로막대 — rows = [{ label, value, color, note }] · 오른쪽에 억원과 보조 글
+  function ftaHbar(title, rows, key) {
+    var W = 480, rowH = 30, L = 132, R = 150, T = 8, H = T + rows.length * rowH + 8;   // 반 폭 칸에 들어가도 글자가 작아지지 않게
+    var max = niceMax(Math.max.apply(null, [0].concat(rows.map(function (r) { return r.value || 0; })))), b = '';
+    rows.forEach(function (r, i) {
+      var yy = T + i * rowH, w = r.value > 0 ? (r.value / max) * (W - L - R) : 0;
+      b += '<text x="' + (L - 8) + '" y="' + (yy + 19) + '" class="ax lab" text-anchor="end">' + esc(r.label) + '</text>' +
+        '<rect x="' + L + '" y="' + (yy + 6) + '" width="' + Math.max(w, r.value > 0 ? 1 : 0).toFixed(1) + '" height="18" rx="3" fill="' + r.color + '"><title>' + esc(r.label + ' ' + eokT(r.value) + '억' + (r.note ? ' · ' + r.note : '')) + '</title></rect>' +
+        '<text x="' + (L + w + 6).toFixed(1) + '" y="' + (yy + 19) + '" class="ax val">' + esc(eokT(r.value)) + (r.note ? '<tspan class="ax" dx="6">' + esc(r.note) + '</tspan>' : '') + '</text>';
+    });
+    if (!rows.length) b = '<text x="20" y="24" class="ax">데이터 없음</text>';
+    return frame(title, '<svg class="chart" data-k="' + key + '" viewBox="0 0 ' + W + ' ' + Math.max(H, 40) + '" role="img" aria-label="' + esc(title) + '">' + b + '</svg>');
+  }
+  function ftaKpi(label, value, sub, cls, key, extra) {
+    return '<div class="kpi' + (cls ? ' ' + cls : '') + '" data-k="' + key + '"' + (extra || '') + '><span class="kpi-l">' + esc(label) + '</span><b class="kpi-v">' + esc(value) + '</b>' + (sub ? '<small>' + sub + '</small>' : '') + '</div>';
   }
   function renderFtaImport() {
     var el = $('fta-imp'); if (!el) return;
     var x = ftaReport();
     if (!x || !x.rep.month) { el.innerHTML = '<div class="note" data-k="fta-none"><b>ERP 수입FTA 파일을 올리면 「FTA 수입 실적 보고」 메일의 표를 만듭니다.</b> 예: 2026-01~10_수입FTA.xlsx(확정본 · 저장) · EXPORT-수입FTA.XLSX(조회 모드 · 저장 안 함). 수입실적 합계에는 더하지 않습니다(같은 신고를 란 단위로 받은 자료).</div>'; return; }
-    var r = x.rep, mo = +r.month.slice(5, 7), cmp = C.ftaCompare(r, ftaSnaps()), pm = r.pending.month, pc = r.pending.cumulative, ex = r.excluded;
+    var r = x.rep, k = r.kpi, mo = +r.month.slice(5, 7), cmp = C.ftaCompare(r, ftaSnaps()), pc = r.pending.cumulative, ex = r.excluded;
     state.ftaMonth = r.month; state.ftaLast = r;
-    var h = '<div class="note" data-k="fta-basis"><b>' + esc(r.basis) + '</b></div>';
-    h += '<div class="ctrl"><label>월 <select id="fta-month">' + r.months.slice().reverse().map(function (m) { return '<option value="' + m + '"' + (m === r.month ? ' selected' : '') + '>' + esc(C.monthLabel(m)) + '</option>'; }).join('') + '</select></label>' +
-      ' <button class="btn primary" type="button" data-fta-copy>메일용 표 복사</button> <button class="btn" type="button" data-fta-confirm>이 달 실적 확정</button> <span class="sub" id="fta-copied" aria-live="polite"></span></div>';
+    var confirmed = !!cmp;
+    // [5-1] 상단 줄
+    var h = '<div class="fta-top"><div class="fta-top-l"><label>월 <select id="fta-month">' + r.months.slice().reverse().map(function (m) { return '<option value="' + m + '"' + (m === r.month ? ' selected' : '') + '>' + esc(C.monthLabel(m)) + '</option>'; }).join('') + '</select></label>' +
+      ' <span class="badge ' + (confirmed ? 'ok' : 'no') + '" data-k="fta-badge">' + (confirmed ? '확정' : '미확정') + '</span>' +
+      ' <button class="btn" type="button" data-fta-confirm>이 달 실적 확정</button></div>' +
+      '<div class="fta-top-r" data-k="fta-basis" title="' + esc(r.basis) + '">최신 ERP · GN 제외 · 수리일자 기준 · 단위 억원</div></div>';
+    // [5-2] 카드 4
+    var mom = k.momPct == null ? '<span class="sub">전월(' + esc(C.monthLabel(k.prevMonth)) + ') 자료 없음 —</span>' :
+      '전월 대비 <b class="' + (k.momPct >= 0 ? 'up' : 'down') + '">' + (k.momPct >= 0 ? '▲ ' : '▼ ') + Math.abs(k.momPct * 100).toFixed(2) + '%</b> <span class="sub">(' + esc(C.monthLabel(k.prevMonth)) + ' ' + eokT(k.prevSaving) + '억)</span>';
+    h += '<div class="kpis fta4">' +
+      ftaKpi(mo + '월 절감액', eokT(k.saving) + '억', mom, '', 'fta-k-saving') +
+      ftaKpi('누적 절감액(1~' + mo + '월)', eokT(k.cumSaving) + '억', '월평균 ' + eokT(k.avgSaving) + '억 <span class="sub">(' + k.cumMonths + '개월)</span>', '', 'fta-k-cum') +
+      ftaKpi(mo + '월 FTA 활용률', pctT(k.rate), '미활용 ' + eokT(k.unused) + '억 <span class="sub">(가능 − FTA)</span><br>협정국 수입 비중 ' + pctT(k.possShare) + ' <span class="sub">(가능 ÷ 전체)</span>', '', 'fta-k-rate') +
+      (k.pendingAmount > 0 ? ftaKpi('사후적용 대기', eokT(k.pendingAmount) + '억 · ' + C.fmtNum(k.pendingDecls) + '건', '1~' + mo + '월 수리분 · ' + C.fmtNum(k.pendingLines) + '란 — 눌러서 목록 보기', 'warn clk', 'fta-k-pending', ' role="button" tabindex="0" data-fta-goto="fta-pend-sec"') :
+        ftaKpi('사후적용 대기', '대기 없음', '1~' + mo + '월 수리분', 'none', 'fta-k-pending')) + '</div>';
+    // [5-3] 월별 절감액 — 본부별 쌓은 막대
+    var allHq = []; r.monthlyHq.forEach(function (q) { q.rows.forEach(function (w) { if (allHq.indexOf(w.hq) < 0) allHq.push(w.hq); }); });
+    var hqS = ftaHqOrder(allHq.map(function (q) { return { hq: q }; })).filter(function (q) { return allHq.indexOf(q) >= 0; }).map(function (hq) {
+      return { name: hq, color: C.hqColor(hq), get: function (m) { var row = r.monthlyHq.filter(function (q) { return q.month === m; })[0]; var w = row && row.rows.filter(function (z) { return z.hq === hq; })[0]; return w ? w.saving : 0; } };
+    });
+    h += '<div class="charts">' + ftaBars('월별 절감액 — 본부별 (억원)', r.months, hqS, r.month, 'fta-ch-saving', true);
+    // [5-4] 활용 흐름
+    h += ftaHbar(mo + '월 활용 흐름 (억원)', [
+      { label: '물자대(전체)', value: k.all, color: FTA_FLOW[0], note: '100%' },
+      { label: '협정국 수입 가능', value: k.poss, color: FTA_FLOW[1], note: '전체 대비 ' + pctT(k.possShare) },
+      { label: 'FTA 적용', value: k.fta, color: FTA_FLOW[2], note: '활용률 ' + pctT(k.rate) }], 'fta-ch-flow');
+    // [5-5] 협정별 절감액 — 큰 순서 + 기타
+    var ag = C.ftaAgreeGroups(r.agreements.cumulative);
+    h += ftaHbar('협정별 절감액 — 1~' + mo + '월 (억원)', ag.top.map(function (a) { return { label: a.code + ' ' + (a.name || '(이름 없음)'), value: a.saving, color: FTA_FLOW[0] }; })
+      .concat(ag.other ? [{ label: ag.other.name, value: ag.other.saving, color: FTA_OTHER, note: ag.other.codes.join(' · ') }] : []), 'fta-ch-agree') + '</div>';
+    // [5-6] 사후적용 대기 금액 — 월별 막대 + 목록
+    h += '<h3 class="tb-h" id="fta-pend-sec">사후적용 대기(FTA N/A 04 · 미적용) — 1~' + mo + '월 ' + C.fmtNum(pc.lines) + '란 · 신고 ' + C.fmtNum(pc.decls) + '건 · ' + eokT(pc.amount) + '억</h3>';
+    h += '<div class="charts">' + ftaBars('월별 사후적용 대기 금액 — 수리월 기준 (억원)', r.months, [{ name: '대기 금액', color: FTA_WARN, stroke: FTA_WARN_LINE, get: function (m) { var p = r.pendingMonthly.filter(function (q) { return q.month === m; })[0]; return p ? p.amount : 0; } }], r.month, 'fta-ch-pending', false) + '</div>';
+    h += '<p class="sub">사후적용이 끝나면 ERP 에서 Duty Type 이 F 로 바뀌어 다음 파일에서 자동으로 빠집니다. 경과일수 = 오늘 − 수리일자 · <span class="late">30일 이상은 빨간색</span>.</p>' +
+      (pc.list.length ? table(['신고번호', '본부', '수리일자', '경과일수', '물자대(억)', '사유(N/A Reason)'], pc.list.map(function (p) { var late = p.days != null && p.days >= 30; return { cls: late ? 'late' : '', cells: [esc(p.declNo), esc(p.hq), esc(p.date || ''), p.days == null ? '—' : C.fmtNum(p.days) + '일', eokT(p.goods), esc(p.reason)] }; }), null, 'fta-pending') : '<p class="sub">대기 중인 건이 없습니다.</p>');
+    // [5-7] 표 — 메일용 당월 · 누적 + 복사
+    h += '<h3 class="tb-h">메일용 표 <button class="btn primary" type="button" data-fta-copy>메일용 표 복사</button> <span class="sub" id="fta-copied" aria-live="polite"></span></h3><p class="sub">' + esc(r.basis) + '</p>';
     h += '<h3 class="tb-h">' + r.year + '년 ' + mo + '월 당월 <small class="sub">(단위: 억원)</small></h3>' + ftaTable(r.current, 'fta-cur');
-    // 확정값 비교
+    h += '<h3 class="tb-h">' + r.year + '년 1~' + mo + '월 누적 <small class="sub">(단위: 억원)</small></h3>' + ftaTable(r.cumulative, 'fta-cum');
     var tot = cmp ? cmp.rows.filter(function (q) { return q.hq === '총합계'; })[0] : null;
     h += '<div class="' + (cmp ? 'note' : 'sub') + '" data-k="fta-cmp">' + (cmp && tot && tot.then ? '<b>' + mo + '월 확정(' + esc(window.ErrScore ? window.ErrScore.localTime(cmp.confirmedAt) : cmp.confirmedAt) + ') 당시 FTA ' + eokT(tot.then.fta) + '억 → 현재 ' + eokT(tot.now.fta) + '억 · 사후적용 등 소급 ' + (tot.diff.fta >= 0 ? '증가 ' : '감소 ') + eokT(Math.abs(tot.diff.fta)) + '억</b>' +
       table(['BG', '확정 FTA', '현재 FTA', '차이', '확정 절감액', '현재 절감액', '차이'], cmp.rows.filter(function (q) { return q.then; }).map(function (q) { return { cells: [esc(q.hq), eokT(q.then.fta), eokT(q.now.fta), eokT(q.diff.fta), eokT(q.then.saving), eokT(q.now.saving), eokT(q.diff.saving)] }; }), null, 'fta-cmp') :
-      '확정 당시 값: — (' + mo + '월은 아직 확정하지 않았습니다. 「이 달 실적 확정」을 누르면 지금 값을 남겨 두고, 나중에 사후적용 등으로 바뀐 만큼을 보여 줍니다.)') + '</div>';
-    h += '<h3 class="tb-h">' + r.year + '년 1~' + mo + '월 누적 <small class="sub">(단위: 억원)</small></h3>' + ftaTable(r.cumulative, 'fta-cum');
-    h += '<div class="charts">' + ftaCombo('월별 절감액(FTA) · 비율', r.monthly) + '</div>';
-    // 협정별
-    var am = {}; r.agreements.month.forEach(function (a) { am[a.code] = a; });
-    h += '<h3 class="tb-h">협정별(Duty Type) — 1~' + mo + '월 누적 · ' + mo + '월 <small class="sub">(억원)</small></h3>' + table(['Duty Type', '협정', '물자대(FTA) 누적', '절감액 누적', mo + '월 물자대', mo + '월 절감액'], r.agreements.cumulative.map(function (a) { var m = am[a.code]; return { cells: [esc(a.code), esc(a.name || '—'), eokT(a.goods), eokT(a.saving), m ? eokT(m.goods) : '—', m ? eokT(m.saving) : '—'] }; }), null, 'fta-agree');
-    // 사후적용 대기(04)
-    h += '<h3 class="tb-h">사후적용 대기(FTA N/A 04 · 미적용) — ' + mo + '월 ' + pm.lines + '란 · 신고 ' + pm.decls + '건 · ' + eokT(pm.amount) + '억 / 1~' + mo + '월 ' + pc.lines + '란 · 신고 ' + pc.decls + '건 · ' + eokT(pc.amount) + '억</h3>' +
-      '<p class="sub">사후적용이 끝나면 ERP 에서 Duty Type 이 F 로 바뀌어 다음 파일에서 자동으로 빠집니다(완료 처리 필요 없음). 경과일수 = 오늘 − 수리일자.</p>' +
-      (pc.list.length ? table(['신고번호', '본부', '수리일자', '경과일수', '물자대(억)', '사유(N/A Reason)'], pc.list.map(function (p) { return { cells: [esc(p.declNo), esc(p.hq), esc(p.date || ''), p.days == null ? '—' : C.fmtNum(p.days) + '일', eokT(p.goods), esc(p.reason)] }; }), null, 'fta-pending') : '<p class="sub">대기 중인 건이 없습니다.</p>');
-    // 미적용 사유별
+      '확정 당시 값: — (' + mo + '월은 아직 확정하지 않았습니다. 위의 「이 달 실적 확정」을 누르면 지금 값을 남겨 두고, 나중에 사후적용 등으로 바뀐 만큼을 보여 줍니다.)') + '</div>';
+    // 미적용 사유별 — 행을 누르면 그 사유의 신고번호 목록
     var rm = {}; r.reasons.month.forEach(function (q) { rm[q.key] = q; });
-    h += '<h3 class="tb-h">미적용 사유별 물자대 — FTA 확대 여지 <small class="sub">(04 는 사후적용 대기로 따로 · 억원)</small></h3>' +
-      table(['코드', '사유', '1~' + mo + '월 물자대', '란', mo + '월 물자대'], r.reasons.cumulative.map(function (q) { var m = rm[q.key]; return { cells: [esc(q.code || '—'), esc(q.name), eokT(q.goods), C.fmtNum(q.lines), m ? eokT(m.goods) : '—'] }; }), null, 'fta-reasons') +
+    h += '<h3 class="tb-h">미적용 사유별 물자대 — 1~' + mo + '월 <small class="sub">(04 는 사후적용 대기로 따로 · 억원 · 행을 누르면 신고번호 목록)</small></h3>' +
+      '<div class="tablewrap"><table class="fta-reasons"><thead><tr><th>코드</th><th>사유</th><th class="num">1~' + mo + '월 물자대</th><th class="num">란</th><th class="num">' + mo + '월 물자대</th></tr></thead><tbody>' +
+      r.reasons.cumulative.map(function (q) {
+        var m = rm[q.key], open = state.ftaReasonOpen === q.key;
+        var row = '<tr class="clk' + (open ? ' open' : '') + '" data-fta-reason="' + esc(q.key) + '" tabindex="0" aria-expanded="' + open + '"><td>' + esc(q.code || '—') + '</td><td>' + (open ? '▾ ' : '▸ ') + esc(q.name) + '</td><td class="num">' + eokT(q.goods) + '</td><td class="num">' + C.fmtNum(q.lines) + '</td><td class="num">' + (m ? eokT(m.goods) : '—') + '</td></tr>';
+        if (open) {
+          var lim = q.decls.slice(0, 50);
+          row += '<tr class="sub-row" data-k="fta-reason-list"><td colspan="5">' + table(['신고번호', '본부', '수리일자', '물자대(억)', '란'], lim.map(function (d) { return { cells: [esc(d.declNo), esc(d.hq), esc(d.date || ''), eokT(d.goods), C.fmtNum(d.lines)] }; }), null, 'fta-reason-decls') +
+            (q.decls.length > lim.length ? '<p class="sub">물자대 큰 순서 50건만 — 외 ' + C.fmtNum(q.decls.length - lim.length) + '건</p>' : '') + '</td></tr>';
+        }
+        return row;
+      }).join('') + '</tbody></table></div>' +
       '<p class="sub">사유 코드 없이 A · C 세율로 통관된 줄은 「사유 없음(A)」 · 「사유 없음(C)」 — 대부분 비협정국 수입입니다. 코드 이름은 설정에서 고칩니다.</p>';
+    // HS 6단위 절감액 상위 10
+    var hm = {}; r.hs.month.forEach(function (q) { hm[q.hs6] = q; });
+    h += '<h3 class="tb-h">HS 6단위 절감액 상위 10 — 1~' + mo + '월 <small class="sub">(억원)</small></h3>' +
+      (!r.hs.has ? '<p class="sub" data-k="fta-hs-none">이 파일에는 HS 코드 열(HS-Code)이 없어 이 표를 만들지 않습니다.</p>' :
+        table(['HS 6단위', '1~' + mo + '월 절감액', '물자대(FTA)', '란', mo + '월 절감액'], r.hs.cumulative.map(function (q) { var m = hm[q.hs6]; return { cells: [esc(q.hs6), eokT(q.saving), eokT(q.ftaGoods), C.fmtNum(q.lines), m ? eokT(m.saving) : '—'] }; }), null, 'fta-hs'));
     var sk = x.set.m.skipped.length;
     h += '<p class="sub" data-k="fta-excluded">제외 — GN ' + C.fmtNum(ex.gn) + '란 ' + eokT(ex.gnAmount) + '억 · Duty Type \'F\' 단독 ' + C.fmtNum(ex.fOnly) + '란(물자대(FTA)에 넣지 않음, 전체에는 포함) · 기간 밖 ' + C.fmtNum(ex.outside) + '란' + (sk ? ' · 읽지 못한 줄 ' + C.fmtNum(sk) + '란' : '') + '. GN 은 실적 탭 설정과 관계없이 늘 뺍니다.</p>';
     el.innerHTML = h;
@@ -776,7 +844,7 @@
       if (!s.available) { k += kpi(nm + ' FTA 활용률', '열 없음', part.ftaGoods ? '일부 파일(' + esc(part.ftaGoods.join(', ')) + ')에 물자대_FTA 열이 없어 계산하지 않습니다' : '물자대_FTA 열을 골라 주세요', '', kind + '-util'); return; }
       k += kpi(nm + ' FTA 활용률', C.fmtPct(s.util), money(s.ftaGoods) + ' / ' + esc(money(s.goods)), '계산: 물자대_FTA ÷ 물자대', kind + '-util') +
         kpi(nm + ' FTA 절감액', s.hasSaving ? money(s.saving) : '열 없음', !s.hasSaving && part.saving ? '일부 파일(' + esc(part.saving.join(', ')) + ')에 절감액 열이 없어 계산하지 않습니다' : '', s.hasSaving ? '합계' : '', kind + '-saving');
-      ch += hbar(nm + ' ' + BYL + '별 FTA 활용률', s.groups.slice(0, 10).map(function (g) { return { label: g.key, value: g.util }; }), function (v) { return C.fmtPct(v); }, COL[i ? 2 : 0]);
+      ch += hbar(nm + ' ' + BYL + '별 FTA 활용률', s.groups.slice(0, 10).map(function (g) { return { label: g.key, value: g.util }; }), function (v) { return C.fmtPct(v); }, by === 'hq' ? hqFill : COL[i ? 2 : 0]);
       monthly.push({ name: nm + ' 절감액', color: COL[i ? 2 : 0], values: s.monthly.map(function (m) { return m.saving; }), fmt: money });
       tb += '<h3 class="tb-h">' + nm + ' FTA — ' + esc(BYL) + '별 물자대 · 물자대_FTA · 절감액</h3>' + ignoredNote(f.ignored) +
         table([esc(BYL), '물자대', '물자대_FTA', 'FTA 활용률', '절감액'], s.groups.map(function (g) { return { cells: [esc(g.key), n0(g.goods), n0(g.ftaGoods), esc(C.fmtPct(g.util)), n0(g.saving)] }; }),
@@ -793,7 +861,7 @@
       kpi('월 평균', money(s.monthAvg), '데이터 있는 ' + s.monthsWithData + '개월', '계산: 합계 ÷ 데이터 있는 달 수', 'ref-avg') +
       kpi('최근 달 환급액', s.last ? money(s.last.amount) : '—', s.last ? C.monthLabel(s.last.month) : '', '', 'ref-last');
     ch += monthChart('월별 관세환급액', s.months, [{ name: '환급액', color: COL[1], values: s.monthly.map(function (m) { return m.amount; }), fmt: money }], 'bar');
-    ch += hbar('본부별 관세환급액', s.pivot.map(function (p) { return { label: p.hq, value: p.total }; }), money, COL[1]);
+    ch += hbar('본부별 관세환급액', s.pivot.map(function (p) { return { label: p.hq, value: p.total }; }), money, hqFill);
     tb += '<h3 class="tb-h">본부별 월별 관세환급 실적</h3>' + ignoredNote(f.ignored) +
       table(['본부'].concat(s.months.map(C.monthLabel), ['합계', esc(cntHead)]), s.pivot.map(function (p) { return { cells: [esc(p.hq)].concat(p.months.map(n0), [n0(p.total), n0(p.count)]) }; }),
         ['합계'].concat(s.monthly.map(function (m) { return n0(m.amount); }), [n0(s.amount), n0(s.count)]), 'refund-pivot');
@@ -989,7 +1057,16 @@
       list = list.filter(function (q) { return q.ym !== r.month; }).concat([C.ftaSnapshot(r)]);
       try { localStorage.setItem(FTA_SNAP_KEY, JSON.stringify(list)); } catch (er) { /* 저장 못 해도 화면은 계속 */ }
       renderFtaImport(); $('fta-copied').textContent = C.monthLabel(r.month) + ' 실적을 확정했습니다(본부별 다섯 지표만 저장).';
+    } else if (e.target.closest('[data-fta-goto]')) {   // (v2.2.0) 사후적용 대기 카드 → 목록
+      var t = $(e.target.closest('[data-fta-goto]').getAttribute('data-fta-goto')); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else if (e.target.closest('[data-fta-reason]')) {   // (v2.2.0) 미적용 사유 행 → 신고번호 목록 펼치기 · 접기
+      var key = e.target.closest('[data-fta-reason]').getAttribute('data-fta-reason');
+      state.ftaReasonOpen = state.ftaReasonOpen === key ? null : key; renderFtaImport();
+      var row = document.querySelector('[data-fta-reason="' + (window.CSS && CSS.escape ? CSS.escape(key) : key) + '"]'); if (row) row.focus();
     }
+  });
+  $('fta-imp').addEventListener('keydown', function (e) {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.closest('[data-fta-goto],[data-fta-reason]')) { e.preventDefault(); e.target.click(); }
   });
   $('d-settings-body').addEventListener('change', function (e) {
     var t = e.target;

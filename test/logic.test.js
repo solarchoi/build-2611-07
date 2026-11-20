@@ -1161,6 +1161,7 @@ var v1103 = passed + failed; v1110(); console.log('v1.11.0 ' + (passed + failed 
 var v1110c = passed + failed; v1120(); console.log('v1.12.0 ' + (passed + failed - v1110c) + '개 검사');
 var v1120c = passed + failed; v200(); console.log('v2.0.0 ' + (passed + failed - v1120c) + '개 검사');
 var v200c = passed + failed; v210(); console.log('v2.1.0 ' + (passed + failed - v200c) + '개 검사');
+var v210c = passed + failed; v220(); console.log('v2.2.0 ' + (passed + failed - v210c) + '개 검사');
 console.log('v1.9.0 ' + (v190 - v180) + '개 검사');
 console.log('v1.8.0 ' + (v180 - v170) + '개 검사');
 console.log('v1.7.0 ' + (v170 - v160) + '개 검사');
@@ -1570,4 +1571,61 @@ function v210() {
   ok(/C\.ftaImportReport\(/.test(dj) && /b2611-07\.fta\.snapshots/.test(dj) && /메일용 표 복사/.test(dj) && /이 달 실적 확정/.test(dj) && /ClipboardItem/.test(dj) && /'text\/html'/.test(dj), 'v2.1.0 화면 — 보고서는 엔진 결과 · 확정 저장 · 메일용 HTML 표 복사');
   ok(dj.indexOf("info.group === 'fta' && !info.dataset") > 0 && /id="fta-imp"/.test(dh) && /data-tab="fta"[^>]*>수입 FTA</.test(dh) && /참고 — 실적 파일의 FTA 열/.test(dh), 'v2.1.0 수입FTA 는 목록 보관(held)이 아니라 탭 · 예전 활용률은 참고 칸');
   eq(CU.FTA_BASIS, '최신 ERP 기준 · GN 제외 · 수리일자 기준. 사후적용이 완료되면 과거 월 실적이 소급해 늘어납니다.', 'v2.1.0 기준 표기');
+}
+// ---------- v2.2.0 수입 FTA 화면 재구성 — 카드 · 쌓은 막대 · 활용 흐름 · 협정 묶음 · 대기 월별 · 사유별 신고번호 · HS 6단위 · 본부 고정색 ----------
+function v220() {
+  var CU = require('../js/customs.js'), FRr = require('../js/filerules.js');
+  var HD = ['Import declaration number', 'Column sequence number', 'HS-Code', 'Duty Type', 'Plant', 'Payment method', '($)Taxable.Amt', '(\\)Taxable.Amt', 'Tariff Reductions', 'Acceptance date', 'FTA N/A Code', 'N/A Reason'];
+  var E8 = 1e8;
+  function row(decl, dt, plant, krw, red, date, na, hs) { return [decl, 1, hs, dt, plant, 'TT', krw / 1000, krw * E8, red * E8, date, na || '', '']; }
+  var aoa = [HD,
+    row('2235626100001M', 'FCN1', '1000', 10, 1, '2026-09-05', '', '8481809000'),
+    row('2235626100002M', 'C', '1130', 2, 0, '2026-09-10', '04', ''),
+    row('2235626100003M', 'FCN1', '1000', 8, 1.2, '2026-10-03', '', '8481809000'),
+    row('2235626100004M', 'FEU1', '1130', 6, 0.6, '2026-10-04', '', 840999123),     // 숫자로 읽혀 앞 0 이 빠진 9자리
+    row('2235626100005M', 'FUS1', '6000', 4, 0.3, '2026-10-05', '', '8413500000'),
+    row('2235626100006M', 'C', '1000', 3, 0, '2026-10-06', '02', ''),
+    row('2235626100007M', 'A', '1000', 1, 0, '2026-10-07', '02', ''),
+    row('2235626100008M', 'C', '9999', 2, 0, '2026-10-08', '04', '')];
+  var name = '2026-09~10_수입FTA(가상).xlsx', info = FRr.describe(name, CU.detectKind(CU.uniqueHeaders(HD), name));
+  var m = CU.mergeFiles('ftaImport', [{ name: name, file: name, headers: CU.uniqueHeaders(HD), aoa: aoa, offset: 0, override: {}, meta: info }], CU.exportSettings(null));
+  var fp = {}; fp[name] = info.period.months;
+  var rep = CU.ftaImportReport(m.records, { month: '2026-10', filePeriods: fp, today: '2026-11-20' }), k = rep.kpi, e = CU.eok, p2 = function (v) { return v == null ? null : Math.round(v * 10000) / 100; };
+  eq([m.ok, m.files[0].res.map.hs], [true, 'HS-Code'], 'v2.2.0 HS-Code 열 짝짓기(없어도 되는 열)');
+  // 손계산 10월: 절감액 1.2+0.6+0.3 = 2.1 · 9월 1 → +110% · 누적 3.1 · 2개월 → 월평균 1.55 · 전체 24 · FTA 18 · 가능 20 · 활용률 90% · 미활용 2 · 협정국 비중 20/24
+  eq([e(k.saving), k.prevMonth, e(k.prevSaving), p2(k.momPct), e(k.cumSaving), k.cumMonths, e(k.avgSaving)], [2.1, '2026-09', 1, 110, 3.1, 2, 1.55], 'v2.2.0 카드 ① 당월 절감액 · 전월 대비 % · ② 누적 · 월평균');
+  eq([p2(k.rate), e(k.unused), p2(k.possShare), e(k.all), e(k.poss), e(k.fta)], [90, 2, 83.33, 24, 20, 18], 'v2.2.0 카드 ③ 활용률 · 미활용(가능 − FTA) · 협정국 수입 비중(가능 ÷ 전체 — 새 지표)');
+  eq([e(k.pendingAmount), k.pendingDecls, k.pendingLines], [4, 2, 2], 'v2.2.0 카드 ④ 사후적용 대기(1월 ~ 선택 월 수리분)');
+  var k9 = CU.ftaImportReport(m.records, { month: '2026-09', filePeriods: fp }).kpi;
+  eq([k9.prevMonth, k9.prevSaving, k9.momPct, CU.prevMonthOf('2026-01')], ['2026-08', null, null, '2025-12'], 'v2.2.0 전월 자료가 없으면 전월 대비 null(「—」) · 1월의 전월은 전년 12월');
+  var h10 = rep.monthlyHq.filter(function (q) { return q.month === '2026-10'; })[0].rows;
+  eq(h10.map(function (q) { return [q.hq, e(q.saving)]; }), [['부품센터', 0.3], ['건기본부', 1.2], ['엔진본부', 0.6], ['본부 미분류', 0]], 'v2.2.0 월별 본부별 절감액(쌓은 막대) — 고정 순서 + 미분류');
+  ok(rep.monthlyHq.every(function (q) { var s = q.rows.reduce(function (a, w) { return a + w.saving; }, 0), t = rep.monthly.filter(function (z) { return z.month === q.month; })[0].saving; return Math.abs(s - t) < 1; }), 'v2.2.0 쌓은 막대 합 = 그 달 총합계 절감액');
+  eq(rep.pendingMonthly.map(function (q) { return [q.month, e(q.amount), q.decls]; }), [['2026-09', 2, 1], ['2026-10', 2, 1]], 'v2.2.0 월별 사후적용 대기 금액(수리월)');
+  var r02 = rep.reasons.cumulative.filter(function (q) { return q.code === '02'; })[0];
+  eq([e(r02.goods), r02.decls.map(function (d) { return [d.declNo, e(d.goods), d.hq]; })], [4, [['2235626100006M', 3, '건기본부'], ['2235626100007M', 1, '건기본부']]], 'v2.2.0 미적용 사유별 신고번호 목록(물자대 큰 순서)');
+  eq([rep.hs.has, rep.hs.cumulative.map(function (q) { return [q.hs6, e(q.saving), e(q.ftaGoods)]; }), rep.hs.month.length], [true, [['8481.80', 2.2, 18], ['0840.99', 0.6, 6], ['8413.50', 0.3, 4]], 3], 'v2.2.0 HS 6단위 절감액 상위 — 9자리 숫자는 앞 0 채움');
+  eq([CU.ftaHs6('8481.80-9000'), CU.ftaHs6(''), CU.ftaHs6(8481809000), CU.ftaHs6('84')], ['8481.80', '(HS 없음)', '8481.80', '(HS 없음)'], 'v2.2.0 HS 6단위 읽기');
+  // 협정 묶음 — 큰 순서 5개 + 기타
+  var seven = ['A1', 'B1', 'C1', 'D1', 'E1', 'F1', 'G1'].map(function (c, i) { return { code: 'F' + c + 'X', name: c, goods: 1, saving: 7 - i, lines: 1 }; });
+  var g7 = CU.ftaAgreeGroups(seven.slice().reverse()), g6 = CU.ftaAgreeGroups(seven.slice(0, 6));
+  eq([g7.top.map(function (a) { return a.saving; }), g7.other.name, g7.other.saving, g7.other.codes, g6.other, g6.top.length, CU.FTA_AGREE_TOP], [[7, 6, 5, 4, 3], '기타 2개 협정', 3, ['FF1X', 'FG1X'], null, 6, 5], 'v2.2.0 협정별 절감액 — 큰 순서 5개 + 「기타 N개 협정」(6개 이하는 묶지 않음)');
+  // 본부 고정색
+  var HC = CU.HQ_COLORS, hue = function (hex) { var r = parseInt(hex.slice(1, 3), 16) / 255, g = parseInt(hex.slice(3, 5), 16) / 255, b = parseInt(hex.slice(5, 7), 16) / 255, mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn; if (!d) return null; var hh = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; return (hh * 60 + 360) % 360; };
+  eq([Object.keys(HC), CU.hqColor('건기본부'), CU.hqColor(' 엔진본부 '), CU.hqColor('없는 본부'), new Set(Object.keys(HC).map(function (q) { return HC[q]; })).size], [['건기본부', '엔진본부', '부품센터', '본부 미분류'], HC['건기본부'], HC['엔진본부'], HC['본부 미분류'], 4], 'v2.2.0 본부 고정색 — 이름으로 정함(조건을 바꿔도 같은 색) · 모르는 본부는 미분류 회색');
+  ok(['건기본부', '엔진본부', '부품센터'].every(function (q) { var hh = hue(HC[q]); return hh != null && !(hh >= 20 && hh <= 160) && !(hh >= 340 || hh < 20); }), 'v2.2.0 본부 색에 노랑 · 초록 · 빨강 계열 없음(노랑 = 조치 필요, 초록/빨강 = 증감)');
+  var lum = function (hex) { return [1, 3, 5].map(function (i) { var c = parseInt(hex.slice(i, i + 2), 16) / 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }).reduce(function (a, c, i) { return a + c * [0.2126, 0.7152, 0.0722][i]; }, 0); };
+  var con = function (a, b) { var x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+  ok(Object.keys(HC).every(function (q) { return con(HC[q], '#ffffff') >= 3 && con(HC[q], '#111827') >= 3; }), 'v2.2.0 본부 색 — 밝은 바탕 · 어두운 바탕 모두 대비 3:1 이상(다크 모드는 다음 판)');
+  // 화면 — 순서 · 두 축 없음 · 다른 탭 본부 막대
+  var dj = fsx.readFileSync(__dirname + '/../js/dash.js', 'utf8'), cs = fsx.readFileSync(__dirname + '/../css/dash.css', 'utf8');
+  var body = dj.slice(dj.indexOf('function renderFtaImport()'), dj.indexOf('function renderFta()'));
+  var order = ['fta-badge', 'fta-k-saving', 'fta-k-cum', 'fta-k-rate', 'fta-k-pending', 'fta-ch-saving', 'fta-ch-flow', 'fta-ch-agree', 'id="fta-pend-sec"', 'fta-ch-pending', 'fta-pending', 'data-fta-copy', 'fta-cur', 'fta-cum', 'fta-reasons', 'fta-hs', 'fta-excluded'].map(function (s) { return body.indexOf(s); });
+  ok(order.every(function (v, i) { return v > 0 && (!i || v > order[i - 1]); }), 'v2.2.0 화면 순서 [5-1] → [5-7](상단 줄 · 카드 4 · 월별 절감액 · 활용 흐름 · 협정별 · 대기 · 표)', JSON.stringify(order));
+  ok(dj.indexOf('function ftaCombo') < 0 && body.indexOf('polyline') < 0, 'v2.2.0 두 축 차트(절감액 막대 + 비율 선) 없음');
+  ok((dj.match(/by === 'hq' \? hqFill/g) || []).length === 3 && /value: p\.total \}; \}\), money, hqFill\)/.test(dj) && /function hqFill\(r\) \{ return C\.hqColor\(r\.label\); \}/.test(dj), 'v2.2.0 다른 탭(수입 · 수출 · 관세환급 · 참고 활용률) 본부 막대도 본부 고정색');
+  ok(/FTA_WARN = '#d9a400'/.test(dj) && (dj.match(/FTA_WARN\b/g) || []).length === 2 && /\.kpi\.warn\{background:#fff6d6/.test(cs) && /\.kpi\.none\{/.test(cs), 'v2.2.0 노랑은 사후적용 대기(카드 · 막대)에만 · 대기 없음은 회색');
+  ok(/@media \(max-width:640px\)\{ \.kpis\.fta4\{grid-template-columns:repeat\(2,/.test(cs) && /tr\.late td:nth-child\(4\)\{color:#c0362c/.test(cs) && /p\.days >= 30/.test(body), 'v2.2.0 모바일 카드 2열 · 경과일수 30일 이상 빨강');
+  ok(/data-fta-goto="fta-pend-sec"/.test(body) && /data-fta-reason=/.test(body) && /\[data-fta-goto\]/.test(dj) && /state\.ftaReasonOpen/.test(dj), 'v2.2.0 대기 카드 → 목록 이동 · 사유 행 → 신고번호 목록');
+  ok(/class="hit"><title>/.test(dj) && /i === peak/.test(dj) && /m === sel && tots\[i\] > 0/.test(dj), 'v2.2.0 쌓은 막대 — 숫자 라벨은 최댓값 달 · 고른 달에만, 마우스를 올리면 본부별 금액');
 }
