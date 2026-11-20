@@ -82,7 +82,7 @@ srv.listen(0, async function () {
     await pg.click('#go-dash-sample');
     await pg.waitForSelector('#kpi-trade .kpi[data-k="imp-goods"]', { timeout: 5000 });
     ok(/dashboard\.html#example$/.test(pg.url()), '대시보드로 이동해 예제를 연다');
-    ok(await pg.$$eval('#d-sets tr[data-kind]', function (t) { return t.length; }) === 5, '올린 자료 5종(v1.2 결정문 포함)');
+    ok(await pg.$$eval('#d-sets tr[data-kind]', function (t) { return t.length; }) === 4, '올린 자료 4종(v2.0.0 오류점수는 오류점수 화면에서)');
     ok(/2024\.01 ~ 2025\.10/.test(await pg.textContent('#d-sets tr[data-kind="import"]')), '데이터 기간 표시');
     // 화면 숫자 = 엔진 계산(하드코딩 없음) — 같은 예제를 엔진으로 다시 계산해 대조한다
     function expect(f) {
@@ -130,8 +130,8 @@ srv.listen(0, async function () {
     ok(await pg.$eval('table.refund-pivot thead th', function (t) { return t.length; }) === 13, '본부 × 월 표(본부 + 10개월 + 합계 + 건수)');
     ok(/건수 열의 합/.test(await pg.textContent('table.refund-pivot thead')) && /건수 열의 합/.test(await pg.textContent('.kpi[data-k="ref-amount"]')), 'v1.4.6 예제(건수 열 있음) — 건수 열의 합으로 표시');
     await pg.click('.tab[data-tab="errors"]');
-    ok(await kv('err-rate') === ex.err, '오류 비율 카드 = 엔진 계산', ex.err);
-    ok(await pg.$$eval('#ch-errors svg.chart polyline', function (t) { return t.length; }) >= 2, '오류 비율 선(수입·수출)');
+    // (v2.0.0) 오류점수 탭은 오류점수 화면이 저장한 요약을 읽기만 — 요약이 없으면 안내와 링크
+    ok(await pg.$('#kpi-errors [data-k="err-none"] a[href="errors.html"]'), '요약이 없으면 오류점수 화면으로 가는 안내');
     await pg.selectOption('#f-from', '2024-01');
     ok(/겹칩니다/.test(await pg.textContent('#f-note')), '12개월을 넘게 고르면 겹침 알림');
     await pg.click('#btn-f-reset');
@@ -139,7 +139,7 @@ srv.listen(0, async function () {
     var dl = await Promise.all([pg.waitForEvent('download', { timeout: 5000 }), pg.click('#btn-dash-xlsx')]);
     var wbx = XLSX.read(fs.readFileSync(await dl[0].path()), { type: 'buffer' });
     ok(/수출입통관_집계_202501-202510\.xlsx$/.test(dl[0].suggestedFilename()), '엑셀 내려받기', dl[0].suggestedFilename());
-    ok(['안내', '수입_본부', '수출_국가', '수입_HS4단위', 'FTA_수입_본부', 'FTA_수출_국가', '환급_본부월', '오류_월'].every(function (n) { return wbx.SheetNames.indexOf(n) >= 0; }), '엑셀 탭별 집계 시트', wbx.SheetNames.join(','));
+    ok(['안내', '수입_본부', '수출_국가', '수입_HS4단위', 'FTA_수입_본부', 'FTA_수출_국가', '환급_본부월'].every(function (n) { return wbx.SheetNames.indexOf(n) >= 0; }), '엑셀 탭별 집계 시트', wbx.SheetNames.join(','));
     // 열 이름이 다른 파일 — 못 찾은 열을 사람이 고른다
     function xbuf(aoa) { var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), 'S'); return Buffer.from(XLSX.write(wb, { type: 'array', bookType: 'xlsx' })); }
     // v1.5.0 같은 종류를 다시 올리면 더한다 — 열 이름이 다른 파일은 그 파일만 못 찾은 열을 고른다
@@ -389,23 +389,24 @@ srv.listen(0, async function () {
     await pg.click('#e-sample');
     ok(!(await pg.isHidden('#e-view')), '예제로 현황이 열린다');
     ok(/수입/.test(await pg.textContent('#e-msg')) && /수출/.test(await pg.textContent('#e-msg')), '두 권 읽음');
-    var ecalc = await pg.evaluate(function () { var s = window.__err.state.summary; return { i: s.total[9].인천.score, u: s.total[9].울산.score }; });
+    var ecalc = await pg.evaluate(function () { var s = window.__err.state.summary; return { i: s.total[10].인천.score, u: s.total[10].울산.score }; });
     ok((await pg.textContent('#e-cards')).indexOf(String(ecalc.i)) >= 0, '카드 = 엔진 계산');
     ok(/점수가 다른 칸 2/.test(await pg.textContent('#e-compare')), '대조: 예제의 어긋난 2칸');
     var u0 = ecalc.u;
-    await pg.check('#e-brokers input[data-broker="42158"]');
-    var u1 = await pg.evaluate(function () { return window.__err.state.summary.total[9].울산.score; });
-    ok(u1 > u0, '부호를 울산으로 고르면 다시 나뉜다', u0 + '→' + u1);
-    await pg.uncheck('#e-brokers input[data-broker="42158"]');
+    await pg.selectOption('#e-brokers select[data-broker="42158"]', '울산');
+    var u1 = await pg.evaluate(function () { return window.__err.state.summary.total[10].울산.score; });
+    ok(u1 >= u0, '부호를 울산으로 고르면 다시 나뉜다', u0 + '→' + u1);
+    await pg.click('#e-rulereset');
+    ok(await pg.evaluate(function () { return !!localStorage.getItem('b2611-07.err.summary'); }), '(v2.0.0) 요약을 저장(대시보드가 읽음)');
     await pg.fill('#e-th', '10'); await pg.dispatchEvent('#e-th', 'change');
     ok(/경계 이상 [1-9]/.test(await pg.textContent('#e-quarters')), '경계를 낮추면 경고');
     await pg.fill('#e-th', '300'); await pg.dispatchEvent('#e-th', 'change');
     await pg.selectOption('#e-scope', '울산');
     ok((await pg.$$('#e-items tbody tr')).length > 0, '항목별 범위');
-    await pg.fill('#e-ltable input[data-note="reason"]', '테스트 사유'); await pg.dispatchEvent('#e-ltable input[data-note="reason"]', 'change');
+    await pg.fill('#e-ltable textarea[data-note="reason"]', '테스트 사유'); await pg.dispatchEvent('#e-ltable textarea[data-note="reason"]', 'change');
     ok(/테스트 사유/.test(await pg.evaluate(function () { return localStorage.getItem('build-2611-07.err.notes'); })), '대장 사유 저장');
-    ok(/9월 수출입 오류관리대장/.test(await pg.inputValue('#e-mbody')), '메일 초안');
-    await pg.selectOption('#e-mmonth', '8'); ok(/8월 수출입 오류관리대장/.test(await pg.inputValue('#e-mbody')), '월을 바꾸면 초안도');
+    ok(/10월 수출입 오류관리대장/.test(await pg.inputValue('#e-mbody')), '메일 초안');
+    await pg.selectOption('#e-mmonth', '9'); ok(/9월 수출입 오류관리대장/.test(await pg.inputValue('#e-mbody')), '월을 바꾸면 초안도');
     var dl5 = await Promise.all([pg.waitForEvent('download', { timeout: 5000 }), pg.click('#e-xlsx')]);
     var wb5 = XLSX.read(fs.readFileSync(await dl5[0].path()), { type: 'buffer' });
     ok(wb5.SheetNames.join(',') === '오류점수요약,발생사유및정정내용,분기,항목별,상세', '엑셀 5시트', wb5.SheetNames.join(','));

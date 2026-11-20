@@ -106,7 +106,7 @@
   /* ---------- 파일 하나 판별 ---------- */
   // detect = 내용 판별 결과(customs.detectKind → { kind }) — 없으면 null. → 판별 정보(파일 목록 · 저장에 그대로 쓴다)
   var IO_OF_DATASET = { import: '수입', export: '수출' };
-  var DATASET_LABEL = { import: '수입 실적', export: '수출 실적', refund: '관세환급', ruling: '품목분류 결정문', errors: '오류 비율 표' };
+  var DATASET_LABEL = { import: '수입 실적', export: '수출 실적', refund: '관세환급', ruling: '품목분류 결정문' };   // (v2.0.0) errors(오류 비율 표) 종류 폐지
   function describe(name, detect) {
     var byName = kindByName(name), exp = isExportName(name), period = periodOfName(name), warnings = [];
     var contentKind = detect && detect.kind || null, dataset = null, how = '', io = byName ? byName.io : null, group = byName ? byName.group : null;
@@ -119,7 +119,7 @@
       io = cIo || nameIo; group = byName && byName.group === 'fta' ? 'fta' : 'perf';
     } else if (byName && byName.group === 'errscore' && !byName.part) {
       // 「오류」만 있고 현황 · 상세가 없으면 — 대시보드의 오류 비율 표(월별 신고 · 오류건수 · 점수)일 수 있다 → 내용으로
-      dataset = contentKind === 'errors' ? 'errors' : null; how = dataset ? '파일 이름 + 내용' : '파일 이름';
+      dataset = null; how = '파일 이름';   // (v2.0.0) 오류점수는 대시보드 자료가 아님 — 오류점수 화면으로
     } else if (byName) {
       dataset = byName.dataset; how = '파일 이름';
       if (byName.group === 'perf' && !io) warnings.push('파일 이름에 「수입」 · 「수출」이 없어 내용으로 정했습니다.'), dataset = contentKind, how = '내용';
@@ -127,19 +127,28 @@
       if (byName.group === 'perf' && io && cIo2 && cIo2 !== io) warnings.push('파일명은 ' + io + '인데 내용은 ' + cIo2 + '로 보입니다. 확인이 필요합니다.');
     } else {
       dataset = contentKind; how = '내용'; io = IO_OF_DATASET[contentKind] || null;
-      group = contentKind === 'refund' ? 'refund' : contentKind === 'ruling' ? 'ruling' : contentKind === 'errors' ? 'errscore' : contentKind ? 'perf' : null;
+      group = contentKind === 'refund' ? 'refund' : contentKind === 'ruling' ? 'ruling' : contentKind ? 'perf' : null;
     }
     if (group === 'fta') dataset = null;                      // FTA 는 다음 단계 — 실적 합계에 넣지 않는다(물자대 두 번 방지)
     var mode = fileMode(group, period, exp), rule = monthRule(group, period, io);
     if (!group && !dataset) warnings.push('종류를 판별하지 못함');
     // 「기간을 판별하지 못함」은 파일 이름 · 행 날짜(오류점수는 시트 이름) 모두 없을 때 — 읽은 뒤에 화면 쪽에서 붙인다(dataWarnings)
-    var label = group === 'fta' ? (io ? io + ' ' : '') + 'FTA' : group === 'errscore' && byName && dataset !== 'errors' ?(io || '') + '오류점수' + (byName.part ? ' ' + byName.part + '목록' : '') : DATASET_LABEL[dataset] || (byName ? byName.label : '알 수 없음');
+    var label = group === 'fta' ? (io ? io + ' ' : '') + 'FTA' : group === 'errscore' && byName ?(io || '') + '오류점수' + (byName.part ? ' ' + byName.part + '목록' : '') : DATASET_LABEL[dataset] || (byName ? byName.label : '알 수 없음');
     return {
       name: String(name || ''), group: group, label: label,
       io: io, part: byName ? byName.part : null, dataset: dataset, how: how, exportName: exp,
       period: period, mode: mode.mode, modeWhy: mode.why, rule: rule.code, ruleText: rule.text, forceMonth: rule.forceMonth,
       dateCol: dataset ? DATE_COL[dataset] || null : null, warnings: warnings
     };
+  }
+
+  /* ---------- (v2.0.0) 오류점수 파일 — 대시보드 자료가 아님 ---------- */
+  // 이름에 「오류」, 시트 「귀책사유자별오류…」, 머리글에 오류점수 · 오류건수 · 총신고건이 있으면 오류점수 파일(유니패스 원본이든 사람이 만든 집계표든).
+  //   errors 종류를 없앤 뒤 사람이 만든 오류 집계표(년월 · 본부 · 신고건수 …)가 관세환급 같은 다른 종류로 잘못 걸리지 않게 먼저 거른다.
+  function isErrorScoreFile(name, headers, sheetNames) {
+    if (/오류/.test(baseName(name))) return true;
+    if ((sheetNames || []).some(function (n) { return /귀책사유자별오류/.test(String(n)); })) return true;
+    return (headers || []).some(function (h) { return /^(오류점수|오류건수|총신고건)$/.test(String(h == null ? '' : h).replace(/\s/g, '')); });
   }
 
   /* ---------- [6] 기간 겹침 ---------- */
@@ -171,7 +180,7 @@
 
   var api = {
     kindByName: kindByName, isExportName: isExportName, periodOfName: periodOfName, fileMode: fileMode, monthRule: monthRule,
-    describe: describe, overlapsWith: overlapsWith, monthsBetween: monthsBetween, lastDay: lastDay,
+    describe: describe, isErrorScoreFile: isErrorScoreFile, overlapsWith: overlapsWith, monthsBetween: monthsBetween, lastDay: lastDay,
     viewBanner: viewBanner, keepHint: keepHint, DATE_COL: DATE_COL, BASIS_TEXT: BASIS_TEXT, ALWAYS_CONFIRMED: ALWAYS_CONFIRMED
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

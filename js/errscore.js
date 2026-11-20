@@ -183,7 +183,7 @@
     sheets = (sheets || []).map(function (s) { return { name: clean(s.name), aoa: s.aoa || [] }; });
     var sm = sheets.filter(function (s) { return classifySheet(s.name) === 'summary'; })[0];
     if (sm) {
-      var first = (sm.aoa[0] || []).concat(sm.aoa[1] || []).map(clean).join(' '); kind = kindOfText(first);
+      var first = (sm.aoa[0] || []).concat(sm.aoa[1] || []).map(clean).join(' '); kind = kindOfText(first.replace(/\s/g, ''));
       // (v1.10.3) 연도도 요약 시트 A1 제목에서 — 「▣ 2026년 수입오류점수 현황」
       var ym = first.match(/(20\d{2})\s*년/); if (ym) sumYear = +ym[1];
     }
@@ -262,6 +262,10 @@
   /* ---------- (v1.11.0) 인천 분모 = ERP 실적 · 본부(PLANT) 세부 · 검증 ---------- */
   var HQ_NONE = '본부 미분류', HQ_ULSAN = '건기본부', HQ_REGION = '지역 미분류';
   var HQ_ORDER = ['건기본부', '엔진본부', '부품센터', HQ_NONE, HQ_REGION];
+  // (v2.0.0) 본부 미분류를 둘로 — 분모에만 있는 집단(ERP 에 있으나 Plant 가 빈 · 표에 없는 건)과 분자에만 있는 집단(오류 건인데 ERP 에서 못 찾은 건)을 한 줄에 합치지 않는다
+  var HQ_NOPLANT = 'Plant 없음', HQ_BADPLANT = 'Plant 미등록', HQ_NOMATCH = 'ERP 미매칭';
+  var HQ_ORDER2 = ['건기본부', '엔진본부', '부품센터', HQ_NOPLANT, HQ_BADPLANT, HQ_NOMATCH];
+  function erpHq(r) { return r.hq && r.hq !== HQ_NONE ? r.hq : (clean(r.plant) ? HQ_BADPLANT : HQ_NOPLANT); }
   function declKey(v) { return clean(v).toUpperCase().replace(/[\s\-]/g, ''); }
   // erp = { 수입: [레코드], 수출: [레코드] } — customs.js 가 읽은 ERP 실적(수입 수리일자 · 수출 Declaration Date 로 month, Plant → hq).
   //   GN(무환)을 포함한 레코드를 넘긴다(관세청 총신고건에 GN 이 들어 있음 — 실적 탭의 GN 제외 설정과 무관).
@@ -275,51 +279,93 @@
       list.forEach(function (r) {
         var key = declKey(r.declNo); if (!key) return;
         out.rows[k]++;
-        if (!out.index[key]) out.index[key] = { kind: k, hq: r.hq || HQ_NONE, plant: r.plant || '', month: r.month || '' };
+        if (!out.index[key]) out.index[key] = { kind: k, hq: erpHq(r), plant: r.plant || '', month: r.month || '' };
         if (!r.month || (year && String(r.month).slice(0, 4) !== String(year))) return;
         var m = +String(r.month).slice(5, 7), mk = m + '|' + key;
         if (seen[mk]) return; seen[mk] = 1;
         out.counts[k][m] = (out.counts[k][m] || 0) + 1;
         if (!gnDecl[key]) out.countsNoGN[k][m] = (out.countsNoGN[k][m] || 0) + 1;
-        var h = out.byHq[k][m] || (out.byHq[k][m] = {}), hq = r.hq || HQ_NONE;
+        var h = out.byHq[k][m] || (out.byHq[k][m] = {}), hq = erpHq(r);
         h[hq] = (h[hq] || 0) + 1;
       });
     });
     return out;
   }
-  // 본부 세부: 인천 건은 ERP 와 신고번호로 조인해 본부(월과 무관 — 오류 달과 수리 달이 다를 수 있음), 못 찾으면 본부 미분류(버리지 않음).
-  //   울산 건은 세부 자료가 없어 전부 건기본부. 지역 미분류 건은 따로. 분모: 인천 본부 = ERP 본부별 건수, 건기본부에 울산 신고건수를 더함.
+  // 본부 세부(v2.0.0 — 지역별 줄): 인천 건은 ERP 와 신고번호로 조인해 본부(월과 무관 — 오류 달과 수리 달이 다를 수 있음).
+  //   분모 = ERP 본부별 신고번호 수(GN 포함). ERP 에 있으나 Plant 가 빈 건 = 「Plant 없음」(분모에만), 오류 건인데 ERP 에서 못 찾은 건 = 「ERP 미매칭」(분자에만 — 비율 없음 · 목록).
+  //   울산 건은 세부 자료가 없어 건기본부 한 줄(분모 = 울산 신고건수). 지역 미분류 건은 따로.
+  //   → kinds[수입|수출][월] = [{ region, hq, decl, err, scored, score, rate }]
   function hqBreakdown(summary, books, erpSum) {
-    // uncovered = ERP 실적이 없는 달(그 달 인천 건은 본부 미분류 — 「못 찾음」 경고와 구분)
-    var idx = erpSum ? erpSum.index : {}, out = { kinds: {}, notFound: [], uncovered: [], hqs: HQ_ORDER.slice(), ulsanNote: '울산은 세부 자료가 없어 전량 건기본부로 집계' };
+    var idx = erpSum ? erpSum.index : {}, out = { kinds: {}, notFound: [], uncovered: [], hqs: HQ_ORDER2.slice(), ulsanNote: '울산은 세부 자료가 없어 전량 건기본부로 집계' };
     var all = []; (books || []).forEach(function (b) { if (b.kind) all = all.concat(b.rows.filter(function (r) { return r.month; })); });
     KINDS.forEach(function (k) {
       out.kinds[k] = {};
       summary.months.forEach(function (m) {
-        var g = {}, rows = all.filter(function (r) { return r.kind === k && r.month === m; });
+        var g = {}, ul = [], un = [], rows = all.filter(function (r) { return r.kind === k && r.month === m; });
+        var covered = !!(erpSum && erpSum.counts[k][m] != null), byHq = covered ? erpSum.byHq[k][m] : null;
         rows.forEach(function (r) {
-          var hq;
-          if (r.campus === '울산') hq = HQ_ULSAN;
-          else if (r.campus === '인천') {
-            var e = idx[declKey(r.declNo)], covered = !!(erpSum && erpSum.counts[k][m] != null);
-            hq = e ? e.hq : HQ_NONE;
-            if (!e && covered && !out.notFound.some(function (x) { return x.declNo === r.declNo && x.month === m; })) out.notFound.push({ kind: k, month: m, declNo: r.declNo });
-            if (!e && !covered && !out.uncovered.some(function (x) { return x.kind === k && x.month === m; })) out.uncovered.push({ kind: k, month: m });
-          }
-          else hq = HQ_REGION;
-          if (out.hqs.indexOf(hq) < 0) out.hqs.splice(out.hqs.length - 2, 0, hq);
+          if (r.campus === '울산') { ul.push(r); return; }
+          if (r.campus !== '인천') { un.push(r); return; }
+          var e = idx[declKey(r.declNo)], hq = e ? e.hq : HQ_NOMATCH;
+          if (!e && covered && !out.notFound.some(function (x) { return x.declNo === r.declNo && x.month === m; })) out.notFound.push({ kind: k, month: m, declNo: r.declNo });
+          if (!e && !covered && !out.uncovered.some(function (x) { return x.kind === k && x.month === m; })) out.uncovered.push({ kind: k, month: m });
+          if (out.hqs.indexOf(hq) < 0) out.hqs.splice(out.hqs.length - 1, 0, hq);
           (g[hq] = g[hq] || []).push(r);
         });
-        var mm = summary.kinds[k].months[m], byHq = erpSum && erpSum.byHq[k][m] ? erpSum.byHq[k][m] : null;
-        out.kinds[k][m] = out.hqs.filter(function (h) { return g[h] || (byHq && byHq[h]) || (h === HQ_ULSAN && mm.울산.decl); }).map(function (h) {
-          var decl = null;
-          if (byHq) { decl = byHq[h] || 0; if (h === HQ_ULSAN && mm.울산.decl != null) decl += mm.울산.decl; }
-          if (h === HQ_REGION) decl = null;
-          return Object.assign({ hq: h }, cell(g[h] || [], decl));
+        var mm = summary.kinds[k].months[m], list = [];
+        out.hqs.forEach(function (h) {
+          var dec = h === HQ_NOMATCH ? null : byHq ? byHq[h] || 0 : null;
+          if (!g[h] && !dec) return;
+          list.push(Object.assign({ region: '인천', hq: h }, cell(g[h] || [], dec)));
         });
+        if (ul.length || mm.울산.decl) list.push(Object.assign({ region: '울산', hq: HQ_ULSAN }, cell(ul, mm.울산.decl)));
+        if (un.length) list.push(Object.assign({ region: HQ_REGION, hq: null }, cell(un, null)));
+        out.kinds[k][m] = list;
       });
     });
     return out;
+  }
+  // (v2.0.0) 요약 — 오류점수 화면이 계산하고 localStorage(b2611-07.err.summary)에 덮어쓴다. 대시보드는 읽기만 한다. 원본 행은 넣지 않는다.
+  //   rows: 소계(region 종합 = 현황목록 총신고건 · 오류점수) · 지역(인천 · 울산 · 지역 미분류) 줄은 hq=null, 본부 줄은 hq 까지.
+  //   ERP 미매칭 줄은 decl=null(분자에만). 신고건수 · 오류건수 · 점수 발생 건수 · 오류점수만 — 비율은 읽는 쪽이 오류점수 ÷ 신고건수로.
+  var SUMMARY_KEY = 'b2611-07.err.summary', SUMMARY_BASIS = 'GN 포함 · 수입 수리일자 · 수출 신고일자';
+  function buildSummary(summary, hq, books, opts) {
+    opts = opts || {}; books = books || [];
+    var rows = [], pad = function (m) { return (m < 10 ? '0' : '') + m; };
+    function yearOf(k) { var b = books.filter(function (x) { return x.kind === k && x.year; })[0]; return (b && b.year) || summary.year || null; }
+    function put(ym, k, region, h, c) { rows.push({ ym: ym, kind: k, region: region, hq: h, decl: c.decl == null ? null : c.decl, err: c.err, errScored: c.scored || 0, score: c.score }); }
+    KINDS.forEach(function (k) {
+      var y = yearOf(k);
+      summary.months.forEach(function (m) {
+        var mm = summary.kinds[k].months[m]; if (mm.statusTotal == null && !mm.종합.err) return;
+        var ym = (y || '????') + '-' + pad(m);
+        put(ym, k, '종합', null, mm.종합);
+        put(ym, k, '인천', null, mm.인천); put(ym, k, '울산', null, mm.울산);
+        if (mm[UNREGION].err) put(ym, k, HQ_REGION, null, mm[UNREGION]);
+        if (hq && hq.kinds[k][m]) hq.kinds[k][m].forEach(function (x) { if (x.hq) put(ym, k, x.region, x.hq, x); });
+      });
+    });
+    var files = books.map(function (b) {
+      var ms = b.months.concat(Object.keys(b.status || {}).map(Number)).filter(function (v, i, a) { return a.indexOf(v) === i; }).sort(function (x, z) { return x - z; });
+      return { name: b.fileName, year: b.year || null, kind: b.kind, months: ms };
+    }).sort(function (x, z) { return String(x.kind).localeCompare(String(z.kind)) || String(x.name).localeCompare(String(z.name)); });   // 올린 순서와 관계없이 같은 요약
+    return { updatedAt: opts.now || new Date().toISOString(), basis: SUMMARY_BASIS, rows: rows, files: files, erp: opts.erp || [] };
+  }
+  // 요약의 갱신 시각(ISO · 세계 표준시) → 이 PC 시각 「YYYY-MM-DD HH:MM」
+  function localTime(iso) { var d = new Date(iso); if (isNaN(d)) return String(iso || ''); var p = function (v) { return (v < 10 ? '0' : '') + v; }; return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); }
+  // 요약 → 월별 종합(수입 + 수출) · 수입 · 수출 — 대시보드가 읽기만 할 때 쓴다(계산은 더하기와 오류점수 ÷ 신고건수뿐)
+  function summaryMonthly(sum) {
+    var g = {};
+    ((sum && sum.rows) || []).filter(function (r) { return r.region === '종합' && !r.hq; }).forEach(function (r) {
+      var x = g[r.ym] || (g[r.ym] = { ym: r.ym, 수입: null, 수출: null });
+      x[r.kind] = { decl: r.decl, err: r.err, errScored: r.errScored, score: r.score, rate: rateOf(r.score, r.decl) };
+    });
+    return Object.keys(g).sort().map(function (ym) {
+      var x = g[ym], a = x.수입, b = x.수출;
+      var decl = a && b && a.decl != null && b.decl != null ? a.decl + b.decl : null, score = round((a ? a.score : 0) + (b ? b.score : 0), 2);
+      x.total = { decl: decl, err: (a ? a.err : 0) + (b ? b.err : 0), errScored: (a ? a.errScored : 0) + (b ? b.errScored : 0), score: score, rate: rateOf(score, decl), partial: !(a && b) };
+      return x;
+    });
   }
   // 검증: 인천 + 울산 신고건수 = 현황 총신고건, 인천 + 울산 오류점수 = 현황 오류점수 — 계산 결과와 요약 시트(팀 수기 자료) 둘 다.
   function regionChecks(summary, books, erpSum) {
@@ -491,9 +537,10 @@
     var cnt = {};
     return list.map(function (d) {
       var key = noteKey(d.declNo, d.month), n = notes[key] || {}, e = idx[declKey(d.declNo)], auto = e ? DIV_SHORT[e.hq] || null : null;
+      var why = !erpSum ? '' : !e ? HQ_NOMATCH : auto ? '' : e.hq;            // (v2.0.0) 사업부를 못 정한 이유
       var ck = d.month + '|' + d.kind; cnt[ck] = (cnt[ck] || 0) + 1;
       var row = { key: key, kind: d.kind || '', no: cnt[ck], month: d.month, declNo: d.declNo, date: d.fixedAt ? String(d.fixedAt).slice(0, 10) : '', score: d.score,
-        div: auto || clean(n.div) || '', divAuto: !!auto, hint: d.changes.slice(0, 3).join(' / '), erp: !!e };
+        div: auto || clean(n.div) || '', divAuto: !!auto, divWhy: why, hint: d.changes.slice(0, 3).join(' / '), erp: !!e };
       LEDGER_INPUT.forEach(function (f) { row[f] = n[f] == null ? '' : String(n[f]); });
       row.missing = !clean(row.draft) || !clean(row.reason);                 // 미입력 = DRAFT NO 나 발생사유가 빈 줄
       return row;
@@ -505,7 +552,7 @@
   }
   // 엑셀 — AEO 관리대장과 같은 열 순서. 발생사유를 안 썼으면 빈칸(미입력이 입력된 것처럼 보이지 않게). 사업부를 못 정했으면 「미분류」.
   function ledgerAoa(rows) {
-    return [LEDGER_HEAD].concat((rows || []).map(function (r) { return [r.kind, r.no, r.div || '미분류', r.draft, r.declNo, r.date, r.score, r.reason, r.blame, r.dept, r.owner]; }));
+    return [LEDGER_HEAD].concat((rows || []).map(function (r) { return [r.kind, r.no, r.div || r.divWhy || '미분류', r.draft, r.declNo, r.date, r.score, r.reason, r.blame, r.dept, r.owner]; }));
   }
 
   /* ---------- 월별 공유 메일 초안 ---------- */
@@ -576,17 +623,21 @@
 
   /* ---------- 예제 — 가짜 수치·가짜 신고번호(실제 사내 데이터가 아닙니다) ---------- */
   var SAMPLE_ITEMS = { 수입: ['원산지표시유무구분코드', '관세', '부가세과세과표총액', '과세가격원화금액', 'HS10단위부호', '신고수량', '운송보험료'], 수출: ['신고금액', '신고단가', '순중량', '송장번호', '결제금액', '모델규격명', '포장개수'] };
+  // (v2.0.0) 유니패스 형식 예제 — 요약 시트(A1 제목에서 수입 · 수출 · 연도) · 현황목록_N월(총신고건 · 오류점수 1행) · 상세목록_N월(신고번호별 항목).
+  //   가상 신고번호지만 앞 5자리는 실제 부호 체계(인천 22356 · 22371 · 42158 / 울산 43908 · 44924 · 44788) — 예제에서도 지역 구분이 보이게.
+  //   제목 공백 위치를 수입 · 수출에서 다르게 둔다(실제 파일처럼 — 공백을 지우고 비교).
+  var SAMPLE_BROKERS = ['22356', '43908', '22371', '44924', '42158', '44788'];
   function sampleBooks() {
     var books = [];
     KINDS.forEach(function (k, ki) {
       var letter = k === '수입' ? 'M' : 'X', sheets = [], seed = 17 + ki * 7;
       var hand = {};
-      [7, 8, 9].forEach(function (mo, mi) {
+      [8, 9, 10].forEach(function (mo, mi) {
         var total = k === '수입' ? [2023, 1543, 1764][mi] : [2453, 1933, 2227][mi];
         var detail = [['No', '귀책사유자부호', '신고번호', '란번호', '정정일자 및 시간', '수리구분', '정정구분', '항목코드', '항목명', '오류점수', '변경 후 오류점수', '정정전내역', '정정후내역']];
         var nDecl = [3, 4, 6][mi] + ki, no = 0, score = 0;
         for (var d = 0; d < nDecl; d++) {
-          var broker = (d + mi + ki) % 3 === 0 ? '42158' : '43908';          // 셋에 하나 인천, 나머지 울산
+          var broker = SAMPLE_BROKERS[(d + mi + ki) % SAMPLE_BROKERS.length];   // 인천 · 울산 번갈아(6개 부호)
           var decl = broker + '26' + String(600000 + seed * 37 + mo * 1000 + d * 13).slice(0, 6) + letter;
           var lines = 1 + ((d + mi) % 3);
           for (var l = 0; l < lines; l++) {
@@ -597,21 +648,22 @@
         }
         var inc = k === '수입' ? [1260, 900, 1002][mi] : [1535, 1212, 1522][mi], cnt = { 인천: { d: {}, s: 0 }, 울산: { d: {}, s: 0 } };
         detail.slice(1).forEach(function (r) { var c = campusOf(r[2]); cnt[c].d[r[2]] = 1; cnt[c].s += r[9]; });
-        var shift = k === '수출' && mo === 8 ? 5 : 0;      // 예제: 담당자 표가 5점 어긋난 달(대조 화면 시연용)
+        var shift = k === '수출' && mo === 9 ? 5 : 0;      // 예제: 담당자 표가 5점 어긋난 달(대조 화면 시연용)
         hand[mo] = { 인천: [inc, Object.keys(cnt.인천.d).length, cnt.인천.s + shift], 울산: [total - inc, Object.keys(cnt.울산.d).length, cnt.울산.s - shift] };
         sheets.push({ name: '귀책사유자별오류현황목록_' + mo + '월', aoa: [['No', '귀책사유자부호', '귀책사유자상호', '관할지세관부호', '관할지세관', '총신고건', '오류점수', '비율'], [1, '예제1177017', '예제건설기계(주)', '012', '성남세관', total, score, round(score / total * 100, 1)]] });
         sheets.push({ name: '귀책사유자별오류상세목록_' + mo + '월', aoa: detail });
       });
-      var hd = ['구분'], order = [9, 8, 7], line = function (cp) { var r = [cp]; order.forEach(function (mo) { r = r.concat(hand[mo][cp], ['']); }); return r; };
+      var hd = ['구분'], order = [10, 9, 8], line = function (cp) { var r = [cp]; order.forEach(function (mo) { r = r.concat(hand[mo][cp], ['']); }); return r; };
       order.forEach(function (mo) { hd.push(mo + '월', '', '', ''); });
-      sheets.unshift({ name: '요약', aoa: [['▣ 2026년 ' + k + '오류점수 현황(예제)'], hd, [''].concat(['건수', '오류건수', '오류점수', '비율', '건수', '오류건수', '오류점수', '비율', '건수', '오류건수', '오류점수', '비율']), line('인천'), line('울산')] });
-      books.push({ name: '예제_2026년' + k + '귀책사유자별오류현황및상세목록.xlsx', sheets: sheets });
+      sheets.unshift({ name: '요약', aoa: [['▣' + (k === '수입' ? ' ' : '') + '2026년 ' + k + '오류점수 현황(예제 · 가상)'], hd, [''].concat(['건수', '오류건수', '오류점수', '비율', '건수', '오류건수', '오류점수', '비율', '건수', '오류건수', '오류점수', '비율']), line('인천'), line('울산')] });
+      books.push({ name: '예제_유니패스' + k + '오류점수(가상).xlsx', sheets: sheets });
     });
     return books;
   }
 
   var api = {
     RULE: RULE, THRESHOLD: THRESHOLD, KINDS: KINDS, CAMPUSES: CAMPUSES, FIELDS: FIELDS, LEDGER_HEAD: LEDGER_HEAD,
+    buildSummary: buildSummary, summaryMonthly: summaryMonthly, localTime: localTime, SUMMARY_KEY: SUMMARY_KEY, SUMMARY_BASIS: SUMMARY_BASIS, HQ_NOPLANT: HQ_NOPLANT, HQ_NOMATCH: HQ_NOMATCH, HQ_ORDER2: HQ_ORDER2,
     noteKey: noteKey, migrateNotes: migrateNotes, ledgerRows: ledgerRows, ledgerProgress: ledgerProgress, ledgerAoa: ledgerAoa, DIV_SHORT: DIV_SHORT, LEDGER_INPUT: LEDGER_INPUT,
     parseDeclNo: parseDeclNo, statusCheck: statusCheck, campusOf: campusOf, normRule: normRule, UNREGION: UNREGION, erpSummary: erpSummary, hqBreakdown: hqBreakdown, regionChecks: regionChecks, declKey: declKey, HQ_ORDER: HQ_ORDER, parseDate: parseDate, monthOfName: monthOfName, classifySheet: classifySheet,
     mapHeaders: mapHeaders, findHeaderRow: findHeaderRow, readDetail: readDetail, readStatus: readStatus, readWorkbook: readWorkbook, readHandSummary: readHandSummary, applyRule: applyRule, brokers: brokers, countsFromBooks: countsFromBooks, compare: compare,

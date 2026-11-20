@@ -115,7 +115,8 @@
       if (pk.promoted && pk.promoted.length) item.promotedSheets = pk.promoted;   // (v1.10.2) 집계표 이름이지만 열 구성으로 데이터로 읽은 시트
       // (v1.10.0) 파일 이름으로 종류 · 기간 · 확정본/조회용 · 월 귀속을 먼저 정한다(규칙은 filerules.js). 이름으로 못 정하면 내용 판별.
       var info = FR.describe(f.name, best.d);
-      if (info.group === 'errscore' && info.part) { notes.push(esc(f.name) + ' — 유니패스 오류점수 ' + esc(info.part) + '목록으로 인식했습니다. <a href="errors.html">오류점수 화면</a>에서 올려 주세요(대시보드 합계에는 넣지 않음).'); warn = true; return; }
+      // (v2.0.0) 유니패스 오류점수 파일(이름에 「오류」 또는 시트 「귀책사유자별오류…」) — 오류점수 화면으로 보낸다(대시보드는 요약만 읽음)
+      if (info.group === 'errscore' || FR.isErrorScoreFile(f.name, best.s.aoa[0], f.wb.SheetNames)) { notes.push('<span data-k="unipass"><b>' + esc(f.name) + ' — 유니패스 오류점수 파일입니다. 오류점수 화면으로 이동할까요?</b> 오류점수는 그 화면에서 계산하고, 대시보드 「오류점수」 탭은 그 결과를 읽어 보입니다. <a class="btn primary" href="errors.html">오류점수 화면으로</a></span>'); warn = true; return; }
       if (info.group === 'fta') { state.held.push({ file: f.name, label: info.label, rows: rowsOfItem(item), uploadedAt: item.uploadedAt, warnings: info.warnings }); notes.push(esc(f.name) + ' — ' + esc(info.label) + ' 파일로 인식했습니다. FTA 집계는 다음 단계라 목록에만 올리고 합계에는 넣지 않습니다(물자대가 두 번 잡히지 않게).'); warn = true; return; }
       // 사람이 전에 같은 머리글의 파일 종류를 바꿔 준 적이 있으면 — 파일 이름으로 정하지 못한 경우에만 그 종류가 앞선다
       var byName = info.dataset && info.how.indexOf('파일 이름') === 0, pref = kindPrefs()[item.headers.join('|')];
@@ -232,14 +233,16 @@
   }
   function restore() {
     try {
-      var j = C.migrateSaved(JSON.parse(localStorage.getItem(LS.data) || 'null'));
+      var raw0 = JSON.parse(localStorage.getItem(LS.data) || 'null');
+      state.oldErrors = !!(raw0 && raw0.sets && raw0.sets.errors);   // (v2.0.0) 예전 오류점수 집계표 — 되읽지 않고 알림
+      var j = C.migrateSaved(raw0);
       Object.keys(j.sets).forEach(function (k) { j.sets[k].files.forEach(function (f) { f.headers = C.uniqueHeaders(f.headers); }); state.sets[k] = j.sets[k]; });
     } catch (e) { state.sets = {}; }
     // (v1.10.0) 목록에는 있는데 원본 행이 없는 파일 = 용량 때문에 기억하지 못한 파일 → 다시 올려 달라고 알린다
     try {
       var fl = JSON.parse(localStorage.getItem(LS.files) || 'null'), have = {};
       Object.keys(state.sets).forEach(function (k) { state.sets[k].files.forEach(function (f) { have[k + '|' + f.file] = 1; }); });
-      state.lostFiles = fl && Array.isArray(fl.files) ? fl.files.filter(function (x) { return x && x.file && !have[x.kind + '|' + x.file]; }) : [];
+      state.lostFiles = fl && Array.isArray(fl.files) ? fl.files.filter(function (x) { return x && x.file && C.DATASETS[x.kind] && !have[x.kind + '|' + x.file]; }) : [];
     } catch (e3) { state.lostFiles = []; }
     return Object.keys(state.sets).length > 0;
   }
@@ -344,7 +347,8 @@
         '<p class="sub" data-k="erp-note" style="margin-top:4px">자료 기준일 = 파일을 올린 날입니다. <b>ERP 는 월 마감 뒤에도 신고가 더해지므로 같은 달 파일을 다시 올리면 숫자가 바뀔 수 있습니다.</b></p>';
     }
     $('d-sets').innerHTML = h;
-    $('d-view').hidden = !state.range;
+    $('d-view').hidden = !state.range && !errSummary();
+    $('d-filter').hidden = !state.range;
   }
   function mapTable(k, i) {
     var f = state.sets[k].files[i], p = state.sets[k].m.files[i], res = p.res, n = p.norm;
@@ -701,23 +705,25 @@
     $('kpi-refund').innerHTML = k; $('ch-refund').innerHTML = ch; $('tb-refund').innerHTML = tb;
   }
   // (v1.10.0) 오류 비율은 분자 · 분모가 모두 있을 때만 — 그 달 오류점수 자료가 없으면 0% 가 아니라 「자료 없음」(미집계)
-  function errRate(v) { return v == null ? '자료 없음' : C.fmtPct(v, 2); }
+  // (v2.0.0) 오류점수 탭은 오류점수 화면(errors.html)이 저장한 요약(b2611-07.err.summary)을 읽기만 한다 — 계산은 errscore.js 한 곳.
+  //   보이는 것: 종합(수입 + 수출) 신고건수 · 오류점수 · 비율(= 오류점수 ÷ 신고건수), 월별 추이. 지역 · 본부 · 관리대장은 오류점수 화면에만.
+  function errSummary() { try { var j = JSON.parse(localStorage.getItem('b2611-07.err.summary') || 'null'); return j && Array.isArray(j.rows) && j.rows.length ? j : null; } catch (e) { return null; } }
+  function errRate(v) { return v == null ? '자료 없음' : C.fmtPct(v / 100, 2); }
   function renderErrors() {
-    var f = filtered('errors'), k = '', ch = '', tb = '';
-    if (!f) { $('kpi-errors').innerHTML = empty('errors'); $('ch-errors').innerHTML = ''; $('tb-errors').innerHTML = ''; return; }
-    var s = C.errorStats(f.recs, state.range, 'kind');
-    k += kpi('신고건수', C.fmtNum(s.decl), '', '합계', 'err-decl') + kpi('오류건수', C.fmtNum(s.err), '', '합계', 'err-err') +
-      kpi('오류 비율', errRate(s.rate), '', '계산: 오류건수 ÷ 신고건수', 'err-rate') + kpi('오류점수', C.fmtNum(s.score), '', '합계', 'err-score');
-    var months = C.monthsBetween(state.range.from, state.range.to), byKind = C.valuesOf(f.recs, 'kind');
-    var lines = byKind.length > 1 && byKind.length <= 4 ? byKind.map(function (kd, i) {
-      var st = C.errorStats(f.recs.filter(function (r) { return r.kind === kd; }), state.range, 'kind');
-      return { name: kd, color: COL[i], values: st.monthly.map(function (m) { return m.rate; }), fmt: function (v) { return C.fmtPct(v, 2); } };
-    }) : [{ name: '오류 비율', color: COL[4], values: s.monthly.map(function (m) { return m.rate; }), fmt: function (v) { return C.fmtPct(v, 2); } }];
-    ch += monthChart('월별 오류 비율', months, lines, 'line', 'pct');
-    ch += monthChart('월별 오류건수 · 오류점수', months, [{ name: '오류건수', color: COL[4], values: s.monthly.map(function (m) { return m.err; }), fmt: C.fmtNum }, { name: '오류점수', color: COL[3], values: s.monthly.map(function (m) { return m.score; }), fmt: C.fmtNum }], 'bar', 'count');
-    tb += '<h3 class="tb-h">구분별</h3>' + ignoredNote(f.ignored) + table(['구분', '신고건수', '오류건수', '오류 비율', '오류점수'], s.groups.map(function (g) { return { cells: [esc(g.key), n0(g.decl), n0(g.err), esc(errRate(g.rate)), n0(g.score)] }; }),
-      ['합계', n0(s.decl), n0(s.err), esc(errRate(s.rate)), n0(s.score)], 'err-kind');
-    tb += '<h3 class="tb-h">월별</h3>' + table(['월', '신고건수', '오류건수', '오류 비율', '오류점수'], s.monthly.map(function (m) { return { cells: [esc(C.monthLabel(m.month)), n0(m.decl), n0(m.err), esc(errRate(m.rate)), n0(m.score)] }; }), null, 'err-month');
+    var sum = errSummary(), ES = window.ErrScore;
+    if (!sum || !ES) {
+      $('kpi-errors').innerHTML = '<div class="note" data-k="err-none" style="grid-column:1/-1"><b>오류점수 화면에서 유니패스 파일을 먼저 올려 주세요.</b> 오류점수는 관세청 유니패스 현황목록 · 상세목록만 받고, 계산은 오류점수 화면에서 합니다. 대시보드는 그 결과를 읽어 보여 줍니다.<div class="btnrow" style="margin-top:8px"><a class="btn primary" href="errors.html">오류점수 화면으로</a></div></div>';
+      $('ch-errors').innerHTML = ''; $('tb-errors').innerHTML = ''; return;
+    }
+    var mo = ES.summaryMonthly(sum), last = mo[mo.length - 1], months = mo.map(function (x) { return x.ym; });
+    var dk = mo.every(function (x) { return x.total.decl != null; }), cumDecl = dk ? mo.reduce(function (a, x) { return a + x.total.decl; }, 0) : null, cumScore = mo.reduce(function (a, x) { return a + x.total.score; }, 0);
+    var cumRate = cumDecl ? Math.round(cumScore / cumDecl * 10000) / 100 : null, lab = C.monthLabel(last.ym);
+    var k = kpi(lab + ' 종합 신고건수', C.fmtNum(last.total.decl), last.total.partial ? '수입 · 수출 중 한쪽 자료만 있음' : '수입 + 수출(유니패스 현황목록)', '합계', 'err-decl') +
+      kpi(lab + ' 오류점수', C.fmtNum(last.total.score), '오류건수 ' + C.fmtNum(last.total.err) + '건(점수 발생 ' + C.fmtNum(last.total.errScored) + ')', '합계', 'err-score') +
+      kpi(lab + ' 오류 비율', errRate(last.total.rate), '', '계산: 오류점수 ÷ 신고건수', 'err-rate') +
+      kpi(C.monthLabel(mo[0].ym) + ' ~ ' + lab + ' 누계 비율', errRate(cumRate), '오류점수 ' + C.fmtNum(Math.round(cumScore * 100) / 100) + ' ÷ 신고건수 ' + C.fmtNum(cumDecl), '계산: 오류점수 ÷ 신고건수', 'err-cum');
+    var ch = monthChart('월별 오류 비율 = 오류점수 ÷ 신고건수', months, [{ name: '오류 비율', color: COL[4], values: mo.map(function (x) { return x.total.rate == null ? null : x.total.rate / 100; }), fmt: function (v) { return C.fmtPct(v, 2); } }], 'line', 'pct');
+    var tb = '<p class="sub" data-k="err-basis">오류점수 화면에서 ' + esc(ES.localTime(sum.updatedAt)) + ' 에 계산한 요약 · 기준: ' + esc(sum.basis || '') + ' · 파일: ' + esc((sum.files || []).map(function (f) { return f.name; }).join(', ')) + '. 지역(인천 · 울산) · 본부 세부와 관리대장은 <a href="errors.html">오류점수 화면</a>에서 봅니다. 대시보드의 기간 · 본부 · 국가 필터는 오류점수에 걸리지 않습니다.</p>';
     $('kpi-errors').innerHTML = k; $('ch-errors').innerHTML = ch; $('tb-errors').innerHTML = tb;
   }
   // (v1.6.0) 연도별 쌓은 막대 + 누계 선. rows = [{year, ...}], stacks = [{key, name, color}], line = {key, name, color}
@@ -811,7 +817,7 @@
   }
   var RENDER = { trade: renderTrade, export: renderExport, fta: renderFta, refund: renderRefund, errors: renderErrors, ruling: renderRuling };
   function renderTab() {
-    if (!state.range) return;
+    if (!state.range) { if (!errSummary()) return; state.tab = 'errors'; }   // (v2.0.0) 실적 자료 없이 오류점수 요약만 있을 때
     document.querySelectorAll('.tab').forEach(function (b) { var on = b.dataset.tab === state.tab; b.setAttribute('aria-selected', on ? 'true' : 'false'); b.classList.toggle('on', on); });
     Object.keys(RENDER).forEach(function (t) { $('t-' + t).hidden = t !== state.tab; });
     RENDER[state.tab]();
@@ -896,5 +902,9 @@
   renderSettings();
 
   if (location.hash === '#example') loadSample();
-  else if (restore()) { var rn = rebuild(true); msg('이 브라우저에 기억한 데이터를 불러왔습니다. 오늘 엑셀을 올리면 같은 종류 파일에 더합니다(이름이 같은 파일은 바꿉니다).' + rn, rn ? 'warn' : 'note'); }
+  else if (restore()) { var rn = rebuild(true); msg('이 브라우저에 기억한 데이터를 불러왔습니다. 오늘 엑셀을 올리면 같은 종류 파일에 더합니다(이름이 같은 파일은 바꿉니다).' + rn + oldErrNote(), rn || state.oldErrors ? 'warn' : 'note'); }
+  else if (errSummary()) { renderSets(); renderTab(); }   // (v2.0.0) 실적 자료 없이 오류점수 요약만 있을 때도 오류점수 탭을 보인다
+  if (!state.range && state.oldErrors) msg(oldErrNote().replace(/^<br>/, ''), 'warn');
+  // (v2.0.0) 예전에 기억한 오류점수 집계표(errors 종류)는 되읽지 않는다 — 한 번 알림
+  function oldErrNote() { return state.oldErrors ? '<br><b>예전에 올린 오류점수 집계표는 더 이상 쓰지 않습니다</b> — 오류점수는 <a href="errors.html">오류점수 화면</a>에서 유니패스 원본(현황목록 · 상세목록)으로 계산합니다.' : ''; }
 })();

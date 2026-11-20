@@ -1,4 +1,4 @@
-// 예제 엑셀 4종 만들기 — node tools/make-samples.mjs [폴더=samples]
+// 예제 엑셀 만들기(대시보드 4종 + 유니패스 오류점수 예제) — node tools/make-samples.mjs [폴더=samples]
 // js/customs.js 의 sampleFiles() 로 실제 xlsx 를 쓴다. 가짜 데이터입니다(실제 사내 데이터가 아닙니다).
 // 대시보드의 「예제로 해보기」와 같은 내용이다. 수입 파일은 ERP 처럼 맨 위에 제목·조회 조건 줄을 붙인다.
 import { createRequire } from 'node:module';
@@ -22,6 +22,15 @@ for (const f of C.sampleFiles()) {
   wb.Props = { Title: '예제(가짜 데이터)', CreatedDate: new Date(Date.UTC(2026, 10, 3)) };
   writeFileSync(join(dir, f.name), XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', compression: true }));
   console.log('썼습니다:', f.name, (aoa.length - 1) + '줄');
+}
+// (v2.0.0) 오류점수 예제 — 유니패스 형식(요약 · 현황목록_N월 · 상세목록_N월). 대시보드가 아니라 오류점수 화면에서 올린다.
+{
+  const ES = require(join(ROOT, 'js/errscore.js'));
+  const b = ES.sampleBooks()[0], wb = XLSX.utils.book_new();
+  b.sheets.forEach((sh) => XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sh.aoa), sh.name));
+  wb.Props = { Title: '예제(가짜 데이터)', CreatedDate: new Date(Date.UTC(2026, 10, 20)) };
+  writeFileSync(join(dir, b.name), XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', compression: true }));
+  console.log('썼습니다:', b.name, b.sheets.length + '시트');
 }
 // (v1.4.6) 시험용 — 건수 열이 없는 관세환급 신청 현황 73줄 + 합계 줄. 예제 5종과 부딪히지 않게 하위 폴더에 둔다
 // (브라우저 시험은 samples/ 바로 아래 파일만 한꺼번에 올린다).

@@ -177,7 +177,7 @@ eq(C.normalize([{ 일자: '' , 본부: 'A', 환급액: 1 }], 'refund', { date: '
 eq(C.detectKind(['수리일자', '사업본부', '원산지국', '거래처명', 'HS부호', '물자대(원)', '관세액']).kind, 'import', '수입 파일');
 eq(C.detectKind(['수출신고일', '본부', '목적국', '거래처', 'HS CODE', '수출금액']).kind, 'export', '수출 파일');
 eq(C.detectKind(['환급년월', '본부', '환급금액']).kind, 'refund', '환급 파일');
-eq(C.detectKind(['년월', '수출입구분', '신고건수', '오류건수', '오류점수']).kind, 'errors', '오류점수 파일');
+eq(C.detectKind(['년월', '수출입구분', '신고건수', '오류건수', '오류점수']).kind, null, '(v2.0.0) 사람이 집계한 오류점수 표는 종류로 받지 않음');
 eq(C.detectKind(['일자', '본부', '국가', '업체', 'HS', '금액'], '수출실적.xlsx').kind, 'export', '애매하면 찾은 열 수, 그다음 파일 이름');
 eq(C.detectKind(['가', '나', '다']).kind, null, '모르는 파일은 종류를 정하지 않는다');
 
@@ -297,14 +297,8 @@ eq(rs.monthAvg, 900, '월평균 = 합계 ÷ 데이터 있는 달 수');
 eq(rs.pivot.map(function (p) { return [p.hq, p.total, p.months]; }), [['A', 1300, [1000, null, 300]], ['B', 500, [500, null, null]]], '본부 × 월 표');
 eq(rs.last.month, '2025-03', '최근 환급 달');
 
-// 오류 — 손계산: 신고 400+200+300 = 900, 오류 4+1+0 = 5, 비율 5/900, 점수 10+3+0
-var nx = C.normalize([{ p: '2025년 1월', k: '수입', d: 400, e: 4, s: 10 }, { p: '2025년 1월', k: '수출', d: 200, e: 1, s: 3 }, { p: '2025년 2월', k: '수입', d: 300, e: 0, s: 0 }, { p: '2025년 3월', k: '수출', d: 0, e: 0, s: 0 }],
-  'errors', { date: 'p', kind: 'k', decl: 'd', err: 'e', score: 's' });
-var xs = C.errorStats(nx.records, { from: '2025-01', to: '2025-03' }, 'kind');
-eq([xs.decl, xs.err, xs.score], [900, 5, 13], '오류 합계');
-near(xs.rate, 5 / 900, '오류 비율 = 오류건수 ÷ 신고건수');
-eq(xs.groups.map(function (g) { return [g.key, g.decl, g.err]; }), [['수입', 700, 4], ['수출', 200, 1]], '구분별');
-isNull(xs.monthly[2].rate, '신고 0건인 달은 비율 null');
+// (v2.0.0) 오류점수 집계표 종류(errors) · errorStats 폐지 — 오류점수는 유니패스 원본만(errscore.js)
+ok(!C.DATASETS.errors && C.KINDS.indexOf('errors') < 0 && typeof C.errorStats === 'undefined', '(v2.0.0) errors 종류 · errorStats 없음');
 
 // 상위 N + 그 밖
 var tn = C.topN(is.groups.concat([{ key: 'C본부', n: 1, goods: 10, duty: 1, burden: 0.1 }]), 1);
@@ -348,10 +342,10 @@ eq(C.libToAoa(lb)[0], ['파일 이름', '분류', '설명', '사내 위치', '�
 
 // 예제 4종 — 종류를 알아보고, 열을 다 찾고, 숫자는 계산과 맞는다
 var files = C.sampleFiles();
-eq(files.map(function (f) { var h = f.aoa[0]; return C.detectKind(h, f.name).kind; }), ['import', 'export', 'refund', 'errors', 'ruling'], '예제 5종 종류 알아보기');
-eq(files.map(function (f) { return C.mapColumns(f.aoa[0], f.kind).missing.length; }), [0, 0, 0, 0, 0], '예제 5종 필수 열 모두 찾음');
+eq(files.map(function (f) { var h = f.aoa[0]; return C.detectKind(h, f.name).kind; }), ['import', 'export', 'refund', 'ruling'], '예제 4종 종류 알아보기(v2.0.0 오류점수는 유니패스 예제로 따로)');
+eq(files.map(function (f) { return C.mapColumns(f.aoa[0], f.kind).missing.length; }), [0, 0, 0, 0], '예제 4종 필수 열 모두 찾음');
 var sn = files.map(function (f) { return C.normalize(C.aoaToRows(f.aoa), f.kind, C.mapColumns(f.aoa[0], f.kind).map); });
-eq(sn.slice(0, 4).map(function (n) { return n.period; }), [0, 1, 2, 3].map(function () { return { from: '2024-01', to: '2025-10' }; }), '예제 기간 2024-01~2025-10');
+eq(sn.slice(0, 3).map(function (n) { return n.period; }), [0, 1, 2].map(function () { return { from: '2024-01', to: '2025-10' }; }), '예제 기간 2024-01~2025-10(수입 · 수출 · 환급 — v2.0.0 오류 예제는 유니패스 형식으로)');
 eq([sn[0].skipped.length, sn[0].skipped[0].reason], [1, '합계·소계 줄'], '예제 수입: 합계 줄 1개를 건너뜀');
 var sis = C.importStats(sn[0].records, C.defaultRange(sn[0].period), 'hq');
 eq(sis.groups.reduce(function (t, g) { return t + g.goods; }, 0), sis.goods, '예제: 본부별 합 = 전체');
@@ -531,7 +525,7 @@ var ML = ES.mailDraft(S, 9, { top: TI }); eq(ML.subject, '(9월) 수출입 오�
 has(ML.body, '(오류점수) 2점 =>', '1) 줄은 인천'); has(ML.body, '수입(인천) : (신고건수) 600건, (오류건수) 1건, (오류점수) 2점, (오류비율) 0.3%', '수입 인천 줄'); has(ML.body, '울산캠퍼스 9월 수입오류 점수는 10.5점', '울산 줄'); has(ML.body, '과세가격원화총액', '항목'); has(ML.body, '수출신고후 7일이내', 'Next Step');
 var EB = ES.exportBook({ summary: S, rows: B.rows, decls: DC, notes: {} }); eq(EB.map(function (x) { return x.name; }), ['오류점수요약', '발생사유및정정내용', '분기', '항목별', '상세'], '엑셀 시트'); eq(EB[4].aoa.length, 5, '상세 줄');
 // 예제
-var SB = ES.sampleBooks().map(function (b) { return ES.readWorkbook(b.sheets, b.name); }); eq(SB.map(function (b) { return b.kind; }), ['수입', '수출'], '예제 2권'); var SS = ES.summarize(SB, ES.countsFromBooks(SB)); eq(SS.months, [7, 8, 9], '예제 3개월'); var SC = ES.compare(SB, SS); eq(SC.scoreDiffs.length, 2, '예제의 어긋난 달 인천·울산 2칸'); not(JSON.stringify(SB), '에이치디', '예제에 회사 이름 없음');
+var SB = ES.sampleBooks().map(function (b) { return ES.readWorkbook(b.sheets, b.name); }); eq(SB.map(function (b) { return b.kind; }), ['수입', '수출'], '예제 2권'); var SS = ES.summarize(SB, ES.countsFromBooks(SB)); eq(SS.months, [8, 9, 10], '예제 3개월(v2.0.0 8 · 9 · 10월)'); var SC = ES.compare(SB, SS); eq(SC.scoreDiffs.length, 2, '예제의 어긋난 달 인천·울산 2칸'); not(JSON.stringify(SB), '에이치디', '예제에 회사 이름 없음');
 
 /* ───────────── v1.4 워드(.docx) 내보내기 ───────────── */
 var v13 = passed + failed;
@@ -583,8 +577,8 @@ var v14 = passed + failed;
   eq(C.detectKind(['가', '나', '환급액'], '환급.xlsx').kind, null, 'v1.4.5 필수 열이 절반도 안 되면 결정적 열·이름이 있어도 정하지 않는다');
   // 예제 5종은 그대로(대시보드처럼 시트 이름을 붙여도)
   var files = C.sampleFiles();
-  eq(files.map(function (x) { return C.detectKind(x.aoa[0], x.name + ' 데이터').kind; }), ['import', 'export', 'refund', 'errors', 'ruling'], 'v1.4.5 예제 5종 판단 그대로');
-  eq(files.map(function (x) { return C.detectKind(x.aoa[0]).kind; }), ['import', 'export', 'refund', 'errors', 'ruling'], 'v1.4.5 예제 5종 — 이름 없이도 그대로');
+  eq(files.map(function (x) { return C.detectKind(x.aoa[0], x.name + ' 데이터').kind; }), ['import', 'export', 'refund', 'ruling'], 'v1.4.5 예제 4종 판단 그대로');
+  eq(files.map(function (x) { return C.detectKind(x.aoa[0]).kind; }), ['import', 'export', 'refund', 'ruling'], 'v1.4.5 예제 4종 — 이름 없이도 그대로');
   // 열 짝짓기 — 환급월 = 결정일자, 본부 = 제품그룹
   var m = C.mapColumns(head, 'refund');
   eq([m.map.date, m.map.hq, m.map.amount, m.missing], ['결정일자', '제품그룹', '환급액', []], 'v1.4.5 환급월=결정일자 · 본부=제품그룹 · 환급액');
@@ -853,7 +847,7 @@ var v150 = passed + failed;
   eq(C.rulingDefaultRange({ from: '2024-02', to: '2025-06' }), { from: '2025-01', to: '2025-06' }, 'v1.6.0 자료가 모두 2026년 이전이면 다른 탭과 같은 규칙');
   eq(C.RULING_BASE_FROM, '2026-01', 'v1.6.0 기본 시작 상수');
   // 기존 예제(금액 열 없음) 그대로
-  var old = C.sampleFiles()[4], o = load(old), so = C.rulingStats(o.n.records, { from: '2025-01', to: '2025-12' }, 'product');
+  var old = C.sampleFiles()[3], o = load(old), so = C.rulingStats(o.n.records, { from: '2025-01', to: '2025-12' }, 'product');
   eq([so.amounts, so.impact, so.progress, so.has.claimDate], [false, null, null, false], 'v1.6.0 기존 예제 — 금액 칸은 「—」');
   eq(Object.keys(o.m.map).sort(), ['broker', 'date', 'docNo', 'goods', 'hs', 'item', 'prevRate', 'product', 'rate', 'seq'], 'v1.6.0 기존 예제 열 짝짓기 그대로');
   // 엑셀 내보내기
@@ -1165,6 +1159,7 @@ function finish() {
 var v191 = passed + failed; v1100(); console.log('v1.10.0 ' + (passed + failed - v191) + '개 검사');
 var v1103 = passed + failed; v1110(); console.log('v1.11.0 ' + (passed + failed - v1103) + '개 검사');
 var v1110c = passed + failed; v1120(); console.log('v1.12.0 ' + (passed + failed - v1110c) + '개 검사');
+var v1120c = passed + failed; v200(); console.log('v2.0.0 ' + (passed + failed - v1120c) + '개 검사');
 console.log('v1.9.0 ' + (v190 - v180) + '개 검사');
 console.log('v1.8.0 ' + (v180 - v170) + '개 검사');
 console.log('v1.7.0 ' + (v170 - v160) + '개 검사');
@@ -1368,7 +1363,7 @@ function v1110() {
     { declNo: '2235626000888X', month: '2025-10', hq: '건기본부', plant: '1000', payment: 'TT' }      // 다른 해
   ], 수입: [{ declNo: '2235626B17742M', month: '2026-09', hq: '엔진본부', plant: '1130', payment: 'GN' }] };
   var es = ES.erpSummary(erp, 2026);
-  eq([es.counts.수출[10], es.countsNoGN.수출[10], es.byHq.수출[10], es.counts.수입[9], es.index['2235626B17742M'].hq], [4, 2, { 건기본부: 1, 부품센터: 2, '본부 미분류': 1 }, 1, '엔진본부'], 'v1.11.0 ERP 분모 — 신고번호 고유 개수(같은 신고 둘째 줄 한 번) · GN 포함 · 다른 해 제외 · 본부별');
+  eq([es.counts.수출[10], es.countsNoGN.수출[10], es.byHq.수출[10], es.counts.수입[9], es.index['2235626B17742M'].hq], [4, 2, { 건기본부: 1, 부품센터: 2, 'Plant 없음': 1 }, 1, '엔진본부'], 'v1.11.0 ERP 분모 — 신고번호 고유 개수(같은 신고 둘째 줄 한 번) · GN 포함 · 다른 해 제외 · 본부별(v2.0.0 Plant 빈 건 = Plant 없음)');
   var it = { name: 'e', file: 'e', headers: C3.uniqueHeaders(C3.sampleImportErp().aoa[0]), aoa: C3.sampleImportErp().aoa, offset: 0, override: {} };
   var setOn = C3.exportSettings({ excludeGN: true }), setOff = C3.exportSettings(null); setOff.excludeGN = false;
   var withGN = C3.mergeFiles('import', [it], setOff).records, noGN = C3.mergeFiles('import', [it], setOn).records;
@@ -1376,15 +1371,16 @@ function v1110() {
   var ej = fsx.readFileSync(__dirname + '/../js/errors.js', 'utf8');
   ok(/o\.excludeGN = false/.test(ej) && /b2611-07\.dash\.settings/.test(ej), 'v1.11.0 오류점수 화면은 실적 탭 설정을 읽어도 GN 제외는 늘 끔(분모 고정)');
   // [4] 본부 — 인천은 ERP 조인(월 무관), 못 찾으면 본부 미분류, 울산은 전량 건기본부
-  var H = ES.hqBreakdown(S0, [ex], es), h10 = H.kinds.수출[10], by = {}; h10.forEach(function (x) { by[x.hq] = x; });
-  eq([by['건기본부'].err, by['건기본부'].score, by['건기본부'].decl, by['부품센터'].err, by['부품센터'].score, by['부품센터'].decl, by['본부 미분류'].decl], [4, 45, 1 + 755, 2, 24, 2, 1], 'v1.11.0 본부 — 인천 22371 → 건기(16) · 42158 → 부품센터(24 + 0) · 울산 3건(29) → 건기 · 분모 건기 = ERP 건기 + 울산');
+  var H = ES.hqBreakdown(S0, [ex], es), by = {}; H.kinds.수출[10].forEach(function (x) { by[x.region + '|' + x.hq] = x; });
+  eq([by['인천|건기본부'].err, by['인천|건기본부'].score, by['인천|건기본부'].decl, by['인천|부품센터'].err, by['인천|부품센터'].score, by['인천|부품센터'].decl, by['인천|Plant 없음'].decl, by['인천|Plant 없음'].err, by['울산|건기본부'].err, by['울산|건기본부'].score, by['울산|건기본부'].decl],
+    [1, 16, 1, 2, 24, 2, 1, 0, 3, 29, 755], 'v1.11.0 → v2.0.0 본부 — 지역별 줄(인천 건기 16 · 부품센터 24 + 0 · Plant 없음 분모만 / 울산 건기본부 29점 · 분모 755)');
   eq(H.ulsanNote, '울산은 세부 자료가 없어 전량 건기본부로 집계', 'v1.11.0 울산 표기 문구');
-  var H2 = ES.hqBreakdown(S0, [ex], ES.erpSummary({ 수출: [] }, 2026)), b2 = {}; H2.kinds.수출[10].forEach(function (x) { b2[x.hq] = x; });
-  eq([b2['본부 미분류'].err, b2['본부 미분류'].score, H2.notFound.length, H2.uncovered], [3, 40, 0, [{ kind: '수출', month: 10 }]], 'v1.11.0 ERP 실적이 없는 달 — 인천 건은 본부 미분류(못 찾음 경고와 구분)');
-  var es3 = ES.erpSummary({ 수출: erp.수출.filter(function (r) { return !/813391/.test(r.declNo); }) }, 2026), H3 = ES.hqBreakdown(S0, [ex], es3), b3 = {}; H3.kinds.수출[10].forEach(function (x) { b3[x.hq] = x; });
-  eq([b3['본부 미분류'].err, b3['본부 미분류'].score, H3.notFound], [1, 16, [{ kind: '수출', month: 10, declNo: '2237126813391X' }]], 'v1.11.0 ERP 가 있는 달에 신고번호를 못 찾은 인천 건은 본부 미분류로 남기고 알림(버리지 않음)');
-  var HU = ES.hqBreakdown(SU, [exU], es), bu = {}; HU.kinds.수출[10].forEach(function (x) { bu[x.hq] = x; });
-  eq([bu['지역 미분류'].err, bu['지역 미분류'].score, bu['지역 미분류'].decl], [1, 5, null], 'v1.11.0 지역 미분류 건은 본부에서도 따로');
+  var H2 = ES.hqBreakdown(S0, [ex], ES.erpSummary({ 수출: [] }, 2026)), b2 = {}; H2.kinds.수출[10].forEach(function (x) { b2[x.region + '|' + x.hq] = x; });
+  eq([b2['인천|ERP 미매칭'].err, b2['인천|ERP 미매칭'].score, b2['인천|ERP 미매칭'].decl, b2['인천|ERP 미매칭'].rate, H2.notFound.length, H2.uncovered], [3, 40, null, null, 0, [{ kind: '수출', month: 10 }]], 'v2.0.0 ERP 실적이 없는 달 — 인천 건은 ERP 미매칭(분자에만 · 비율 없음, 못 찾음 목록과 구분)');
+  var es3 = ES.erpSummary({ 수출: erp.수출.filter(function (r) { return !/813391/.test(r.declNo); }) }, 2026), H3 = ES.hqBreakdown(S0, [ex], es3), b3 = {}; H3.kinds.수출[10].forEach(function (x) { b3[x.region + '|' + x.hq] = x; });
+  eq([b3['인천|ERP 미매칭'].err, b3['인천|ERP 미매칭'].score, b3['인천|ERP 미매칭'].decl, H3.notFound], [1, 16, null, [{ kind: '수출', month: 10, declNo: '2237126813391X' }]], 'v2.0.0 ERP 가 있는 달에 신고번호를 못 찾은 인천 건 = ERP 미매칭(분모 없음) · 목록으로 알림');
+  var HU = ES.hqBreakdown(SU, [exU], es), bu = HU.kinds.수출[10].filter(function (x) { return x.region === '지역 미분류'; })[0];
+  eq([bu.err, bu.score, bu.decl, bu.hq], [1, 5, null, null], 'v1.11.0 지역 미분류 건은 본부에서도 따로');
   // [6] 검증
   var ck = ES.regionChecks(S0, [ex], es), f = function (src, item) { return ck.filter(function (c) { return c.source === src && c.item === item; })[0]; };
   eq([f('계산', '신고건수').ok, f('계산', '신고건수').sum, f('계산', '오류점수').ok, f('요약 시트', '신고건수').sum, f('요약 시트', '신고건수').ok], [true, 2234, true, 2234, true], 'v1.11.0 인천 + 울산 = 현황목록(계산 · 요약 시트)');
@@ -1448,4 +1444,62 @@ function v1120() {
   ok(/id="e-lxlsx"/.test(eh) && /id="e-lprog"/.test(eh) && /id="e-lscope"/.test(eh) && /list="e-blames"|e-blames/.test(ej), 'v1.12.0 화면 — 진행 상황 · 엑셀 내보내기(고른 달 · 전체 월) · 귀책 고르기');
   var book = ES.exportBook({ summary: ES.summarize(books, {}, {}), rows: [].concat(bi.rows, bx.rows), decls: decls, notes: notes, ledger: L2 });
   eq(book.filter(function (x) { return x.name === '발생사유및정정내용'; })[0].aoa.length, 5, 'v1.12.0 전체 엑셀의 대장 시트도 인천 · 0점 포함');
+}
+// ---------- v2.0.0 오류점수 — 유니패스 원본만 · 계산은 errscore.js · 요약 저장 · 대시보드는 읽기만 ----------
+function v200() {
+  var ES = require('../js/errscore.js'), CU = require('../js/customs.js'), FRr = require('../js/filerules.js');
+  var SH = ['No', '귀책사유자부호', '귀책사유자상호', '관할지세관부호', '관할지세관', '총신고건', '오류점수', '비율'];
+  var DH = ['No', '귀책사유자부호', '신고번호', '란번호', '정정일자 및 시간', '수리구분', '정정구분', '항목코드', '항목명', '오류점수', '변경 후 오류점수', '정정전내역', '정정후내역'];
+  function dr(no, decl, score) { return [no, '(가상)', decl, 0, '2026-09-10  10:00:00', '수리후', '정정', 'A1', '(가상)', score, score, '', '']; }
+  // [1] errors 종류 폐지 — 사람이 집계한 표 · 유니패스 현황목록 모두 대시보드 종류로 걸리지 않음
+  eq([CU.detectKind(SH).kind, CU.KINDS], [null, ['import', 'export', 'refund', 'ruling']], 'v2.0.0 유니패스 현황목록은 대시보드 종류가 아님');
+  eq([FRr.isErrorScoreFile('집계(가상).xlsx', ['년월', '구분', '본부', '신고건수', '오류건수', '오류점수'], ['Sheet1']), FRr.isErrorScoreFile('x.xlsx', SH, []), FRr.isErrorScoreFile('x.xlsx', ['a'], ['귀책사유자별오류상세목록_9월']), FRr.isErrorScoreFile('2026-10_수입실적.xlsx', ['Acceptance date', 'Plant'], ['Sheet1'])], [true, true, true, false], 'v2.0.0 사람이 만든 오류 집계표(관세환급으로 잘못 걸릴 뻔함) · 유니패스 파일은 오류점수 파일로 먼저 거름');
+  ok(/FR\.isErrorScoreFile\(f\.name, best\.s\.aoa\[0\], f\.wb\.SheetNames\)/.test(fsx.readFileSync(__dirname + '/../js/dash.js', 'utf8')), 'v2.0.0 대시보드 올리기에서 오류점수 파일을 먼저 거름');
+  eq([FRr.describe('2026_수입오류.xlsx', null).dataset, FRr.describe('2026-10_수입오류_현황목록.xlsx', null).dataset], [null, null], 'v2.0.0 「오류」 파일은 대시보드 자료가 아님(오류점수 화면으로)');
+  // [3-1] 열쇠 = 연도 · 월 · 수입·수출 · 현황·상세 — 같은 이름 시트가 두 파일에 있어도 섞이지 않음 · A1 공백 무시
+  function book(title, total, score, rows, name) {
+    return ES.readWorkbook([{ name: '요약', aoa: [[title]] }, { name: '귀책사유자별오류현황목록_9월 ', aoa: [SH, [1, '(가상)', '(가상)', '012', '세관', total, score, 0]] }, { name: '귀책사유자별오류상세목록_9월', aoa: [DH].concat(rows) }], name);
+  }
+  var bi = book('▣ 2026년 수입오류점수 현황(가상)', 1764, 38, [dr(1, '2235626000001M', 1), dr(2, '4390826000002M', 37)], '2026년수입(가상).xlsx');
+  var bx = book('▣2026년 수출오류점수 현황(가상)', 2227, 124, [dr(1, '4215826000001X', 70), dr(2, '4390826000003X', 54)], '2026년수출(가상).xlsx');
+  eq([bi.kind, bx.kind, bi.year, bx.year], ['수입', '수출', 2026, 2026], 'v2.0.0 수입 · 수출 · 연도 = 요약 A1(공백 위치가 달라도)');
+  var cnt = { 수입: { 9: 1075 }, 수출: { 9: 1413 } };
+  function sumOf(books) { ES.applyRule(books, null); var S = ES.summarize(books, cnt, {}); return ES.buildSummary(S, ES.hqBreakdown(S, books, null), books, { now: 'T' }); }
+  var both = sumOf([bi, bx]), rev = sumOf([bx, bi]), onlyI = sumOf([bi]);
+  eq(JSON.stringify(both), JSON.stringify(rev), 'v2.0.0 두 파일을 어느 순서로 올려도 같은 요약');
+  eq(JSON.stringify(onlyI.rows), JSON.stringify(both.rows.filter(function (r) { return r.kind === '수입'; })), 'v2.0.0 따로 올린 수입 = 함께 올린 수입(수출 자료가 섞이지 않음)');
+  var g = function (k, rg, h) { return both.rows.filter(function (r) { return r.kind === k && r.region === rg && r.hq === (h || null); })[0]; };
+  eq([g('수입', '종합').score, g('수입', '종합').decl, g('수출', '종합').score, g('수입', '인천').decl, g('수입', '울산').decl, g('수입', '인천').score + g('수입', '울산').score], [38, 1764, 124, 1075, 689, 38], 'v2.0.0 수입 9월 38점(124점이 아님) · 소계 = 현황목록 · 인천 + 울산 = 소계');
+  // [3-2] 요약 형식 — 원본 행 없이 요약만
+  eq([both.basis, both.updatedAt, Object.keys(both.rows[0]), both.files.map(function (f) { return [f.kind, f.year, f.months]; })], ['GN 포함 · 수입 수리일자 · 수출 신고일자', 'T', ['ym', 'kind', 'region', 'hq', 'decl', 'err', 'errScored', 'score'], [['수입', 2026, [9]], ['수출', 2026, [9]]]], 'v2.0.0 요약 { updatedAt, basis, rows, files }');
+  ok(JSON.stringify(both).indexOf('2235626000001M') < 0 && both.rows.every(function (r) { return r.ym === '2026-09'; }), 'v2.0.0 요약에 원본 행(신고번호) 없음 · ym = 연도-월');
+  eq(ES.SUMMARY_KEY, 'b2611-07.err.summary', 'v2.0.0 요약 저장 열쇠');
+  // [2] 비율 = 오류점수 ÷ 총신고건 — 대시보드는 요약을 더하기만
+  var mo = ES.summaryMonthly(both)[0];
+  eq([mo.ym, mo.total.decl, mo.total.score, mo.total.err, mo.total.rate, mo.수출.rate], ['2026-09', 3991, 162, 4, 4.06, 5.57], 'v2.0.0 종합 3,991건 · 162점 · 4.06% (= 오류점수 ÷ 신고건수, 오류건수 ÷ 신고건수 아님)');
+  eq(ES.summaryMonthly(onlyI)[0].total.partial, true, 'v2.0.0 한쪽 자료만 있으면 표시');
+  // [6] Plant 없음(분모만) · ERP 미매칭(분자만) — 한 줄에 합치지 않음
+  var erp = ES.erpSummary({ 수출: [{ declNo: '4215826000009X', month: '2026-09', hq: '본부 미분류', plant: '' }, { declNo: '4215826000008X', month: '2026-09', hq: '부품센터', plant: '6000' }] }, 2026);
+  ES.applyRule([bx], null); var Sx = ES.summarize([bx], cnt, {}), Hx = ES.hqBreakdown(Sx, [bx], erp), sx = ES.buildSummary(Sx, Hx, [bx], { now: 'T' });
+  var np = sx.rows.filter(function (r) { return r.hq === 'Plant 없음'; })[0], nm = sx.rows.filter(function (r) { return r.hq === 'ERP 미매칭'; })[0];
+  eq([np.decl, np.score, nm.decl, nm.score, Hx.notFound.map(function (x) { return x.declNo; })], [1, 0, null, 70, ['4215826000001X']], 'v2.0.0 Plant 없음(분모 1 · 점수 0) · ERP 미매칭(분모 없음 · 70점 · 목록) — 466% 같은 비율이 나오지 않음');
+  var lw = ES.ledgerRows(ES.byDecl(bx.rows), {}, erp, { month: 9 }).filter(function (r) { return r.declNo === '4215826000001X'; })[0];
+  eq([lw.div, lw.divWhy, ES.ledgerAoa([lw])[1][2]], ['', 'ERP 미매칭', 'ERP 미매칭'], 'v2.0.0 관리대장 사업부도 ERP 미매칭으로 표시');
+  // [4] · [5] 화면 — 대시보드는 요약을 읽기만, 유니패스 파일은 오류점수 화면으로
+  var dj = fsx.readFileSync(__dirname + '/../js/dash.js', 'utf8'), ej = fsx.readFileSync(__dirname + '/../js/errors.js', 'utf8'), dh = fsx.readFileSync(__dirname + '/../dashboard.html', 'utf8');
+  ok(dj.indexOf('C.errorStats') < 0 && dj.indexOf("filtered('errors')") < 0 && /b2611-07\.err\.summary/.test(dj) && /ES\.summaryMonthly\(sum\)/.test(dj), 'v2.0.0 대시보드 오류점수 탭은 요약을 읽기만(계산 없음)');
+  ok(/계산: 오류점수 ÷ 신고건수/.test(dj) && !/오류건수 ÷ 신고건수/.test(dj), 'v2.0.0 대시보드 문구 = 오류점수 ÷ 신고건수');
+  ok(/오류점수 화면에서 유니패스 파일을 먼저 올려 주세요/.test(dj) && /유니패스 오류점수 파일입니다\. 오류점수 화면으로 이동할까요\?/.test(dj) && /href="errors\.html"/.test(dj), 'v2.0.0 요약 없음 안내 · 유니패스 파일 → 오류점수 화면 단추');
+  ok(dh.indexOf('<script src="js/errscore.js">') > dh.indexOf('<script src="js/filerules.js">'), 'v2.0.0 대시보드가 errscore.js 를 읽음(요약 읽기용)');
+  ok(/saveSummary\(\)/.test(ej) && /E\.SUMMARY_KEY/.test(ej) && ej.indexOf("put('요약 시트'") < 0 && ej.indexOf("put('직접 입력'") < 0, 'v2.0.0 오류점수 화면 — 요약 저장 · 인천 분모는 ERP 만(요약 시트 · 직접 입력 안 받음)');
+  // [7] 예제 — 유니패스 형식 · 실제 부호 체계
+  var SBk = ES.sampleBooks(), b0 = SBk[0];
+  eq([b0.sheets[0].name, b0.sheets[0].aoa[0][0], SBk[1].sheets[0].aoa[0][0].slice(0, 6), b0.sheets.map(function (x) { return x.name; }).indexOf('귀책사유자별오류현황목록_10월') > 0, b0.sheets.map(function (x) { return x.name; }).indexOf('귀책사유자별오류상세목록_10월') > 0], ['요약', '▣ 2026년 수입오류점수 현황(예제 · 가상)', '▣2026년', true, true], 'v2.0.0 예제 = 요약(A1 제목) · 현황목록_10월 · 상세목록_10월');
+  var rb = SBk.map(function (b) { return ES.readWorkbook(b.sheets, b.name); }), codes = {};
+  rb.forEach(function (b) { b.rows.forEach(function (r) { codes[r.broker] = r.campus; }); });
+  eq(Object.keys(codes).sort().map(function (c) { return c + codes[c]; }), ['15553인천', '22356인천', '22371인천', '42158인천', '43908울산', '44788울산', '44924울산'].filter(function (x) { return Object.keys(codes).indexOf(x.slice(0, 5)) >= 0; }), 'v2.0.0 예제 신고번호 앞 5자리는 실제 부호 체계(인천 · 울산 모두)');
+  ok(Object.keys(codes).length >= 5 && rb.every(function (b) { return b.rows.every(function (r) { return r.campus === '인천' || r.campus === '울산'; }); }), 'v2.0.0 예제에 지역 미분류 없음 · 부호 5개 이상');
+  var wb = XLSX.read(fsx.readFileSync(px.join(__dirname, '..', 'samples', b0.name)), { type: 'buffer' });
+  eq([wb.SheetNames, XLSX.utils.sheet_to_json(wb.Sheets['요약'], { header: 1, raw: true, defval: '' })[0][0]], [b0.sheets.map(function (x) { return x.name; }), b0.sheets[0].aoa[0][0]], 'v2.0.0 samples/ 유니패스 예제 파일 = 예제 정의');
+  ok(!fsx.existsSync(px.join(__dirname, '..', 'samples', '예제_수출입오류점수.xlsx')) && /예제_유니패스수입오류점수\(가상\)\.xlsx/.test(dh), 'v2.0.0 집계표 형식 예제를 없애고 유니패스 예제로 안내');
 }

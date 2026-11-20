@@ -72,7 +72,7 @@
       <tr><td>1. 수출입통관 실적</td><td>수입: 물자대·관세·관세부담율 / 수출: 전년 대비 증감 — 본부·국가·업체·HS 4단위</td><td>ERP 엑셀 · 매일</td><td>매월 1일 전월 분석 뒤 메일 공유 → 매일 대시보드</td><td><a href="#d-upload" data-go-tab="trade">「수입 실적」 탭</a> · <a href="#d-upload" data-go-tab="export">「수출 실적」 탭</a></td></tr>
       <tr><td>2. FTA 수출입 실적</td><td>FTA 체결국 수입·수출 신고 건의 관세 절감 실적</td><td>ERP 엑셀 · 매일</td><td>→ 매일 대시보드, 메일로 공유할 화면</td><td><a href="#d-upload" data-go-tab="fta">「FTA」 탭</a></td></tr>
       <tr><td>3. 관세환급 실적</td><td>본부별 매월 환급 실적</td><td>환급프로그램 엑셀 · 매월</td><td>→ 월별 표</td><td><a href="#d-upload" data-go-tab="refund">「관세환급」 탭</a></td></tr>
-      <tr><td>4. 수출입 오류점수</td><td>신고·오류 건수, 오류점수, 비율</td><td>관세청 엑셀 · 매월</td><td>→ 월별·구분별</td><td><a href="#d-upload" data-go-tab="errors">「오류점수」 탭</a> · <a href="errors.html">v1.3 오류점수 분석(인천·울산)</a></td></tr>
+      <tr><td>4. 수출입 오류점수</td><td>총신고건 · 오류점수 · 비율(= 오류점수 ÷ 신고건수), 인천 · 울산 · 본부, 관리대장</td><td>관세청 유니패스 현황목록 · 상세목록 · 매월</td><td><a href="errors.html">오류점수 화면</a>에서 올리고 계산 → 대시보드는 그 요약을 읽기만</td><td><a href="errors.html">「오류점수」 화면</a> · <a href="#d-upload" data-go-tab="errors">대시보드 「오류점수」 탭(요약)</a></td></tr>
       <tr><td>5. 물품설명서 작성</td><td>고세율 수입부품의 저세율 품목분류 질의용 물품설명서, 결정문 접수 때 고정비 절감 모니터링</td><td>양식 · 결정문 현황 엑셀 · 수시</td><td>엑셀 프롬프트 양식으로 AI 질문 뒤 복사·붙여넣기 → 자동 작성</td><td><a href="index.html">「물품설명서」 화면</a> · <a href="#d-upload" data-go-tab="ruling">「품목분류 결정문」 탭</a></td></tr>
       <tr><td>6. 수입보세화물 Tracking</td><td>근무시간 외 BL 의 입항보고·수입신고 단계를 관세사·요청자에게 알림</td><td>유니패스 · ERP · 비정기</td><td>포워더가 입항 예정 공유 → 단계별 메일 안내</td><td><a href="tracking.html">「화물 추적」 화면</a></td></tr>
       <tr><td>7. 수출입통관 Archive</td><td>세관 제출 사유서, ERP 통합 업무 매뉴얼 보관·공유</td><td>문서 · 비정기</td><td>요청 때 메일 → 목록 링크 공유</td><td><a href="library.html">「자료 목록」 화면</a></td></tr>
@@ -82,7 +82,7 @@
 
 <section id="d-upload" class="card">
   <h2 style="margin-top:0">1. 엑셀을 올리세요</h2>
-  <p class="sub">수입·수출 실적(ERP), 관세환급(환급프로그램), 오류점수(관세청), 품목분류 결정문 현황 엑셀을 한꺼번에 올려도 됩니다. 파일마다 종류를 알아봅니다.</p>
+  <p class="sub">수입·수출 실적(ERP), 관세환급(환급프로그램), 품목분류 결정문 현황 엑셀을 한꺼번에 올려도 됩니다. 파일마다 종류를 알아봅니다. 오류점수(관세청 유니패스)는 <a href="errors.html">오류점수 화면</a>에서 올립니다 — 대시보드 「오류점수」 탭은 그 결과를 읽어 보입니다.</p>
   <label class="drop" id="d-drop">
     <input type="file" id="d-file" accept=".xlsx,.xls,.csv" multiple>
     <b>엑셀 파일을 끌어다 놓거나 눌러서 고르세요 (여러 개 가능)</b>
@@ -94,9 +94,9 @@
   </div>
   <p class="sub" style="margin-top:10px">예제는 가짜 업체·본부의 2024-01~2025-10 데이터입니다. 예제 데이터는 실제 사내 데이터가 아닙니다.
     </p>
-  <div class="note" id="dash-samples" style="margin-top:12px"><b>대시보드 예제 엑셀 5종</b> — 수입통관 · 수출통관 · 관세환급 · 오류점수 · 품목분류 결정문(가짜 데이터)
+  <div class="note" id="dash-samples" style="margin-top:12px"><b>예제 엑셀 5종</b> — 수입통관 · 수출통관 · 관세환급 · 품목분류 결정문(대시보드) + 유니패스 오류점수(오류점수 화면에서 올림, 가짜 데이터)
     <div class="btnrow" style="margin:8px 0 6px"><button class="btn primary" type="button" data-ex5>예제 엑셀 5개 모두 내려받기</button><a class="btn" href="samples/예제_엑셀_5종.zip" download>ZIP 한 파일로 받기</a></div>
-    <span class="sub">하나씩 받기 — <a class="ex-file" href="samples/예제_수입통관실적_ERP.xlsx" download>수입통관 실적</a> · <a class="ex-file" href="samples/예제_수출통관실적_ERP.xlsx" download>수출통관 실적</a> · <a class="ex-file" href="samples/예제_관세환급실적.xlsx" download>관세환급 실적</a> · <a class="ex-file" href="samples/예제_수출입오류점수.xlsx" download>수출입 오류점수</a> · <a class="ex-file" href="samples/예제_품목분류결정문현황.xlsx" download>품목분류 결정문 현황</a></span></div>
+    <span class="sub">하나씩 받기 — <a class="ex-file" href="samples/예제_수입통관실적_ERP.xlsx" download>수입통관 실적</a> · <a class="ex-file" href="samples/예제_수출통관실적_ERP.xlsx" download>수출통관 실적</a> · <a class="ex-file" href="samples/예제_관세환급실적.xlsx" download>관세환급 실적</a> · <a class="ex-file" href="samples/예제_유니패스수입오류점수(가상).xlsx" download>유니패스 오류점수(수입)</a> · <a class="ex-file" href="samples/예제_품목분류결정문현황.xlsx" download>품목분류 결정문 현황</a></span></div>
   <label class="chk"><input type="checkbox" id="d-remember" checked> 올린 데이터를 이 브라우저에 기억하기(다음에 열 때 다시 올리지 않아도 됩니다)</label>
   <details class="settings" id="d-settings">
     <summary>설정 — Plant → 본부 표(수입 · 수출) · 결제방법 GN(무환) 제외(수입 · 수출)</summary>
@@ -206,6 +206,7 @@
 <script src="js/customs.js"></script>
 <script src="js/filerules.js"></script>
 <script src="js/tariff.js"></script>
+<script src="js/errscore.js"></script>
 <script src="js/dash.js"></script>
 <script>
   // 7항목 표의 탭 링크 — 올린 자료가 있을 때 그 탭을 연다

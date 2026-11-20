@@ -87,18 +87,10 @@
         { key: 'amount', label: '환급액', type: 'num', req: true, aliases: ['환급금액', '환급금', '관세환급액', '환급세액', '결정금액'] },
         { key: 'count', label: '건수', type: 'num', aliases: ['환급건수', '신청건수', '결정건수'] }
       ]
-    },
-    errors: {
-      label: '수출입 오류점수', source: '관세청 엑셀', cycle: '매월', hint: /오류|error|성실/i, decisive: ['오류점수', '오류건수'],
-      fields: [
-        { key: 'date', label: '기간', type: 'date', req: true, aliases: ['년월', '월', '대상월', '신고월', '평가월', '일자'] },
-        { key: 'kind', label: '구분', type: 'text', aliases: ['수출입구분', '신고구분', '수출입', '업무구분'] },
-        { key: 'hq', label: '본부', type: 'text', aliases: HQ.aliases },
-        { key: 'decl', label: '신고건수', type: 'num', req: true, aliases: ['신고수', '전체건수', '총신고건수', '신고건'] },
-        { key: 'err', label: '오류건수', type: 'num', req: true, aliases: ['오류수', '오류신고건수', '정정건수', '오류건'] },
-        { key: 'score', label: '오류점수', type: 'num', req: true, aliases: ['점수', '오류점수합계', '감점', '벌점'] }
-      ]
     }
+    // (v2.0.0) 「errors」(사람이 집계한 기간 · 구분 · 본부 · 신고건수 · 오류건수 · 오류점수 표) 종류를 없앴다.
+    //   오류점수는 관세청 유니패스 원본(현황목록 · 상세목록)만 입력으로 받고, 계산은 errscore.js 한 곳에서 한다(오류점수 화면).
+    //   대시보드는 그 요약(localStorage b2611-07.err.summary)을 읽기만 한다. 사람이 만든 집계표는 어떤 형태로도 입력으로 받지 않는다.
   };
   // (v1.2) 품목분류 사전회신 결정문 현황 — 담당자가 관리하는 엑셀(연번·완제품·품명·결정세번·결정문번호·시행일자·관세율·관세사).
   // 종전세율·연간 수입액 열이 함께 있을 때만 절감 추정을 계산한다. 관세율은 올린 파일의 값을 그대로 보인다(물품설명서 초안에는 여전히 싣지 않는다).
@@ -146,7 +138,7 @@
   var DASH_BASE_FROM = '2026-01';
   // (v1.8.0) 집계표 시트 이름(「종합」 · 「10월 소계」 …) — 여러 시트를 합칠 때 건너뛴다
   var SUMMARY_SHEET_RE = /종합|소계|합계|총계|집계|요약|summary|total|pivot/i;
-  var KINDS = ['import', 'export', 'refund', 'errors', 'ruling'];
+  var KINDS = ['import', 'export', 'refund', 'ruling'];             // (v2.0.0) errors 폐지
   function fieldsOf(kind) { return DATASETS[kind].fields; }
   function hasField(kind, key) { return fieldsOf(kind).some(function (f) { return f.key === key; }); }
 
@@ -908,16 +900,6 @@
       last: filled.length ? filled[filled.length - 1] : null, monthly: monthly, pivot: pivot
     };
   }
-  // 오류: 신고건수 · 오류건수 · 오류 비율(=오류건수 ÷ 신고건수) · 오류점수
-  function errorStats(recs, range, by) {
-    var cur = inRange(recs, range), decl = sum(cur, 'decl'), err = sum(cur, 'err');
-    function row(o) { return { decl: o.decl, err: o.err, rate: ratio(o.err, o.decl), score: o.score }; }
-    return {
-      range: range, n: cur.length, decl: decl, err: err, rate: ratio(err, decl), score: sum(cur, 'score'),
-      groups: group(cur, by || 'kind', ['decl', 'err', 'score']).map(function (g) { var o = row(g.sums); o.key = g.key; o.n = g.n; return o; }),
-      monthly: byMonth(cur, monthsBetween(range.from, range.to), ['decl', 'err', 'score']).map(function (m) { var o = row(m); o.month = m.month; return o; })
-    };
-  }
   // (v1.2) 결정문: 건수 · 관세율 0 결정 건수와 비율 · 종전보다 낮아진 건 · 절감 추정(연간 수입액 × (종전세율 − 결정세율), 세 값이 다 있을 때만)
   // · 묶음별(완제품·관세사·HS 4단위) · 월별 시행 건수 · 세율별 분포 · 목록(최근 시행 순)
   // (v1.6.0) 고정비 절감 금액 — 항목마다 기간을 거는 날짜가 다르다(RULING_BASIS).
@@ -1159,11 +1141,6 @@
       out.push({ name: '환급_본부월', aoa: [['본부'].concat(r.months.map(monthLabel), ['합계', cntHead])].concat(r.pivot.map(function (p) { return [p.hq].concat(p.months.map(function (v) { return v == null ? '' : v; }), [f(p, 'total'), f(p, 'count')]); }),
         [['합계'].concat(r.monthly.map(function (m) { return m.amount == null ? '' : m.amount; }), [f(r, 'amount'), f(r, 'count')])]) });
     }
-    if (d.errors) {
-      var er = errorStats(filt('errors'), range, 'kind');
-      out.push({ name: '오류_월', aoa: [['월', '신고건수', '오류건수', '오류 비율(%)', '오류점수']].concat(er.monthly.map(function (m) { return [monthLabel(m.month), f(m, 'decl'), f(m, 'err'), pct(m.rate), f(m, 'score')]; }), [['합계', f(er, 'decl'), f(er, 'err'), pct(er.rate), f(er, 'score')]]) });
-      out.push({ name: '오류_구분', aoa: [['구분', '신고건수', '오류건수', '오류 비율(%)', '오류점수']].concat(er.groups.map(function (g) { return [g.key, f(g, 'decl'), f(g, 'err'), pct(g.rate), f(g, 'score')]; })) });
-    }
     if (d.ruling) {
       // (v1.6.0) 결정문은 자기 기간(ctx.rulingRange). 금액 열이 있을 때만 금액 칸 · 연도별 · 진행상태 · 세율 인하 시트를 더한다.
       var rr = ctx.rulingRange || range, rl = rulingStats(filt('ruling'), rr, 'product'), am = rl.amounts;
@@ -1294,6 +1271,7 @@
     });
     var ref = [['환급년월', '본부', '환급금액', '환급건수']];
     months.forEach(function (m) { S_HQ.forEach(function (h, hi) { ref.push([m, h, r100((20 + R() * 80) * 1e6 / (hi + 1)), 5 + Math.floor(R() * 30)]); }); });
+    // (v2.0.0) 오류점수 예제는 유니패스 형식(errscore.js sampleBooks)으로 옮겼다. 뒤 예제(결정문)의 숫자가 바뀌지 않게 난수는 그대로 뽑는다.
     var err = [['년월', '수출입구분', '신고건수', '오류건수', '오류점수']];
     months.forEach(function (m) {
       ['수입', '수출'].forEach(function (k) {
@@ -1315,7 +1293,6 @@
       { name: '예제_수입통관실적_ERP.xlsx', kind: 'import', aoa: imp },
       { name: '예제_수출통관실적_ERP.xlsx', kind: 'export', aoa: exp },
       { name: '예제_관세환급실적.xlsx', kind: 'refund', aoa: ref },
-      { name: '예제_수출입오류점수.xlsx', kind: 'errors', aoa: err },
       { name: '예제_품목분류결정문현황.xlsx', kind: 'ruling', aoa: rul }
     ];
   }
@@ -1575,7 +1552,7 @@
     importStats: importStats, importReport: importReport, importBasis: importBasis, DECL_TYPES: DECL_TYPES, PLANT_HQ_ALWAYS: PLANT_HQ_ALWAYS, sampleImportErp: sampleImportErp, exportStats: exportStats, exportReport: exportReport, tradeTotal: tradeTotal, countDecl: countDecl, declNoOf: declNoOf, plantValue: plantValue,
     exportSettings: exportSettings, exportBasis: exportBasis, uniqueHeaders: uniqueHeaders, EXPORT_PLANT_HQ: EXPORT_PLANT_HQ, HQ_UNCLASSIFIED: HQ_UNCLASSIFIED, EXPORT_EXCLUDE_PAYMENT: EXPORT_EXCLUDE_PAYMENT,
     sampleExportErp: sampleExportErp, ftaStats: ftaStats,
-    pickSheets: pickSheets, sampleExportRaw: sampleExportRaw, sampleImportGN: sampleImportGN, DASH_BASE_FROM: DASH_BASE_FROM, SUMMARY_SHEET_RE: SUMMARY_SHEET_RE, refundStats: refundStats, refundCountBasis: refundCountBasis, errorStats: errorStats,
+    pickSheets: pickSheets, sampleExportRaw: sampleExportRaw, sampleImportGN: sampleImportGN, DASH_BASE_FROM: DASH_BASE_FROM, SUMMARY_SHEET_RE: SUMMARY_SHEET_RE, refundStats: refundStats, refundCountBasis: refundCountBasis,
     parseRate: parseRate, rulingStats: rulingStats, RULING_BY: RULING_BY, RULING_BASIS: RULING_BASIS, RULING_BASE_FROM: RULING_BASE_FROM, RULING_PROGRESS: RULING_PROGRESS,
     isProgress: isProgress, rowImpact: rowImpact, rulingPeriod: rulingPeriod, rulingMonths: rulingMonths, rulingDefaultRange: rulingDefaultRange,
     sampleRulingCheck: sampleRulingCheck, sampleRulingAmounts: sampleRulingAmounts,

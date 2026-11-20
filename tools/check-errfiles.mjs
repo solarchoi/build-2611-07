@@ -56,8 +56,9 @@ erpFiles.forEach((n) => {
 });
 const year = (books.find((b) => b.year) || {}).year || null;
 const erpSum = E.erpSummary(erp, year);
-const hand = E.countsFromBooks(books), counts = { 수입: {}, 수출: {} }, src = { 수입: {}, 수출: {} };
-E.KINDS.forEach((k) => { [['ERP', erp[k].length ? erpSum.counts[k] : {}], ['요약 시트', hand[k]]].forEach(([nm, o]) => Object.keys(o).forEach((mm) => { if (counts[k][mm] == null) { counts[k][mm] = o[mm]; src[k][mm] = nm; } })); });
+// (v2.0.0) 인천 신고건수 = ERP 만(요약 시트 · 직접 입력은 입력으로 받지 않음 — 요약 시트는 검증에서 대조만)
+const counts = { 수입: {}, 수출: {} }, src = { 수입: {}, 수출: {} };
+E.KINDS.forEach((k) => { if (erp[k].length) Object.keys(erpSum.counts[k]).forEach((mm) => { counts[k][mm] = erpSum.counts[k][mm]; src[k][mm] = 'ERP'; }); });
 const S = E.summarize(books, counts, {});
 const f1 = (v) => (v == null ? '—' : Number(v).toLocaleString('en-US'));
 const pct = (v) => (v == null ? '자료 없음' : v.toFixed(2) + '%');
@@ -76,12 +77,19 @@ E.brokers(books.flatMap((b) => b.rows), null).forEach((b) => console.log('  ' + 
 if (erpFiles.length) {
   const H = E.hqBreakdown(S, books, erpSum);
   console.log('\n[본부별(PLANT) — ' + H.ulsanNote + ']');
-  S.months.forEach((m) => E.KINDS.forEach((k) => (H.kinds[k][m] || []).forEach((x) => console.log('  ' + String(m).padStart(2) + '월 ' + k + ' ' + x.hq.padEnd(6) + ' 신고 ' + f1(x.decl).padStart(6) + '건 · 오류 ' + x.err + '건(점수 발생 ' + x.scored + ') · ' + f1(x.score) + '점 · ' + pct(x.rate)))));
+  S.months.forEach((m) => E.KINDS.forEach((k) => (H.kinds[k][m] || []).forEach((x) => console.log('  ' + String(m).padStart(2) + '월 ' + k + ' ' + (x.region === '지역 미분류' ? '지역 미분류' : x.region) + ' ' + String(x.hq || '—').padEnd(8) + ' 신고 ' + f1(x.decl).padStart(6) + '건 · 오류 ' + x.err + '건(점수 발생 ' + x.scored + ') · ' + f1(x.score) + '점 · ' + (x.hq === E.HQ_NOMATCH ? '—' : pct(x.rate))))));
   if (H.uncovered.length) console.log('  ERP 실적이 없는 달(인천 건 본부 미분류): ' + H.uncovered.map((x) => x.month + '월 ' + x.kind).join(', '));
   if (H.notFound.length) console.log('  ERP 에 없는 인천 건(본부 미분류): ' + H.notFound.map((x) => x.month + '월 ' + x.kind + ' ' + x.declNo).join(', '));
 }
 console.log('\n[검증 — 인천 + 울산 = 현황목록]');
 E.regionChecks(S, books, erpFiles.length ? erpSum : null).forEach((c) => console.log('  ' + String(c.month).padStart(2) + '월 ' + c.kind + ' ' + c.source.padEnd(5) + ' ' + c.item + ' ' + (c.ulsan == null ? f1(c.incheon) + ' / ERP ' + f1(c.expect) : f1(c.incheon) + ' + ' + f1(c.ulsan) + ' = ' + f1(c.sum) + ' / 현황 ' + f1(c.expect)) + (c.ok ? '  ✓' : '  ← 차이 ' + c.diff + (c.unregion ? '(지역 미분류 ' + c.unregion + '점)' : ''))));
+
+// (v2.0.0) 오류점수 화면이 저장하는 요약(b2611-07.err.summary)과 같은 것
+{
+  const SUM = E.buildSummary(S, erpFiles.length ? E.hqBreakdown(S, books, erpSum) : null, books, { now: new Date().toISOString() });
+  console.log('\n[요약 — ' + SUM.basis + ' · ' + SUM.rows.length + '줄 · ' + JSON.stringify(SUM).length + '바이트]');
+  E.summaryMonthly(SUM).forEach((x) => console.log('  ' + x.ym + ' 종합(수입 + 수출) ' + f1(x.total.decl) + '건 · ' + x.total.err + '건 · ' + f1(x.total.score) + '점 · ' + pct(x.total.rate)));
+}
 
 console.log('\n[현황목록 총 오류점수 ↔ 상세목록 합계]');
 const chk = E.statusCheck(books);
